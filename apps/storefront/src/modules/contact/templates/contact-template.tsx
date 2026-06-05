@@ -69,27 +69,27 @@ export default function ContactTemplate({ draft }: ContactTemplateProps) {
     <div className={styles.page}>
       <link
         rel="stylesheet"
-        href="https://static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/css/smart-forms/smart-forms.css"
+        href="/static.packoasis.com/version1775029070/frontend/Smartwave/porto_child/en_US/css/smart-forms/smart-forms.css"
       />
       <link
         rel="stylesheet"
-        href="https://static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/bootstrap-5.0.0-beta2-dist/css/bootstrap.css"
+        href="/static.packoasis.com/version1775029070/frontend/Smartwave/porto_child/en_US/bootstrap-5.0.0-beta2-dist/css/bootstrap.css"
       />
       <link
         rel="stylesheet"
-        href="https://media.pakfactory.com/porto/web/css/custom.css"
+        href="/media.packoasis.com/porto/web/css/custom.css"
       />
       <link
         rel="stylesheet"
-        href="https://media.pakfactory.com/porto/web/css/coding-guide.css"
+        href="/media.packoasis.com/porto/web/css/coding-guide.css"
       />
       <link
         rel="stylesheet"
-        href="https://media.pakfactory.com/porto/configed_css/design_english.css"
+        href="/media.packoasis.com/porto/configed_css/design_english.css"
       />
       <link
         rel="stylesheet"
-        href="https://media.pakfactory.com/porto/configed_css/settings_english.css"
+        href="/media.packoasis.com/porto/configed_css/settings_english.css"
       />
       <link
         rel="stylesheet"
@@ -103,7 +103,7 @@ export default function ContactTemplate({ draft }: ContactTemplateProps) {
                 <div className="icon-group">
                   <div className="icon-img">
                     <img
-                      src="https://media.pakfactory.com/media_upload/coding_guide/customer-company-icons.svg"
+                      src="/media.packoasis.com/media_upload/coding_guide/customer-company-icons.svg"
                       alt="customer brands"
                     />
                   </div>
@@ -202,21 +202,21 @@ export default function ContactTemplate({ draft }: ContactTemplateProps) {
                       <h4>Toll-free Call Center</h4>
                       <div className="contact-list">
                         <img
-                          src="https://media.pakfactory.com/media_upload/coding_guide/icon-phone-a.svg"
+                          src="/media.packoasis.com/media_upload/coding_guide/icon-phone-a.svg"
                           alt="Call"
                         />
                         <a href="tel:1-888-622-2819">1-888-622-2819</a>
                       </div>
                       <div className="contact-list">
                         <img
-                          src="https://media.pakfactory.com/media_upload/coding_guide/icon-calendar-a.svg"
+                          src="/media.packoasis.com/media_upload/coding_guide/icon-calendar-a.svg"
                           alt="Calendar"
                         />
                         Monday - Friday
                       </div>
                       <div className="contact-list">
                         <img
-                          src="https://media.pakfactory.com/media_upload/coding_guide/icon-clock-a.svg"
+                          src="/media.packoasis.com/media_upload/coding_guide/icon-clock-a.svg"
                           alt="Clock"
                         />
                         9:30 AM - 6:30 PM EST
@@ -226,7 +226,7 @@ export default function ContactTemplate({ draft }: ContactTemplateProps) {
                       <h4>Sales Inquiries</h4>
                       <div className="contact-list">
                         <img
-                          src="https://media.pakfactory.com/media_upload/coding_guide/icon-mail-a.svg"
+                          src="/media.packoasis.com/media_upload/coding_guide/icon-mail-a.svg"
                           alt="Mail"
                         />
                         <a href="mailto:hello@packoasis.com">
@@ -239,7 +239,7 @@ export default function ContactTemplate({ draft }: ContactTemplateProps) {
               </div>
               <div className="col-md-6 order-md-first">
                 <img
-                  src="https://media.pakfactory.com/media_upload/coding_guide/consultation-support.webp"
+                  src="/media.packoasis.com/media_upload/coding_guide/consultation-support.webp"
                   alt="customer support"
                   className="mobile-space-37"
                   style={{ borderRadius: 10 }}
@@ -284,7 +284,7 @@ export default function ContactTemplate({ draft }: ContactTemplateProps) {
               </div>
               <div className="col-md-6">
                 <img
-                  src="https://media.pakfactory.com/media_upload/coding_guide/pakfactory-business.webp"
+                  src="/media.packoasis.com/media_upload/coding_guide/packoasis-business.webp"
                   alt="sales office"
                   className="mobile-space-37"
                   style={{ borderRadius: 10 }}
