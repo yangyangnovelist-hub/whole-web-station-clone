@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "packoasis-storefront",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-04-19",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "packoasis-storefront"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  },
+  "vars": {
+    "MEDUSA_BACKEND_URL": "https://packoasis-api-production.up.railway.app",
+    "NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY": "pk_0d7333b11dea706d2f671f16308d0fd5a2d62f85593b0983f40792a5a8222d59",
+    "NEXT_PUBLIC_BASE_URL": "https://packoasis.com",
+    "NEXT_PUBLIC_DEFAULT_REGION": "us",
+    "REVALIDATE_SECRET": "supersecret"
+  }
+  // Enable these once the `packoasis.com` zone is active in Cloudflare.
+  // "routes": [
+  //   {
+  //     "pattern": "packoasis.com",
+  //     "custom_domain": true
+  //   },
+  //   {
+  //     "pattern": "www.packoasis.com",
+  //     "custom_domain": true
+  //   }
+  // ]
+}

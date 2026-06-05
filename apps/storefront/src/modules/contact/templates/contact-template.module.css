@@ -1,0 +1,335 @@
+.page {
+  background-color: #ffffff;
+}
+
+.page :global(#contact-us-form) {
+  background-color: #f9f9f9;
+}
+
+.page :global(html) {
+  scroll-behavior: smooth;
+}
+
+.page :global(section) {
+  padding-block: 40px;
+}
+
+.page :global(.lead-form-section) {
+  background: #ffffff;
+  box-shadow: 0 9px 21px 3px rgb(0 0 0 / 6%);
+  border-radius: 7px;
+}
+
+.page :global(#crmWebToEntityForm .smart-forms .form-body) {
+  padding: 0;
+}
+
+.page :global(.form-faq) {
+  border: 1px solid #acacac;
+  border-radius: 6px;
+}
+
+.page :global(.form-faq ul) {
+  padding-left: 15px;
+  margin-bottom: 0;
+}
+
+.page :global(.form-faq a),
+.page :global(.hid-xs a) {
+  color: #353a3f;
+  text-decoration: underline;
+}
+
+.page :global(.form-faq a:hover),
+.page :global(.hid-xs a:hover) {
+  text-decoration: none;
+}
+
+.page :global(#contact-us-form h1) {
+  color: #36b37e;
+}
+
+.page :global(#contact-us-form h2) {
+  font-size: 18px !important;
+  font-weight: 600;
+  line-height: 22px !important;
+  color: #211f57;
+}
+
+.page :global(.icon-des) {
+  padding-top: 15px;
+  font-size: 14px;
+  line-height: normal;
+}
+
+.page :global(#contact-us-form p) {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.page :global(a.underline-hover) {
+  text-decoration: underline;
+}
+
+.page :global(a.underline-hover:hover) {
+  text-decoration: none;
+}
+
+.page :global(input[type="number"]::-webkit-inner-spin-button),
+.page :global(input[type="number"]::-webkit-outer-spin-button) {
+  -webkit-appearance: textfield !important;
+  margin: 0;
+}
+
+.page :global(.contact-point) {
+  text-align: center;
+  background-color: #ffffff;
+  border-radius: 10px;
+  padding: 48px 40px;
+  margin-bottom: 24px;
+  box-shadow: 0 0 2px rgba(23, 43, 77, 0.04), 0 3px 2px rgba(23, 43, 77, 0.08);
+}
+
+.page :global(.contact-bg) {
+  background: linear-gradient(
+    to bottom,
+    #f9f9f9 0%,
+    #f9f9f9 450px,
+    #ffffff 50%,
+    #ffffff 100%
+  );
+}
+
+.page :global(.contact-point h3) {
+  font-weight: 700 !important;
+  font-size: 27px !important;
+  line-height: 36px !important;
+  margin-bottom: 24px;
+  color: #212427;
+}
+
+.page :global(a.full-btn) {
+  background-color: #36b37e;
+  color: #ffffff;
+  border-radius: 4px;
+  padding: 16px;
+  width: 100%;
+  display: block;
+  font-weight: 600;
+  font-size: 18px;
+  line-height: 22px;
+}
+
+.page :global(.contact-point p) {
+  margin-bottom: 48px;
+  line-height: 27px;
+}
+
+.page :global(#contact .upline),
+.page :global(.contact-type .upline) {
+  font-family: "Sharp Sans", sans-serif;
+  font-style: normal;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 3px;
+  color: #36b37e;
+  padding-bottom: 20px;
+}
+
+.page :global(.contact-type h3) {
+  font-family: "Sharp Sans", sans-serif;
+  font-weight: 700 !important;
+  font-size: 31px !important;
+  line-height: 41px !important;
+  color: #212427;
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+.page :global(.contact-type h4) {
+  font-family: "Proxima Nova", sans-serif;
+  font-weight: 600 !important;
+  font-size: 18px !important;
+  line-height: 22px !important;
+  color: #212427;
+  margin-top: 32px;
+  margin-bottom: 13px;
+}
+
+.page :global(#contact p),
+.page :global(.contact-type p) {
+  font-size: 18px;
+}
+
+.page :global(.contact-list a),
+.page :global(.contact-list) {
+  color: #878787;
+}
+
+.page :global(.contact-list) {
+  margin-bottom: 11px;
+  display: flex;
+  align-items: center;
+}
+
+.page :global(.contact-list img) {
+  margin-right: 12px;
+}
+
+.page :global(.light-grey) {
+  background-color: #f9f9f9;
+}
+
+.page :global(.contact-form-message) {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: #f4fbf7;
+  border: 1px solid #d6eee1;
+  color: #274b3a;
+}
+
+.page :global(.contact-form-message-error) {
+  background: #fff5f5;
+  border-color: #f1d0d0;
+  color: #8f2f2f;
+}
+
+.page :global(.contact-form-message-success) {
+  margin-bottom: 12px;
+}
+
+.page :global(.contact-form-reference) {
+  margin-bottom: 0;
+  font-size: 14px;
+  color: #353a3f;
+}
+
+.page :global(.form-footer .button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (min-width: 768px) {
+  .page :global(.section-leading-des) {
+    padding: 64px 0 96px;
+    margin-right: 100px;
+  }
+
+  .page :global(.lead-form-section) {
+    padding: 48px 24px;
+    margin: 64px 0 96px;
+  }
+
+  .page :global(.form-faq) {
+    margin-top: 48px;
+    padding: 48px;
+  }
+
+  .page :global(#contact-us-form h1) {
+    font-size: 37px !important;
+    line-height: 49px !important;
+    margin-top: 52px;
+  }
+
+  .page :global(.smart-forms .prepend-icon .field-icon) {
+    z-index: 1;
+  }
+
+  .page :global(.contact-bg) {
+    padding-top: 96px;
+    padding-bottom: 72px;
+  }
+
+  .page :global(.light-grey) {
+    padding-top: 96px;
+    padding-bottom: 96px;
+  }
+
+  .page :global(.bottom-96) {
+    margin-bottom: 96px;
+  }
+
+  .page :global(.contact-add) {
+    margin-bottom: 56px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .page :global(#contact-us-form h1) {
+    margin-top: 40px;
+    text-align: inherit;
+    margin-bottom: 0;
+  }
+
+  .page :global(.section-leading-des) {
+    padding: 48px 0;
+    margin-left: 10px;
+  }
+
+  .page :global(.lead-form-section) {
+    padding: 32px 24px;
+    margin: 10px;
+  }
+
+  .page :global(.form-faq) {
+    margin-top: 64px;
+    margin-bottom: 64px;
+    padding: 24px;
+    margin-left: 10px;
+    margin-right: 10px;
+    width: 100%;
+  }
+
+  .page :global(#contact-us-form p) {
+    margin-bottom: 0 !important;
+  }
+
+  .page :global(.contact-bg) {
+    padding-top: 64px;
+    padding-bottom: 40px;
+  }
+
+  .page :global(.light-grey) {
+    padding-top: 64px;
+    padding-bottom: 64px;
+  }
+
+  .page :global(.bottom-96) {
+    margin-bottom: 64px;
+  }
+
+  .page :global(.contact-add) {
+    margin-bottom: 48px !important;
+  }
+
+  .page :global(.mobile-space-37) {
+    margin-top: 37px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .page :global(.lead-form-section) {
+    padding: 48px 40px;
+    margin: 64px 0 96px;
+  }
+}
+
+@media (min-width: 1025px) {
+  .page :global(.icon-img) {
+    float: left;
+    margin-right: 12px;
+  }
+
+  .page :global(.br-hid-ld) {
+    display: none;
+  }
+}
+
+@media (max-width: 425px) {
+  .page :global(.lead-form-section) {
+    width: 95%;
+  }
+}

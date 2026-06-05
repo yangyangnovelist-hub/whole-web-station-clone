@@ -1,0 +1,4 @@
+Unable to resolve the source file for 'frontend/Smartwave/porto_child/en_US/owl.carousel/assets/owl.video.play.png'
+<pre>#1 Magento\Framework\App\StaticResource->launch() called at [vendor/magento/framework/App/Bootstrap.php:261]
+#2 Magento\Framework\App\Bootstrap->run() called at [pub/static.php:13]
+</pre>

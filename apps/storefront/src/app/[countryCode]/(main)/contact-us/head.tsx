@@ -1,0 +1,34 @@
+export default function Head() {
+  return (
+    <>
+      <link
+        rel="stylesheet"
+        href="https://static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/css/smart-forms/smart-forms.css"
+      />
+      <link
+        rel="stylesheet"
+        href="https://static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/bootstrap-5.0.0-beta2-dist/css/bootstrap.css"
+      />
+      <link
+        rel="stylesheet"
+        href="https://media.pakfactory.com/porto/web/css/custom.css"
+      />
+      <link
+        rel="stylesheet"
+        href="https://media.pakfactory.com/porto/web/css/coding-guide.css"
+      />
+      <link
+        rel="stylesheet"
+        href="https://media.pakfactory.com/porto/configed_css/design_english.css"
+      />
+      <link
+        rel="stylesheet"
+        href="https://media.pakfactory.com/porto/configed_css/settings_english.css"
+      />
+      <link
+        rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css"
+      />
+    </>
+  )
+}

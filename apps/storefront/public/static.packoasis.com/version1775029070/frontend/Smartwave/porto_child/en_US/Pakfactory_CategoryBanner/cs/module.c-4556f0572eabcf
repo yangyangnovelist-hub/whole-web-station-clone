@@ -1,0 +1,26 @@
+.pk-category-banner {
+  width: 100%;
+  display: block;
+  background: linear-gradient(59.5deg, #0f2027 -4.62%, #203a43 50.51%, #2c5364 105.63%);
+}
+.pk-category-banner .pk-category-banner-title-wrapper {
+  max-width: 1360px;
+  padding-left: 48px;
+  padding-right: 48px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.pk-category-banner .pk-category-banner-title-wrapper .pk-category-banner-title {
+  display: table-cell;
+  vertical-align: middle;
+  height: 260px;
+}
+.pk-category-banner .pk-category-banner-title-wrapper .pk-category-banner-title p {
+  color: white;
+  margin-bottom: 0px;
+}
+@media (max-width: 767px) {
+  .pk-category-banner {
+    display: none;
+  }
+}

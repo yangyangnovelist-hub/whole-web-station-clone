@@ -1,0 +1,2822 @@
+{
+  "generatedAt": "2026-04-18T13:16:57.304Z",
+  "mirrorRoot": "/Users/handsomeboy/Downloads/pakfactory-clone-workspace/whole-web-station-clone/captures/pakfactory.com/20260417-132610-stable/mirror/pakfactory.com",
+  "counts": {
+    "total": 399,
+    "byBucket": {
+      "home": 2,
+      "content": 17,
+      "other": 2,
+      "catalog": 2,
+      "checkout": 1,
+      "inquiry": 5,
+      "product-detail": 47,
+      "account": 5,
+      "inspiration": 318
+    },
+    "byMigrationPhase": {
+      "phase-1-core": 7,
+      "phase-3-long-tail": 335,
+      "phase-4-legacy-fallback": 2,
+      "phase-2-listing": 49,
+      "phase-3-commerce": 1,
+      "phase-2-auth": 5
+    },
+    "dynamicRoutes": 8
+  },
+  "routes": [
+    {
+      "route": "/",
+      "relativePath": "index.html",
+      "bucket": "home",
+      "migrationPhase": "phase-1-core",
+      "dynamic": false
+    },
+    {
+      "route": "/about-us.html",
+      "relativePath": "about-us.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/cards.html",
+      "relativePath": "cards.html",
+      "bucket": "other",
+      "migrationPhase": "phase-4-legacy-fallback",
+      "dynamic": false
+    },
+    {
+      "route": "/careers.html",
+      "relativePath": "careers.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/catalog/l/product-type-filter_folding-carton.html",
+      "relativePath": "catalog/l/product-type-filter_folding-carton.html",
+      "bucket": "catalog",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/catalogsearch/advanced/index-52dd7c11efb5f7634d5d99a070e33672.html",
+      "relativePath": "catalogsearch/advanced/index-52dd7c11efb5f7634d5d99a070e33672.html",
+      "bucket": "catalog",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": true
+    },
+    {
+      "route": "/checkout/cart/index-d48a2df3a2819c00c2ff44a22a055c1b.html",
+      "relativePath": "checkout/cart/index-d48a2df3a2819c00c2ff44a22a055c1b.html",
+      "bucket": "checkout",
+      "migrationPhase": "phase-3-commerce",
+      "dynamic": true
+    },
+    {
+      "route": "/contact",
+      "relativePath": "contact/index.html",
+      "bucket": "inquiry",
+      "migrationPhase": "phase-1-core",
+      "dynamic": false
+    },
+    {
+      "route": "/contact-610e6df9f41708675eb2d90f9515f85c.html",
+      "relativePath": "contact-610e6df9f41708675eb2d90f9515f85c.html",
+      "bucket": "inquiry",
+      "migrationPhase": "phase-1-core",
+      "dynamic": false
+    },
+    {
+      "route": "/contact-us.html",
+      "relativePath": "contact-us.html",
+      "bucket": "inquiry",
+      "migrationPhase": "phase-1-core",
+      "dynamic": false
+    },
+    {
+      "route": "/contact.html",
+      "relativePath": "contact.html",
+      "bucket": "inquiry",
+      "migrationPhase": "phase-1-core",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-automotive-packaging-boxes.html",
+      "relativePath": "custom-automotive-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-bakery-packaging-boxes.html",
+      "relativePath": "custom-bakery-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-beer-liquor-packaging.html",
+      "relativePath": "custom-beer-liquor-packaging.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-beverage-packaging-boxes.html",
+      "relativePath": "custom-beverage-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-candle-packaging-boxes.html",
+      "relativePath": "custom-candle-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-candy-packaging.html",
+      "relativePath": "custom-candy-packaging.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-cannabis-packaging-boxes.html",
+      "relativePath": "custom-cannabis-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-cardboard-displays.html",
+      "relativePath": "custom-cardboard-displays.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-chocolate-packaging-boxes.html",
+      "relativePath": "custom-chocolate-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-coffee-packaging.html",
+      "relativePath": "custom-coffee-packaging.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-cosmetic-packaging-boxes.html",
+      "relativePath": "custom-cosmetic-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-eco-friendly-packaging.html",
+      "relativePath": "custom-eco-friendly-packaging.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-ecommerce-packaging-boxes.html",
+      "relativePath": "custom-ecommerce-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-electronics-packaging-boxes.html",
+      "relativePath": "custom-electronics-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-fashion-apparel-boxes.html",
+      "relativePath": "custom-fashion-apparel-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-food-packaging-boxes.html",
+      "relativePath": "custom-food-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-game-boxes.html",
+      "relativePath": "custom-game-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-gift-boxes.html",
+      "relativePath": "custom-gift-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-jewelry-accessories-boxes.html",
+      "relativePath": "custom-jewelry-accessories-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-jewelry-accessories-packaging-boxes.html",
+      "relativePath": "custom-jewelry-accessories-packaging-boxes.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-labels-stickers.html",
+      "relativePath": "custom-labels-stickers.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-mailers.html",
+      "relativePath": "custom-mailers.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-packaging-inserts.html",
+      "relativePath": "custom-packaging-inserts.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-packaging-products-c3845be212f1be973cbdba21cb0e6505.html",
+      "relativePath": "custom-packaging-products-c3845be212f1be973cbdba21cb0e6505.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-packaging-products.html",
+      "relativePath": "custom-packaging-products.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-pet-packaging-boxes.html",
+      "relativePath": "custom-pet-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-pharmaceutical-packaging-boxes.html",
+      "relativePath": "custom-pharmaceutical-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-pouches.html",
+      "relativePath": "custom-pouches.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-printed-corrugated-boxes.html",
+      "relativePath": "custom-printed-corrugated-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-printed-luxury-paper-bags.html",
+      "relativePath": "custom-printed-luxury-paper-bags.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-printed-shipping-boxes.html",
+      "relativePath": "custom-printed-shipping-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-printed-tissue-paper.html",
+      "relativePath": "custom-printed-tissue-paper.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-promotional-and-presentation-boxes.html",
+      "relativePath": "custom-promotional-and-presentation-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-restaurant-packaging-boxes.html",
+      "relativePath": "custom-restaurant-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-retail-packaging-boxes.html",
+      "relativePath": "custom-retail-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-reusable-shopping-bags.html",
+      "relativePath": "custom-reusable-shopping-bags.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-rigid-setup-boxes.html",
+      "relativePath": "custom-rigid-setup-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-soap-packaging-boxes.html",
+      "relativePath": "custom-soap-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-tea-packaging.html",
+      "relativePath": "custom-tea-packaging.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-tin-boxes.html",
+      "relativePath": "custom-tin-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-toy-packaging-boxes.html",
+      "relativePath": "custom-toy-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-window-packaging-boxes.html",
+      "relativePath": "custom-window-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/custom-wine-packaging-boxes.html",
+      "relativePath": "custom-wine-packaging-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/customer.html",
+      "relativePath": "customer.html",
+      "bucket": "other",
+      "migrationPhase": "phase-4-legacy-fallback",
+      "dynamic": false
+    },
+    {
+      "route": "/customer/account/create/index-8bce5b4a5ad15a3be350fcbe19a18310.html",
+      "relativePath": "customer/account/create/index-8bce5b4a5ad15a3be350fcbe19a18310.html",
+      "bucket": "account",
+      "migrationPhase": "phase-2-auth",
+      "dynamic": true
+    },
+    {
+      "route": "/customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS8,/index-5bbbbf899c3b7928f5daf1a58530f219.html",
+      "relativePath": "customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS8,/index-5bbbbf899c3b7928f5daf1a58530f219.html",
+      "bucket": "account",
+      "migrationPhase": "phase-2-auth",
+      "dynamic": true
+    },
+    {
+      "route": "/customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS9jb250YWN0/index-71e71d674789cbf84d9f8cb97a9ee1a1.htm",
+      "relativePath": "customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS9jb250YWN0/index-71e71d674789cbf84d9f8cb97a9ee1a1.htm",
+      "bucket": "account",
+      "migrationPhase": "phase-2-auth",
+      "dynamic": true
+    },
+    {
+      "route": "/customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS9jYXJlZXJz/index-4737263cc7da57178d280390bd8a3fa1.htm",
+      "relativePath": "customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS9jYXJlZXJz/index-4737263cc7da57178d280390bd8a3fa1.htm",
+      "bucket": "account",
+      "migrationPhase": "phase-2-auth",
+      "dynamic": true
+    },
+    {
+      "route": "/customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS9zaXRlbWFw/index-a33621d7e71d8329b187815204a214b8.htm",
+      "relativePath": "customer/account/login/referer/aHR0cHM6Ly9wYWtmYWN0b3J5LmNvbS9zaXRlbWFw/index-a33621d7e71d8329b187815204a214b8.htm",
+      "bucket": "account",
+      "migrationPhase": "phase-2-auth",
+      "dynamic": true
+    },
+    {
+      "route": "/folding-carton-paperboard-boxes.html",
+      "relativePath": "folding-carton-paperboard-boxes.html/index.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/folding-carton-paperboard-boxes.html/index-f0e49a6cb3d952812d44234c3b04ccb8.html",
+      "relativePath": "folding-carton-paperboard-boxes.html/index-f0e49a6cb3d952812d44234c3b04ccb8.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/guide-to-preparing-files-for-print.html",
+      "relativePath": "guide-to-preparing-files-for-print.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/index-8600ce926a1217826319734df3bff43d.html",
+      "relativePath": "index-8600ce926a1217826319734df3bff43d.html",
+      "bucket": "home",
+      "migrationPhase": "phase-1-core",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration-e38bc80725b820e3f0571c9847297b4b.html",
+      "relativePath": "inspiration-e38bc80725b820e3f0571c9847297b4b.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration.html",
+      "relativePath": "inspiration.html/index.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/display-style-filter_banner-stands/product-type-filter_displays.html",
+      "relativePath": "inspiration/l/display-style-filter_banner-stands/product-type-filter_displays.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/display-style-filter_floor-displays/product-type-filter_displays.html",
+      "relativePath": "inspiration/l/display-style-filter_floor-displays/product-type-filter_displays.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_automotive/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_automotive/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_automotive/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_automotive/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_automotive/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_automotive/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_automotive/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_automotive/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_automotive/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_automotive/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_automotive/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_automotive/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_bakery-cake/product-type-filter_bags.html",
+      "relativePath": "inspiration/l/industries_bakery-cake/product-type-filter_bags.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_bakery-cake/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_bakery-cake/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_bakery-cake/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_bakery-cake/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_bakery-cake/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_bakery-cake/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beer-liquor-wine/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_beer-liquor-wine/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_beverages/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/product-type-filter_cups-bowls.html",
+      "relativePath": "inspiration/l/industries_beverages/product-type-filter_cups-bowls.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_beverages/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_beverages/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_beverages/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/product-type-filter_utensils-straws.html",
+      "relativePath": "inspiration/l/industries_beverages/product-type-filter_utensils-straws.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_beverages/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_beverages/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_beverages/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_beverages/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_beverages/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_beverages/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_beverages/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_candles/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_candles/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_candles/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candles/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_candles/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candy-sweet/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_candy-sweet/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_candy-sweet/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_candy-sweet/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_cannabis/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_cannabis/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_cannabis/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_cannabis/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_cannabis/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_cannabis/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_cannabis/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_cannabis/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cannabis/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_cannabis/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_chocolate/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_chocolate/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_chocolate/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_chocolate/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_book-style.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_book-style.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_custom-shape.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_custom-shape.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_hexagon.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_hexagon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_chocolate/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_chocolate/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/product-type-filter_labels-stickers.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/product-type-filter_labels-stickers.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_coffee-tea/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_coffee-tea/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_cosmetic/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_cosmetic/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_cosmetic/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_cosmetic/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_cosmetic/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/product-type-filter_cards.html",
+      "relativePath": "inspiration/l/industries_ecommerce/product-type-filter_cards.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_ecommerce/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/product-type-filter_mailer-bags.html",
+      "relativePath": "inspiration/l/industries_ecommerce/product-type-filter_mailer-bags.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_ecommerce/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/product-type-filter_tapes.html",
+      "relativePath": "inspiration/l/industries_ecommerce/product-type-filter_tapes.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/product-type-filter_wrap-paper.html",
+      "relativePath": "inspiration/l/industries_ecommerce/product-type-filter_wrap-paper.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_ecommerce/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_ecommerce/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_electronics/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_electronics/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_electronics/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_electronics/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_electronics/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_leather.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_leather.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_fashion-apparel/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_fashion-apparel/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_cups-bowls.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_cups-bowls.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_utensils-straws.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_utensils-straws.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/product-type-filter_wrap-paper.html",
+      "relativePath": "inspiration/l/industries_food/product-type-filter_wrap-paper.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_food/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_food/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_games-toys/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_games-toys/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_games-toys/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_book-style.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_book-style.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_custom-shape.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_custom-shape.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_games-toys/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_games-toys/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_home/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_home/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_home/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_home/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_home/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_home/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_home/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_home/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_home/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_home/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_home/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_home/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_leather.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_leather.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_jewelry-accessories/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_jewelry-accessories/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_marketing-advertising/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_marketing-advertising/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_marketing-advertising/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_marketing-advertising/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_marketing-advertising/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_marketing-advertising/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_marketing-advertising/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_marketing-advertising/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_marketing-advertising/rigid-box-style_book-style.html",
+      "relativePath": "inspiration/l/industries_marketing-advertising/rigid-box-style_book-style.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_marketing-advertising/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_marketing-advertising/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_pets/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_pets/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_pets/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_pets/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_pets/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_pets/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_pharmaceutical/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_pharmaceutical/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_pharmaceutical/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_pharmaceutical/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_book-style.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_book-style.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_leather.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_leather.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_presentation-promotion/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_presentation-promotion/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_bags.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_bags.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_cups-bowls.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_cups-bowls.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_labels-stickers.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_labels-stickers.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_utensils-straws.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_utensils-straws.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_restaurant/product-type-filter_wrap-paper.html",
+      "relativePath": "inspiration/l/industries_restaurant/product-type-filter_wrap-paper.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_retail-gift/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/product-type-filter_displays.html",
+      "relativePath": "inspiration/l/industries_retail-gift/product-type-filter_displays.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_retail-gift/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/industries_retail-gift/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_book-style.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_book-style.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_custom-shape.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_custom-shape.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_hexagon.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_hexagon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_leather.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_leather.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_round-shaped.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_round-shaped.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_retail-gift/rigid-box-style_wooden.html",
+      "relativePath": "inspiration/l/industries_retail-gift/rigid-box-style_wooden.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_soap/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_soap/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_soap/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_soap/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_soap/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_soap/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_soap/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_soap/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_soap/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_soap/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_book-style.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_book-style.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_leather.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_leather.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sports-fitness/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_sports-fitness/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_subscription/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_subscription/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_subscription/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_slide-matchhbox.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_slide-matchhbox.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_subscription/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_subscription/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_bags.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_bags.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_cups-bowls.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_cups-bowls.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_labels-stickers.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_labels-stickers.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/product-type-filter_utensils-straws.html",
+      "relativePath": "inspiration/l/industries_sustainable/product-type-filter_utensils-straws.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_sustainable/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_sustainable/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_sustainable/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_sustainable/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_tobacco-cbd/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_tobacco-cbd/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_tobacco-cbd/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_tobacco-cbd/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_tobacco-cbd/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_tobacco-cbd/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_tobacco-cbd/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_tobacco-cbd/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_tobacco-cbd/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_tobacco-cbd/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_tobacco-cbd/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_tobacco-cbd/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_window/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_window/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_window/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_1-piece.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_1-piece.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_2-pieces.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_2-pieces.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_collapsible-foldable.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_collapsible-foldable.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_lift-off-detachable-lid.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_lift-off-detachable-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_partial-cover.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_partial-cover.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_ribbon.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_ribbon.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_shoulder-neck.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_shoulder-neck.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_window/rigid-box-style_telescope.html",
+      "relativePath": "inspiration/l/industries_window/rigid-box-style_telescope.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_wine/product-type-filter_bags.html",
+      "relativePath": "inspiration/l/industries_wine/product-type-filter_bags.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_wine/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/industries_wine/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_wine/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/industries_wine/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_wine/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/industries_wine/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_wine/rigid-box-style_hinged-flip-lid.html",
+      "relativePath": "inspiration/l/industries_wine/rigid-box-style_hinged-flip-lid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/industries_wine/rigid-box-style_magnetic-closure.html",
+      "relativePath": "inspiration/l/industries_wine/rigid-box-style_magnetic-closure.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_bags.html",
+      "relativePath": "inspiration/l/product-type-filter_bags.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_cards.html",
+      "relativePath": "inspiration/l/product-type-filter_cards.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_corrugated.html",
+      "relativePath": "inspiration/l/product-type-filter_corrugated.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_cups-bowls.html",
+      "relativePath": "inspiration/l/product-type-filter_cups-bowls.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_displays.html",
+      "relativePath": "inspiration/l/product-type-filter_displays.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_folding-carton.html",
+      "relativePath": "inspiration/l/product-type-filter_folding-carton.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_labels-stickers.html",
+      "relativePath": "inspiration/l/product-type-filter_labels-stickers.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_mailer-bags-df8145520b6772f20085a8cc047ab84e.html",
+      "relativePath": "inspiration/l/product-type-filter_mailer-bags-df8145520b6772f20085a8cc047ab84e.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_pouches.html",
+      "relativePath": "inspiration/l/product-type-filter_pouches.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_rigid-2f2af374fa343c09a38e46a33134d566.html",
+      "relativePath": "inspiration/l/product-type-filter_rigid-2f2af374fa343c09a38e46a33134d566.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_rigid.html",
+      "relativePath": "inspiration/l/product-type-filter_rigid.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_rigid7318.html",
+      "relativePath": "inspiration/l/product-type-filter_rigid7318.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_rigid9b47.html",
+      "relativePath": "inspiration/l/product-type-filter_rigid9b47.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_rigidbab3.html",
+      "relativePath": "inspiration/l/product-type-filter_rigidbab3.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_tapes.html",
+      "relativePath": "inspiration/l/product-type-filter_tapes.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_tin-b2b76ccd4018b328f4b52da7022cc89d.html",
+      "relativePath": "inspiration/l/product-type-filter_tin-b2b76ccd4018b328f4b52da7022cc89d.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_tin.html",
+      "relativePath": "inspiration/l/product-type-filter_tin.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_utensils-straws.html",
+      "relativePath": "inspiration/l/product-type-filter_utensils-straws.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/inspiration/l/product-type-filter_wrap-paper.html",
+      "relativePath": "inspiration/l/product-type-filter_wrap-paper.html",
+      "bucket": "inspiration",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/navigate-tariffs-with-smarter-packaging-supply-chain-solutions",
+      "relativePath": "navigate-tariffs-with-smarter-packaging-supply-chain-solutions/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/navigate-tariffs-with-smarter-packaging-supply-chain-solutions-7a8996b6ca012d773116d1e92b6cb63b.html",
+      "relativePath": "navigate-tariffs-with-smarter-packaging-supply-chain-solutions-7a8996b6ca012d773116d1e92b6cb63b.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/navigate-tariffs-with-smarter-packaging-supply-chain-solutions.html",
+      "relativePath": "navigate-tariffs-with-smarter-packaging-supply-chain-solutions.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/option-library.html",
+      "relativePath": "option-library.html/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/packaging-by-industry.html",
+      "relativePath": "packaging-by-industry.html/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/packaging-design.html",
+      "relativePath": "packaging-design.html/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/packaging-sample-prototyping.html",
+      "relativePath": "packaging-sample-prototyping.html/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/packaging-services.html",
+      "relativePath": "packaging-services.html/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/packaging-structural-design-engineering.html",
+      "relativePath": "packaging-structural-design-engineering.html/index.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/printed-tape.html",
+      "relativePath": "printed-tape.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/privacy-policy.html",
+      "relativePath": "privacy-policy.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/quotation/quote/index-c15abc6d4ba788ce68ba70e45777805d.html",
+      "relativePath": "quotation/quote/index-c15abc6d4ba788ce68ba70e45777805d.html",
+      "bucket": "inquiry",
+      "migrationPhase": "phase-1-core",
+      "dynamic": true
+    },
+    {
+      "route": "/reverse-tuck-end-box.html",
+      "relativePath": "reverse-tuck-end-box.html",
+      "bucket": "product-detail",
+      "migrationPhase": "phase-2-listing",
+      "dynamic": false
+    },
+    {
+      "route": "/sitemap.html",
+      "relativePath": "sitemap.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/sustainability.html",
+      "relativePath": "sustainability.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/terms-conditions.html",
+      "relativePath": "terms-conditions.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    },
+    {
+      "route": "/why-pakfactory.html",
+      "relativePath": "why-pakfactory.html",
+      "bucket": "content",
+      "migrationPhase": "phase-3-long-tail",
+      "dynamic": false
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+.c-sidebar .expand,
+.c-sidebar .expanded {
+  cursor: pointer;
+  float: right;
+}
+.c-sidebar ol li.current > a {
+  font-weight: bold;
+}
+.c-sidebar .haschildren {
+  display: none;
+  margin-bottom: 0px;
+  padding-left: 0px;
+}
+.c-sidebar .haschildren li {
+  list-style: none;
+  padding-bottom: 10px;
+}
+.c-sidebar .haschildren li.active > ul {
+  display: block;
+}
+.c-sidebar .haschildren li.active > ul li:last-of-type {
+  border-bottom: 0px;
+  padding-bottom: 0px;
+  margin-bottom: 0px;
+}
+.c-sidebar .haschildren li a {
+  display: inline-block;
+}
+.c-sidebar .haschildren li a.active {
+  font-weight: bold;
+}
+.c-sidebar .haschildren li > ul {
+  padding-top: 7px;
+  margin-top: 0px;
+}
+.c-sidebar .haschildren li > ul .expand {
+  margin-right: 10px;
+}
+.c-sidebar .haschildren li .expand {
+  margin-right: 5px;
+}
+.c-sidebar .haschildren .level0 {
+  list-style: none;
+}
+.c-sidebar .haschildren .level1 a {
+  padding-left: 15px;
+}
+.c-sidebar .haschildren .level2 a {
+  padding-left: 30px;
+}
+.c-sidebar .haschildren .level3 a {
+  padding-left: 45px;
+}
+.c-sidebar .haschildren.active {
+  display: block;
+}
+.c-sidebar > .haschildren {
+  display: block;
+  margin-top: 30px;
+  padding-right: 45px;
+  margin-bottom: 30px;
+}

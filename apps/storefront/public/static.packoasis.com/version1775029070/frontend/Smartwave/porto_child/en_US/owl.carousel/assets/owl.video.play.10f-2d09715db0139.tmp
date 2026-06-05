@@ -1,0 +1,6 @@
+�A/static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/owl.carousel/assets/owl.video.play.png/Users/handsomeboy/Downloads/whole-web-station-clone/captures/pakfactory.com/20260417-132610-stable/mirror/static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/owl.carousel/assets/owl.video.play.10f-2d09715db0139https://static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/owl.carousel/assets/owl.carousel.css/Users/handsomeboy/Downloads/whole-web-station-clone/captures/pakfactory.com/20260417-132610-stable/mirror/static.pakfactory.com/version1775029070/frontend/Smartwave/porto_child/en_US/owl.carousel/assets/owl.video.play.10f-2d09715db0139.zxF(�i��������������������� ڵ4Not Foundtext/plainUTF-8gzip�/�64������PSat, 18 Apr 2026 06:44:22 GMT 0�0�0����
+ P����
+E(�i���������4Unable to resolve the source file for 'frontend/Smartwave/porto_child/en_US/owl.carousel/assets/owl.video.play.png'
+<pre>#1 Magento\Framework\App\StaticResource->launch() called at [vendor/magento/framework/App/Bootstrap.php:261]
+#2 Magento\Framework\App\Bootstrap->run() called at [pub/static.php:13]
+</pre>
