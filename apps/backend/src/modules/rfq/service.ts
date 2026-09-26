@@ -19,6 +19,16 @@ class InvalidStatusTransitionError extends Error {
   }
 }
 
+type InstantQuoteFields = {
+  quote_payload?: Record<string, unknown> | null
+  quoted_total?: number | null
+  currency_code?: string | null
+  country_code?: string | null
+  cart_id?: string | null
+  website?: string | null
+  visitor_id?: string | null
+}
+
 class RFQModuleService extends MedusaService({
   RFQ,
   Quote,
@@ -36,22 +46,24 @@ class RFQModuleService extends MedusaService({
     return await (this as any).updateRFQS({ id: rfq_id, status: newStatus })
   }
 
-  async submitRFQ(data: {
-    buyer_id?: string | null
-    draft_id?: string | null
-    source?: string
-    contact_name: string
-    email: string
-    company?: string
-    phone?: string
-    title: string
-    application?: string
-    quantity: number
-    target_price?: number
-    need_by?: Date
-    notes?: string
-    items_payload?: string
-  }) {
+  async submitRFQ(
+    data: {
+      buyer_id?: string | null
+      draft_id?: string | null
+      source?: string
+      contact_name: string
+      email: string
+      company?: string
+      phone?: string
+      title: string
+      application?: string
+      quantity: number
+      target_price?: number
+      need_by?: Date
+      notes?: string
+      items_payload?: string
+    } & InstantQuoteFields
+  ) {
     return await (this as any).createRFQS({
       ...data,
       buyer_id: data.buyer_id ?? null,
@@ -122,6 +134,40 @@ class RFQModuleService extends MedusaService({
 
   async closeRFQ(rfq_id: string) {
     return await this.transitionStatus(rfq_id, "CLOSED")
+  }
+
+  /**
+   * Moves an instant-quote RFQ through the normal state machine once its cart
+   * becomes an order: QUOTED -> ACCEPTED (latest pending quote) -> ORDERED.
+   * RFQs in other states only get the order linked.
+   */
+  async markOrdered(rfq_id: string, order_id: string) {
+    let rfq = await this.retrieveRFQ(rfq_id)
+
+    if (rfq.status === "QUOTED") {
+      const pending = (await this.listQuotes({ rfq_id }))
+        .filter((quote) => quote.status === "PENDING")
+        .sort((a, b) => b.round - a.round)[0]
+
+      rfq = pending
+        ? await this.buyerAccept(rfq_id, pending.id)
+        : await this.transitionStatus(rfq_id, "ACCEPTED")
+    }
+
+    if (rfq.status === "ACCEPTED") {
+      await this.transitionStatus(rfq_id, "ORDERED")
+    }
+
+    return await (this as any).updateRFQS({ id: rfq_id, order_id })
+  }
+
+  async recordContact(rfq_id: string, input: { followup?: boolean } = {}) {
+    const rfq = await this.retrieveRFQ(rfq_id)
+    return await (this as any).updateRFQS({
+      id: rfq_id,
+      last_contacted_at: new Date(),
+      followup_count: (rfq.followup_count ?? 0) + (input.followup ? 1 : 0),
+    })
   }
 
   async getRFQWithQuotes(rfq_id: string) {

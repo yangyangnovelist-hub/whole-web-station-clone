@@ -1,5 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { Modules } from "@medusajs/framework/utils"
 import { z } from "zod"
+import { LEAD_CREATED_EVENT } from "../../../lib/events"
 import { RFQ_MODULE } from "../../../modules/rfq"
 import { PROJECT_DRAFT_MODULE } from "../../../modules/project-draft"
 
@@ -16,6 +18,11 @@ const CreateRFQSchema = z.object({
   target_price: z.coerce.number().positive().optional(),
   need_by: z.string().datetime({ message: "need_by must be a valid ISO date" }).optional(),
   notes: z.string().optional(),
+  website: z.string().max(200).optional(),
+  visitor_id: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{8,64}$/)
+    .optional(),
   items: z
     .array(
       z.object({
@@ -88,6 +95,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     need_by: parsed.data.need_by ? new Date(parsed.data.need_by) : undefined,
     notes: parsed.data.notes,
     items_payload: items.length ? JSON.stringify(items) : null,
+    website: parsed.data.website ?? null,
+    visitor_id: parsed.data.visitor_id ?? null,
   })
 
   if (parsed.data.draft_id) {
@@ -100,6 +109,10 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       notes: parsed.data.notes,
     })
   }
+
+  await req.scope
+    .resolve(Modules.EVENT_BUS)
+    .emit({ name: LEAD_CREATED_EVENT, data: { id: rfq.id } })
 
   return res.status(201).json({ rfq })
 }

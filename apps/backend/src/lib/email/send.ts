@@ -1,0 +1,81 @@
+import fs from "node:fs/promises"
+import path from "node:path"
+import { MedusaContainer } from "@medusajs/framework/types"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import { packoasisConfig } from "../packoasis-config"
+import { RenderedEmail } from "./templates"
+
+export type SendEmailInput = {
+  to: string | string[]
+  email: RenderedEmail
+  template: string
+  idempotencyKey?: string
+  resourceId?: string
+  resourceType?: string
+  headers?: Record<string, string>
+}
+
+/**
+ * Sends through Medusa's Notification module (Resend / SendGrid / local
+ * provider, see medusa-config.ts). Never throws: automation emails must not
+ * break checkout or quoting.
+ */
+export async function sendEmail(
+  container: MedusaContainer,
+  input: SendEmailInput
+): Promise<boolean> {
+  const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+  const recipients = (Array.isArray(input.to) ? input.to : [input.to]).filter(
+    Boolean
+  )
+  if (!recipients.length) {
+    return false
+  }
+
+  const previewDir = process.env.PACKOASIS_EMAIL_PREVIEW_DIR
+  if (previewDir) {
+    try {
+      await fs.mkdir(previewDir, { recursive: true })
+      const file = `${Date.now()}-${input.template}-${recipients[0].replace(/[^a-z0-9@.]+/gi, "_")}.html`
+      await fs.writeFile(path.join(previewDir, file), input.email.html)
+    } catch (error) {
+      logger.warn(`[email] preview write failed: ${(error as Error).message}`)
+    }
+  }
+
+  const notificationService = container.resolve(Modules.NOTIFICATION)
+  let sent = true
+  for (const to of recipients) {
+    try {
+      await notificationService.createNotifications({
+        to,
+        channel: "email",
+        template: input.template,
+        from: packoasisConfig.emailFrom() ?? null,
+        content: {
+          subject: input.email.subject,
+          html: input.email.html,
+          text: input.email.text,
+        },
+        data: { subject: input.email.subject },
+        provider_data: {
+          reply_to: packoasisConfig.replyTo(),
+          headers: input.headers ?? {},
+        },
+        trigger_type: "packoasis",
+        resource_id: input.resourceId ?? null,
+        resource_type: input.resourceType ?? null,
+        idempotency_key: input.idempotencyKey
+          ? `${input.idempotencyKey}:${to}`
+          : null,
+      })
+    } catch (error) {
+      sent = false
+      logger.warn(
+        `[email] ${input.template} to ${to} failed: ${(error as Error).message}`
+      )
+    }
+  }
+
+  return sent
+}
