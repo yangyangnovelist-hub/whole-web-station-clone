@@ -12,6 +12,12 @@ const LineItemOptions = ({
   "data-testid": dataTestid,
   "data-value": dataValue,
 }: LineItemOptionsProps) => {
+  // Instant-quote items are custom line items without a variant; their specs
+  // are already in the product title.
+  if (!variant) {
+    return null
+  }
+
   return (
     <Text
       data-testid={dataTestid}
