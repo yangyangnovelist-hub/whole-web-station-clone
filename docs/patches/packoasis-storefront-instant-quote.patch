@@ -1,0 +1,188 @@
+diff --git a/src/app/[countryCode]/(main)/products/[handle]/page.tsx b/src/app/[countryCode]/(main)/products/[handle]/page.tsx
+index 0ec111b..92ae6cc 100644
+--- a/src/app/[countryCode]/(main)/products/[handle]/page.tsx
++++ b/src/app/[countryCode]/(main)/products/[handle]/page.tsx
+@@ -4,6 +4,7 @@ import { listProducts } from "@lib/data/products"
+ import { getRegion, listRegions } from "@lib/data/regions"
+ import ProductTemplate from "@modules/products/templates"
+ import { HttpTypes } from "@medusajs/types"
++import { getBaseURL } from "@lib/util/env"
+ 
+ type Props = {
+   params: Promise<{ countryCode: string; handle: string }>
+@@ -87,17 +88,55 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
+     notFound()
+   }
+ 
++  const description =
++    product.description?.slice(0, 160) ||
++    `${product.title}: custom printed packaging by PackOasis with instant pricing.`
++
+   return {
+     title: `${product.title} | PackOasis`,
+-    description: `${product.title}`,
++    description,
++    alternates: {
++      canonical: `${getBaseURL()}/${params.countryCode}/products/${handle}`,
++    },
+     openGraph: {
+       title: `${product.title} | PackOasis`,
+-      description: `${product.title}`,
++      description,
+       images: product.thumbnail ? [product.thumbnail] : [],
+     },
+   }
+ }
+ 
++function productJsonLd(product: HttpTypes.StoreProduct, countryCode: string) {
++  const url = `${getBaseURL()}/${countryCode}/products/${product.handle}`
++  const prices = (product.variants ?? [])
++    .map((variant) => variant.calculated_price?.calculated_amount)
++    .filter((amount): amount is number => typeof amount === "number")
++  const currency = product.variants?.find((variant) => variant.calculated_price)
++    ?.calculated_price?.currency_code
++
++  return {
++    "@context": "https://schema.org",
++    "@type": "Product",
++    name: product.title,
++    description: product.description ?? undefined,
++    image: product.thumbnail ? [product.thumbnail] : undefined,
++    sku: product.variants?.[0]?.sku ?? undefined,
++    url,
++    brand: { "@type": "Brand", name: "PackOasis" },
++    offers: prices.length
++      ? {
++          "@type": "AggregateOffer",
++          priceCurrency: currency?.toUpperCase(),
++          lowPrice: Math.min(...prices),
++          highPrice: Math.max(...prices),
++          offerCount: prices.length,
++          availability: "https://schema.org/InStock",
++          url,
++        }
++      : undefined,
++  }
++}
++
+ export default async function ProductPage(props: Props) {
+   const params = await props.params
+   const region = await getRegion(params.countryCode)
+@@ -121,11 +160,21 @@ export default async function ProductPage(props: Props) {
+   const images = getImagesForVariant(pricedProduct, selectedVariantId)
+ 
+   return (
+-    <ProductTemplate
+-      product={pricedProduct}
+-      region={region}
+-      countryCode={params.countryCode}
+-      images={images}
+-    />
++    <>
++      <script
++        type="application/ld+json"
++        dangerouslySetInnerHTML={{
++          __html: JSON.stringify(
++            productJsonLd(pricedProduct, params.countryCode)
++          ).replace(/</g, "\\u003c"),
++        }}
++      />
++      <ProductTemplate
++        product={pricedProduct}
++        region={region}
++        countryCode={params.countryCode}
++        images={images}
++      />
++    </>
+   )
+ }
+diff --git a/src/app/api/quote-checkout/route.ts b/src/app/api/quote-checkout/route.ts
+new file mode 100644
+index 0000000..a86ad7d
+--- /dev/null
++++ b/src/app/api/quote-checkout/route.ts
+@@ -0,0 +1,37 @@
++import { NextRequest, NextResponse } from "next/server"
++
++const CART_ID = /^cart_[0-9A-Z]{26}$/
++
++/**
++ * Hand-off from the instant quote widget / quote emails to checkout: the
++ * backend already created a cart with the locked quote price, so attach it to
++ * this browser and jump straight to the address step.
++ */
++export async function GET(request: NextRequest) {
++  const cartId = request.nextUrl.searchParams.get("cart_id") ?? ""
++  const country = (
++    request.nextUrl.searchParams.get("country") ??
++    process.env.NEXT_PUBLIC_DEFAULT_REGION ??
++    "us"
++  ).toLowerCase()
++  const countryCode = /^[a-z]{2}$/.test(country) ? country : "us"
++
++  if (!CART_ID.test(cartId)) {
++    return NextResponse.redirect(new URL("/contact-us.html", request.url), 303)
++  }
++
++  const response = NextResponse.redirect(
++    new URL(`/${countryCode}/checkout?step=address`, request.url),
++    303
++  )
++  // Lax (not Strict) so the cookie survives the redirect when the buyer
++  // arrives from an email link on another site.
++  response.cookies.set("_medusa_cart_id", cartId, {
++    maxAge: 60 * 60 * 24 * 7,
++    httpOnly: true,
++    sameSite: "lax",
++    secure: process.env.NODE_ENV === "production",
++    path: "/",
++  })
++  return response
++}
+diff --git a/src/app/layout.tsx b/src/app/layout.tsx
+index 6db3994..7fb3b6a 100644
+--- a/src/app/layout.tsx
++++ b/src/app/layout.tsx
+@@ -1,7 +1,11 @@
+ import { getBaseURL } from "@lib/util/env"
+ import { Metadata } from "next"
++import Script from "next/script"
+ import "styles/globals.css"
+ 
++const BACKEND_URL = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
++const PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
++
+ export const metadata: Metadata = {
+   metadataBase: new URL(getBaseURL()),
+ }
+@@ -11,6 +15,13 @@ export default function RootLayout(props: { children: React.ReactNode }) {
+     <html lang="en" data-mode="light">
+       <body>
+         <main className="relative">{props.children}</main>
++        {PUBLISHABLE_KEY && (
++          <Script
++            src={`${BACKEND_URL}/packoasis/widget.js`}
++            strategy="afterInteractive"
++            data-publishable-key={PUBLISHABLE_KEY}
++          />
++        )}
+       </body>
+     </html>
+   )
+diff --git a/src/modules/common/components/line-item-options/index.tsx b/src/modules/common/components/line-item-options/index.tsx
+index 69ad527..4673898 100644
+--- a/src/modules/common/components/line-item-options/index.tsx
++++ b/src/modules/common/components/line-item-options/index.tsx
+@@ -12,6 +12,12 @@ const LineItemOptions = ({
+   "data-testid": dataTestid,
+   "data-value": dataValue,
+ }: LineItemOptionsProps) => {
++  // Instant-quote items are custom line items without a variant; their specs
++  // are already in the product title.
++  if (!variant) {
++    return null
++  }
++
+   return (
+     <Text
+       data-testid={dataTestid}
