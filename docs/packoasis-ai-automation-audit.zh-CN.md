@@ -1,6 +1,6 @@
 # PackOasis AI 自动化审计与"一键估价 → 直接下单"落地
 
-更新日期：2026-09-26
+更新日期：2026-09-28
 
 ## 1. 结论速览
 
@@ -14,6 +14,10 @@
   - 单一确定报价违反该仓库的 INV-2（单价只以区间展示，精确价格由 24 小时人工逐项报价确认）。
   
   补丁中唯一适用于线上的部分（已接受报价的购物车行不再显示空的 "Variant:"）已单独提交：https://github.com/yangyangnovelist-hub/packoasis-storefront/pull/456
+- **线上移植（2026-09-28，业主已同意对可即时下单的品类放宽 INV-2）**：
+  - 后端：https://github.com/yangyangnovelist-hub/packoasis-backend/pull/54 。内容包括锁价报价与下单接口 `/store/instant-offers`、`/store/instant-orders`（按公开价格表该档位的上限锁价，业主配置成本、毛利不达标即拒绝，服务端重新定价），以及已付款报价订单无法进入 ORDERED 的线上缺陷修复与补数脚本。浏览记录、线索画像、自动邮件与跟进也会并入这个 PR。
+  - 前端：https://github.com/yangyangnovelist-hub/packoasis-storefront/pull/457 。`/instant-quote` 页在区间旁显示锁定价，一键进入结账；付款链接改为 `#` 片段；修复付款成功后跳转 404；加入首方浏览信标（遵守 DNT/GPC，不在结账、账户、订单页运行）。
+  - 功能开关默认全部关闭。业主配置好成本表并开启后才会出现锁定价。
 - **审计前**：网站没有任何 AI 自动化（没有 LLM 调用、没有自动报价、没有自动联系客户），询价表单提交不出去，后端按当前代码无法启动，RFQ 也没有路径变成订单。
 - **现在**：客户点页面上的 "Request a Quote / Submit a quick quote"（或右下角 Instant quote），0.1–0.2 秒出价，改尺寸/数量/工艺实时重算，填姓名邮箱后直接进入结账。实测：
   - 浏览器自动化：从点击询价到订单确认 **5.6–7.6 秒**（共 16 次运行全部通过；两轮安全修复后的最终代码上 3 次为 6.0 / 7.0 / 7.6 秒）
@@ -21,7 +25,7 @@
   - 纯 API 链路（报价 → 购物车 → 地址 → 配送 → 支付 → 下单）：**1.5 秒**
 - **自动联系与线索情报**：报价邮件即时发出；访客浏览轨迹、公司官网信息、AI 画像与 A–D 评分汇总成一封销售提醒；未下单的报价在 24h / 72h 自动跟进（可一键退订）；下单后自动发订单确认并记录"报价到下单用了几分钟"。
 - **SEO / GEO**：新增幂等的优化器 `scripts/optimize-seo-geo.mjs`，一次处理全部 399 个镜像页，并生成 robots.txt（放行主流 AI 爬虫）、sitemap.xml、llms.txt、llms-full.txt；后端提供免密钥的报价 API 与 OpenAPI 描述，AI 助手可直接给用户报价并附上一键下单链接。
-- **需要你拍板的事**见第 6 节，最重要的两件：**校准价格表**（默认价是按公开市场价估算的占位值）和**清理 PakFactory 品牌残留**（logo、电话、评价）。
+- **需要你拍板的事**见第 6 节，最重要的两件：**校准价格表**（默认价是按公开市场价估算的占位值）和**清理上游品牌残留**（logo、电话、评价）。
 
 ## 2. 审计发现（按优先级）
 
@@ -33,8 +37,8 @@
 | 2 | `medusa build` 因 `populate-packoasis-products.ts` 类型错误退出码为 1，部署构建会失败 | `src/scripts/populate-packoasis-products.ts:50,75`（`status: "published"`） | 已修复（`ProductStatus.PUBLISHED`） |
 | 3 | 询价表单提交不出去：`/us/contact-us` 重定向到镜像页 `contact-us.html`，其表单 `action='#'` 且页面无任何脚本；React 版表单 `ContactTemplate` 未被任何路由使用 | `public/contact-us.html:1866`，`src/app/[countryCode]/(main)/contact-us/page.tsx:19` | 已修复：组件接管旧表单并提交到 `/store/rfqs`（带 project draft），显示回执 |
 | 4 | 没有任何 AI 自动化、没有自动报价，RFQ 状态只能后台手改，没有 RFQ → 购物车/订单的路径 | 全仓库无 LLM 调用；`src/modules/rfq/service.ts` 仅状态机 | 已实现（见第 3 节） |
-| 5 | 镜像页头 logo 图片就是 PakFactory 商标，390 页；页头电话 1-888-622-2819（PakFactory 的号码），393 页 | `public/media.packoasis.com/logo/websites/1/logo1.jpg` | **需你提供 PackOasis logo/电话**；优化器 `--logo` 可一次替换全部页头 logo |
-| 6 | 38 页仍有 PakFactory 客户评价原文（如 "I used Pakfactory for my jewelry boxes…"），以及 "4.5 stars on Google Reviews / 5,000+ customers" 等背书，存在虚假评价与商标法律风险 | 优化器报告 `pakfactoryMentions` | **需你删除或替换为真实评价**（未自动改写，避免捏造内容） |
+| 5 | 镜像页头 logo 图片就是上游品牌的商标，390 页；页头电话 1-888-622-2819（上游品牌的号码），393 页 | `public/media.packoasis.com/logo/websites/1/logo1.jpg` | **需你提供 PackOasis logo/电话**；优化器 `--logo` 可一次替换全部页头 logo |
+| 6 | 38 页仍有上游品牌的客户评价原文，以及 "4.5 stars on Google Reviews / 5,000+ customers" 等背书，存在虚假评价与商标法律风险 | 优化器报告 `pakfactoryMentions` | **需你删除或替换为真实评价**（未自动改写，避免捏造内容） |
 | 7 | 导航里的 coffee / ecommerce / pet packaging 三个商品页是 HTTrack 跳转桩，meta refresh 指向自身，打开即无限刷新 | `public/custom-coffee-packaging.html/index.html` 等 | 优化器已改为跳转到最接近的现有页面（pouches / corrugated） |
 
 ### P1：严重影响转化 / 获客
@@ -143,16 +147,17 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 - 修复 3 个自刷新死循环页；sitemap 375 条
 - robots.txt 显式放行 GPTBot、OAI-SearchBot、ChatGPT-User、ClaudeBot、Claude-SearchBot、PerplexityBot、Google-Extended 等
 - llms.txt / llms-full.txt：公司简介、价格指南、每个商品页的摘要、面向 AI 助手的报价 API 说明
-- 报告同时列出：PakFactory 文字残留页、logo/电话残留、缺失背景图、重复标题
+- 报告同时列出：上游品牌文字残留页、logo/电话残留、缺失背景图、重复标题
 
 面向 AI 助手 / 代理（GEO）：`GET /packoasis/quote?product_type=mailer-box&dimensions=10x8x4&quantity=1000`（免密钥、限流），返回报价与 `order_url`（打开 packoasis.com 上预填好的报价组件）；`GET /packoasis/catalog`、`GET /packoasis/openapi.json`。
 
 ## 4. 部署步骤
 
-**上线路径**：本 PR 不能直接部署到线上（线上后端是 `packoasis-backend`）。要让即时下单在线上可用，需要三步：
-1. 把本 PR 的后端能力移植到 `packoasis-backend`；
-2. 在 `packoasis-storefront` 现有的 `/instant-quote` 页面里接入下单，沿用站点现有的镜像外框与品牌样式，不用悬浮组件；
-3. 决定是否对可即时下单的品类放宽 INV-2，改为展示确定价格。
+**上线路径**：本 PR 不能直接部署到线上（线上后端是 `packoasis-backend`）。线上移植已分别提交为 packoasis-backend#54 和 packoasis-storefront#457（见第 1 节）。上线顺序：
+1. 合并前端 #457。合并到 main 会自动部署到 Cloudflare Pages。
+2. 合并后端 #54，按原方式 `railway up` 部署。迁移会在启动时自动执行。
+3. 在 Railway 设置 `INSTANT_COST_TABLE_JSON`（真实成本）、`QUOTE_CHECKOUT_SECRET`，并在两边设置同一个 `STOREFRONT_PROXY_SECRET`。确认无误后再设 `INSTANT_ORDER_ENABLED=true`。
+4. 在 Railway 执行一次 `npx medusa exec ./src/scripts/backfill-quote-orders.ts`。先看干跑结果，再加 `BACKFILL_APPLY=yes` 执行，把已付款但停在 ACCEPTED 的报价单补为 ORDERED。
 
 下面的 4.1 适用于在本仓库副本上部署和验证。
 
@@ -214,8 +219,8 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 ## 6. 需要你决定 / 提供
 
 1. **校准价格**：默认价是按公开市场价估算的占位值，上线前请用 `INSTANT_QUOTE_PRICING_JSON` 校准（尤其毛利系数、各品类 MOQ、材料单价）。在校准前如不想开放直接下单，可把所有品类设为 `"instant": false`，流程会自动转为"人工确认报价"。
-2. **品牌与合规**：提供 PackOasis logo 与电话；删除/替换 38 页里的 PakFactory 评价和评分背书。
+2. **品牌与合规**：提供 PackOasis logo 与电话；删除/替换 38 页里上游品牌的评价和评分背书。
 3. **密钥**：`ANTHROPIC_API_KEY`、`RESEND_API_KEY`（或 SendGrid，并配置发信域名 SPF/DKIM）、`SALES_NOTIFY_EMAIL`；如需在线刷卡再加 Stripe。
 4. **隐私政策**：补充首方浏览分析、根据客户提供的网站/邮箱域名查询公开企业信息、报价跟进邮件及退订方式。
-5. **线上移植**：是否把本 PR 的后端能力（即时报价下单、线索情报与自动跟进、AI 画像）移植到 `packoasis-backend`，以及是否对可即时下单的品类放宽 INV-2。
+5. **线上移植**：已决定并已移植（放宽 INV-2，见第 1 节的两个 PR）。还需业主提供真实成本表 `INSTANT_COST_TABLE_JSON`，决定哪些品类开放即时下单，并确认即时订单的退款政策。
 6. **缺失图片**：重新抓取或替换 98 张横幅背景图（清单见优化器报告 `missingBackgroundImages`）。
