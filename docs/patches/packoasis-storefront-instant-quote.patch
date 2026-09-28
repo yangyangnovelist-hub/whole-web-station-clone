@@ -98,13 +98,42 @@ index 0ec111b..92ae6cc 100644
  }
 diff --git a/src/app/api/quote-checkout/route.ts b/src/app/api/quote-checkout/route.ts
 new file mode 100644
-index 0000000..a86ad7d
+index 0000000..91bc9c0
 --- /dev/null
 +++ b/src/app/api/quote-checkout/route.ts
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,71 @@
 +import { NextRequest, NextResponse } from "next/server"
 +
 +const CART_ID = /^cart_[0-9A-Z]{26}$/
++const TOKEN = /^[A-Za-z0-9_-]{1,128}$/
++
++const BACKEND_URL = (
++  process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
++).replace(/\/$/, "")
++
++/**
++ * Asks the backend whether `token` is its signature for this cart hand-off,
++ * so a link built with somebody else's cart id cannot plant that cart in the
++ * buyer's browser. Any failure counts as invalid.
++ */
++async function isSignedCheckout(cartId: string, token: string) {
++  try {
++    const url = new URL(`${BACKEND_URL}/packoasis/checkout-token`)
++    url.searchParams.set("cart_id", cartId)
++    url.searchParams.set("token", token)
++    const response = await fetch(url, {
++      cache: "no-store",
++      signal: AbortSignal.timeout(5000),
++    })
++    if (!response.ok) {
++      return false
++    }
++    const body = (await response.json()) as { valid?: unknown }
++    return body?.valid === true
++  } catch {
++    return false
++  }
++}
 +
 +/**
 + * Hand-off from the instant quote widget / quote emails to checkout: the
@@ -113,6 +142,7 @@ index 0000000..a86ad7d
 + */
 +export async function GET(request: NextRequest) {
 +  const cartId = request.nextUrl.searchParams.get("cart_id") ?? ""
++  const token = request.nextUrl.searchParams.get("token") ?? ""
 +  const country = (
 +    request.nextUrl.searchParams.get("country") ??
 +    process.env.NEXT_PUBLIC_DEFAULT_REGION ??
@@ -120,7 +150,11 @@ index 0000000..a86ad7d
 +  ).toLowerCase()
 +  const countryCode = /^[a-z]{2}$/.test(country) ? country : "us"
 +
-+  if (!CART_ID.test(cartId)) {
++  if (
++    !CART_ID.test(cartId) ||
++    !TOKEN.test(token) ||
++    !(await isSignedCheckout(cartId, token))
++  ) {
 +    return NextResponse.redirect(new URL("/contact-us.html", request.url), 303)
 +  }
 +
@@ -140,11 +174,12 @@ index 0000000..a86ad7d
 +  return response
 +}
 diff --git a/src/app/layout.tsx b/src/app/layout.tsx
-index 6db3994..7fb3b6a 100644
+index 6db3994..824a3d4 100644
 --- a/src/app/layout.tsx
 +++ b/src/app/layout.tsx
-@@ -1,7 +1,11 @@
+@@ -1,7 +1,12 @@
  import { getBaseURL } from "@lib/util/env"
++import PackOasisRouteSync from "@modules/common/components/packoasis-route-sync"
  import { Metadata } from "next"
 +import Script from "next/script"
  import "styles/globals.css"
@@ -155,16 +190,19 @@ index 6db3994..7fb3b6a 100644
  export const metadata: Metadata = {
    metadataBase: new URL(getBaseURL()),
  }
-@@ -11,6 +15,13 @@ export default function RootLayout(props: { children: React.ReactNode }) {
+@@ -11,6 +16,16 @@ export default function RootLayout(props: { children: React.ReactNode }) {
      <html lang="en" data-mode="light">
        <body>
          <main className="relative">{props.children}</main>
 +        {PUBLISHABLE_KEY && (
-+          <Script
-+            src={`${BACKEND_URL}/packoasis/widget.js`}
-+            strategy="afterInteractive"
-+            data-publishable-key={PUBLISHABLE_KEY}
-+          />
++          <>
++            <Script
++              src={`${BACKEND_URL}/packoasis/widget.js`}
++              strategy="afterInteractive"
++              data-publishable-key={PUBLISHABLE_KEY}
++            />
++            <PackOasisRouteSync />
++          </>
 +        )}
        </body>
      </html>
@@ -186,3 +224,85 @@ index 69ad527..4673898 100644
    return (
      <Text
        data-testid={dataTestid}
+diff --git a/src/modules/common/components/packoasis-route-sync/index.tsx b/src/modules/common/components/packoasis-route-sync/index.tsx
+new file mode 100644
+index 0000000..6782f92
+--- /dev/null
++++ b/src/modules/common/components/packoasis-route-sync/index.tsx
+@@ -0,0 +1,25 @@
++"use client"
++
++import { usePathname } from "next/navigation"
++import { useEffect } from "react"
++
++type PackOasisWindow = Window & {
++  PackOasisQuote?: { onRoute?: () => void }
++}
++
++/**
++ * The instant quote widget is loaded once in the root layout, so it never sees
++ * App Router client-side navigations on its own. Tell it about each new route
++ * so it can re-check where it is (e.g. hide the button during checkout).
++ */
++const PackOasisRouteSync = () => {
++  const pathname = usePathname()
++
++  useEffect(() => {
++    ;(window as PackOasisWindow).PackOasisQuote?.onRoute?.()
++  }, [pathname])
++
++  return null
++}
++
++export default PackOasisRouteSync
+diff --git a/src/modules/products/components/product-actions/mobile-actions.tsx b/src/modules/products/components/product-actions/mobile-actions.tsx
+index 90b98ae..801b1c7 100644
+--- a/src/modules/products/components/product-actions/mobile-actions.tsx
++++ b/src/modules/products/components/product-actions/mobile-actions.tsx
+@@ -1,6 +1,6 @@
+ import { Dialog, Transition } from "@headlessui/react"
+ import { Button, clx } from "@medusajs/ui"
+-import React, { Fragment, useMemo } from "react"
++import React, { Fragment, useEffect, useMemo, useRef } from "react"
+ 
+ import useToggleState from "@lib/hooks/use-toggle-state"
+ import ChevronDown from "@modules/common/icons/chevron-down"
+@@ -35,6 +35,30 @@ const MobileActions: React.FC<MobileActionsProps> = ({
+   optionsDisabled,
+ }) => {
+   const { state, open, close } = useToggleState()
++  const barRef = useRef<HTMLDivElement>(null)
++
++  // Lift the instant quote widget's floating button above this bar while the
++  // bar is shown, so it does not cover "Add to cart".
++  useEffect(() => {
++    const root = document.documentElement
++    const bar = barRef.current
++    if (!show || !bar) {
++      root.style.setProperty("--po-fab-offset", "0px")
++      return
++    }
++    const update = () =>
++      root.style.setProperty("--po-fab-offset", `${bar.offsetHeight}px`)
++    update()
++    const observer =
++      typeof ResizeObserver === "undefined"
++        ? undefined
++        : new ResizeObserver(update)
++    observer?.observe(bar)
++    return () => {
++      observer?.disconnect()
++      root.style.setProperty("--po-fab-offset", "0px")
++    }
++  }, [show])
+ 
+   const price = getProductPrice({
+     product: product,
+@@ -55,6 +79,7 @@ const MobileActions: React.FC<MobileActionsProps> = ({
+   return (
+     <>
+       <div
++        ref={barRef}
+         className={clx("lg:hidden inset-x-0 bottom-0 fixed z-50", {
+           "pointer-events-none": !show,
+         })}

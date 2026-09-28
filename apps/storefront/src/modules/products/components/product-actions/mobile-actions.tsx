@@ -1,6 +1,6 @@
 import { Dialog, Transition } from "@headlessui/react"
 import { Button, clx } from "@medusajs/ui"
-import React, { Fragment, useMemo } from "react"
+import React, { Fragment, useEffect, useMemo, useRef } from "react"
 
 import useToggleState from "@lib/hooks/use-toggle-state"
 import ChevronDown from "@modules/common/icons/chevron-down"
@@ -35,6 +35,30 @@ const MobileActions: React.FC<MobileActionsProps> = ({
   optionsDisabled,
 }) => {
   const { state, open, close } = useToggleState()
+  const barRef = useRef<HTMLDivElement>(null)
+
+  // Lift the instant quote widget's floating button above this bar while the
+  // bar is shown, so it does not cover "Add to cart".
+  useEffect(() => {
+    const root = document.documentElement
+    const bar = barRef.current
+    if (!show || !bar) {
+      root.style.setProperty("--po-fab-offset", "0px")
+      return
+    }
+    const update = () =>
+      root.style.setProperty("--po-fab-offset", `${bar.offsetHeight}px`)
+    update()
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(update)
+    observer?.observe(bar)
+    return () => {
+      observer?.disconnect()
+      root.style.setProperty("--po-fab-offset", "0px")
+    }
+  }, [show])
 
   const price = getProductPrice({
     product: product,
@@ -55,6 +79,7 @@ const MobileActions: React.FC<MobileActionsProps> = ({
   return (
     <>
       <div
+        ref={barRef}
         className={clx("lg:hidden inset-x-0 bottom-0 fixed z-50", {
           "pointer-events-none": !show,
         })}

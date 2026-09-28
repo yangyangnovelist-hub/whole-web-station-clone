@@ -117,7 +117,8 @@ const inventory = fs.existsSync(inventoryPath)
   : inventoryFromFiles(publicDir);
 const today = new Date().toISOString().slice(0, 10);
 
-const MIRROR_LOGO = /(?:\.\.\/|\/)?media\.packoasis\.com\/logo\/websites\/1\/logo1(?:-[0-9a-f]{32})?\.jpg/g;
+// Nested mirror pages reach the logo through any number of "../" segments.
+const MIRROR_LOGO = /(?:(?:\.\.\/)+|\/)?media\.packoasis\.com\/logo\/websites\/1\/logo1(?:-[0-9a-f]{32})?\.jpg/g;
 const logoArg = args.logo ? String(args.logo) : null;
 const ORG = {
   name: "PackOasis",
@@ -240,11 +241,12 @@ function getMeta(html, attr, key) {
   return content ? decode(content[1] ?? content[2] ?? "").trim() : "";
 }
 
+// Replacer functions keep "$" in the tags (e.g. a --logo URL) literal.
 function insertIntoHead(html, tags) {
   if (/<\/head>/i.test(html)) {
-    return html.replace(/<\/head>/i, `${tags}\n</head>`);
+    return html.replace(/<\/head>/i, () => `${tags}\n</head>`);
   }
-  return html.replace(/<body/i, `${tags}\n<body`);
+  return html.replace(/<body/i, () => `${tags}\n<body`);
 }
 
 function setMeta(html, attr, key, content) {
@@ -517,6 +519,23 @@ async function loadCatalog() {
 // ----------------------------------------------------------------- run
 
 const catalog = await loadCatalog();
+
+// Without a catalog the teasers and Product JSON-LD cannot be rebuilt, so the
+// run would strip them. Refuse rather than silently wipe published pricing.
+if (!catalog) {
+  const PRICED = /data-packoasis-teaser|<script[^>]*data-packoasis-seo[^>]*>[^<]*"@type":"Product"/;
+  const priced = inventory.routes.filter((record) => {
+    const file = path.join(publicDir, record.relativePath);
+    return fs.existsSync(file) && fs.statSync(file).isFile() && PRICED.test(fs.readFileSync(file, "utf8"));
+  });
+  if (priced.length) {
+    console.error(
+      `${priced.length} pages carry instant pricing from an earlier run (e.g. ${priced[0].route}); pass --backend or --catalog so it can be refreshed instead of removed.`,
+    );
+    process.exit(1);
+  }
+}
+
 const knownRoutes = new Set(inventory.routes.map((route) => route.route));
 const report = {
   generatedAt: new Date().toISOString(),
@@ -653,7 +672,8 @@ for (const record of inventory.routes) {
   if (MIRROR_LOGO.test(html)) {
     report.pakfactoryLogoPages++;
     if (ORG.logo) {
-      html = html.replace(MIRROR_LOGO, logoArg);
+      // A replacer function inserts "$" in the value literally.
+      html = html.replace(MIRROR_LOGO, () => escapeAttr(logoArg));
     }
   }
   MIRROR_LOGO.lastIndex = 0;
@@ -723,6 +743,9 @@ for (const record of inventory.routes) {
     });
     report.faqPages++;
   }
+  // The teaser and the Product JSON-LD come and go together: strip the teaser
+  // on every page, so a page that no longer gets an offer keeps no stale price.
+  html = removeMarked(html, "data-packoasis-teaser");
   if (productType && indexable) {
     graph.push({
       "@type": "Product",

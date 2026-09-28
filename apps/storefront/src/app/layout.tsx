@@ -1,4 +1,5 @@
 import { getBaseURL } from "@lib/util/env"
+import PackOasisRouteSync from "@modules/common/components/packoasis-route-sync"
 import { Metadata } from "next"
 import Script from "next/script"
 import "styles/globals.css"
@@ -16,11 +17,14 @@ export default function RootLayout(props: { children: React.ReactNode }) {
       <body>
         <main className="relative">{props.children}</main>
         {PUBLISHABLE_KEY && (
-          <Script
-            src={`${BACKEND_URL}/packoasis/widget.js`}
-            strategy="afterInteractive"
-            data-publishable-key={PUBLISHABLE_KEY}
-          />
+          <>
+            <Script
+              src={`${BACKEND_URL}/packoasis/widget.js`}
+              strategy="afterInteractive"
+              data-publishable-key={PUBLISHABLE_KEY}
+            />
+            <PackOasisRouteSync />
+          </>
         )}
       </body>
     </html>

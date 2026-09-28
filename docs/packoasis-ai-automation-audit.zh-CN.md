@@ -7,7 +7,7 @@
 - **仓库**：后端（Medusa）就在本仓库 `apps/backend`。`apps/storefront` 是已废弃的副本（见 `apps/storefront/DEPLOY-DEPRECATED.md`），线上前端在 `yangyangnovelist-hub/packoasis-storefront`，当前 Claude GitHub App 无权访问该仓库。前端改动已做成补丁 `docs/patches/packoasis-storefront-instant-quote.patch`，可直接 `git apply`。
 - **审计前**：网站没有任何 AI 自动化（没有 LLM 调用、没有自动报价、没有自动联系客户），询价表单提交不出去，后端按当前代码无法启动，RFQ 也没有路径变成订单。
 - **现在**：客户点页面上的 "Request a Quote / Submit a quick quote"（或右下角 Instant quote），0.1–0.2 秒出价，改尺寸/数量/工艺实时重算，填姓名邮箱后直接进入结账。实测：
-  - 浏览器自动化：从点击询价到订单确认 **5.6–6.6 秒**（共 9 次运行全部通过，最终代码上 4 次为 5.6 / 5.7 / 5.9 / 5.9 秒）
+  - 浏览器自动化：从点击询价到订单确认 **5.6–6.7 秒**（共 13 次运行全部通过，安全修复后的最终代码上 4 次为 5.6 / 5.8 / 5.8 / 6.7 秒）
   - 按真人节奏模拟（逐字输入约 250 个字符，每步停顿阅读 4 秒）：**80.7 秒**
   - 纯 API 链路（报价 → 购物车 → 地址 → 配送 → 支付 → 下单）：**1.5 秒**
 - **自动联系与线索情报**：报价邮件即时发出；访客浏览轨迹、公司官网信息、AI 画像与 A–D 评分汇总成一封销售提醒；未下单的报价在 24h / 72h 自动跟进（可一键退订）；下单后自动发订单确认并记录"报价到下单用了几分钟"。
@@ -101,9 +101,10 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 ### 3.3 下单闭环
 
 - `POST /store/instant-quote/order`：服务端重新计价 → 建 RFQ（`instant_quote`）+ Quote（`packoasis-instant`）→ 建 Medusa 购物车（锁定价格、`requires_shipping: false` 的自定义行项目）→ 返回同源结账链接。非美国地址、需结构评审的品类自动转人工复核（不建购物车）。
-- storefront `GET /api/quote-checkout`：写入 `_medusa_cart_id`（SameSite=Lax，保证从邮件跳转也有效）并进入结账地址页。
+- storefront `GET /api/quote-checkout`：先向后端 `GET /packoasis/checkout-token` 校验链接签名（防止他人把自己的购物车塞进客户浏览器、窃取客户填写的地址），通过后才写入 `_medusa_cart_id`（SameSite=Lax，保证从邮件跳转也有效）并进入结账地址页。
+- 下单时校验：报价已过期或已被新报价取代的购物车无法完成结账（`completeCartWorkflow` 的 validate 钩子），客户需通过邮件链接按现价重算。
 - `src/scripts/setup-instant-quote.ts`（幂等）：确保美国区域/税区、仓库、服务区和 **"Freight included in your quote" $0 配送选项**。
-- `order.placed` 订阅器：RFQ → ACCEPTED → ORDERED，发订单确认与销售提醒，记录"报价到下单分钟数"。
+- `order.placed` 订阅器：按订单的来源购物车（服务端数据）匹配 RFQ 并核对金额，不信任可被修改的购物车 metadata；RFQ → ACCEPTED → ORDERED，发订单确认与销售提醒，记录"报价到下单分钟数"；同一客户其他未下单的报价自动关闭，不再收到跟进。
 - 邮件里的"完成订单"走 `/packoasis/resume`（HMAC 签名）：报价过期会按现价自动重算、换新购物车。
 
 ### 3.4 AI 与线索情报
@@ -119,9 +120,9 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 | 邮件 | 触发 | 收件人 |
 |------|------|--------|
 | 即时报价单（含"完成订单"按钮、阶梯价） | 下单请求提交后即刻 | 客户 |
-| 请求已收到（含参考预算） | 需人工复核的品类 / 联系表单 | 客户 |
+| 请求已收到（含参考预算；不回显客户填写的文字，同一邮箱 24 小时内最多一封） | 需人工复核的品类 / 联系表单 | 客户 |
 | 线索提醒（评分、理由、浏览轨迹、官网摘要、下一步） | 同上 | `SALES_NOTIFY_EMAIL` |
-| 跟进 #1 / #2（AI 文案） | 报价后 24h / 72h 仍未下单 | 客户（带 List-Unsubscribe 一键退订） |
+| 跟进 #1 / #2（AI 文案） | 报价后 24h / 72h 仍未下单（发送失败会退避重试，不会重复轰炸） | 客户（带 List-Unsubscribe 一键退订；邮件里的退订链接先显示确认页，避免企业邮件网关预扫链接时误退订） |
 | 订单确认 / 新订单提醒 | `order.placed` | 客户 / 销售 |
 
 ### 3.6 SEO / GEO 自动优化
@@ -148,7 +149,7 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 
 ### 4.2 前端（packoasis-storefront）
 
-1. 在该仓库根目录：`git apply <本仓库>/docs/patches/packoasis-storefront-instant-quote.patch`（新增 `/api/quote-checkout`、全站挂载组件、自定义行项目显示、商品页 canonical + Product JSON-LD）。
+1. 在该仓库根目录：`git apply <本仓库>/docs/patches/packoasis-storefront-instant-quote.patch`（新增带签名校验的 `/api/quote-checkout`、全站挂载组件及页面内跳转时的路由同步、移动端吸底购买栏出现时上移浮动按钮、自定义行项目显示、商品页 canonical + Product JSON-LD）。
 2. 复制 `scripts/optimize-seo-geo.mjs` 到该仓库，部署前运行：
    ```bash
    node scripts/optimize-seo-geo.mjs public \
@@ -170,7 +171,8 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 | `INSTANT_QUOTE_DEFAULT_COUNTRY`（`us`）/ `INSTANT_QUOTE_COUNTRIES`（`us`） | 默认国家 / 初始化脚本开通的国家 |
 | `PACKOASIS_FOLLOWUPS_ENABLED`（`true`）/ `PACKOASIS_FOLLOWUP_DELAYS_HOURS`（`24,72`） | 自动跟进 |
 | `PACKOASIS_ENRICHMENT_ENABLED`（`true`）/ `PACKOASIS_LEAD_EVENT_RETENTION_DAYS`（`180`） | 官网补全 / 浏览数据保留 |
-| `PACKOASIS_SIGNING_SECRET` | 退订/恢复链接签名（缺省用 `COOKIE_SECRET`） |
+| `PACKOASIS_SIGNING_SECRET` | 退订/恢复/结账链接签名（缺省用 `COOKIE_SECRET`） |
+| `TRUST_CF_CONNECTING_IP` | 仅当后端前面有 Cloudflare 代理、且所有请求都经过 Cloudflare 时设为 `true`（限流按 `CF-Connecting-IP` 识别客户端）；Railway 直连时不要设置，否则限流可被伪造请求头绕过 |
 | `POSTHOG_EVENTS_API_KEY` / `POSTHOG_HOST` | 可选，PostHog 分析 |
 | `STRIPE_API_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_AUTO_CAPTURE` | 可选，在线刷卡（需同时设置 storefront 的 `NEXT_PUBLIC_STRIPE_KEY`） |
 
@@ -178,11 +180,12 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 
 ## 5. 验证记录
 
-- 单元测试 57 个全部通过：报价引擎、页面→品类映射、自由描述解析、SSRF 防护与 robots、网页抽取、浏览汇总与打分、签名链接、邮件模板、组件脚本自包含性，以及 **Claude 调用结构（离线 mock）**：beta 头 `server-side-fallback-2026-07-01`、`fallbacks: "default"`、JSON schema 输出、拒答回退。
+- 单元测试 169 个全部通过（其中 9 个组件浏览器测试需要 jsdom，未装时自动跳过）：报价引擎、页面→品类映射、自由描述解析、SSRF 防护与 robots、网页抽取（含恶意超大页面的耗时上限）、浏览汇总与打分、签名链接、邮件模板与发送重试、限流、订单关联、组件脚本自包含性与浏览器行为，以及 **Claude 调用结构（离线 mock）**：beta 头 `server-side-fallback-2026-07-01`、`fallbacks: "default"`、JSON schema 输出、拒答回退。
 - 本地 Postgres + Medusa：迁移、初始化脚本（含幂等重跑）、`medusa build`、生产模式 `medusa start` 均通过。
 - SEO/GEO 优化器：对完整 `public/` 副本连续运行两次，第二次输出逐字节一致，`--check` 通过。
 - API 端到端：浏览信标 → 估价 → 下单 → 地址 → $0 运费 → 支付会话 → 完成订单，1.5 秒；RFQ 状态 ORDERED、报价 ACCEPTED、邮件 4 封、浏览轨迹关联正确。
-- 浏览器端到端（Playwright + 本地 storefront）：主流程共 9 次运行全部通过（5.6–6.6 秒）；旧联系表单提交、AI 深链预填、过期报价重算、跟进任务（不重复发送）、一键退订、后台 Leads 页均通过。
+- 上线前安全与正确性审查：按 6 个维度并行审查、每条问题再由独立复核者尝试推翻，确认 36 个真实问题（伪造 `CF-Connecting-IP` 可绕过全部限流、恶意网页可让正则抓取卡死事件循环数分钟、发送失败的跟进邮件每 30 分钟重发、`print: "constructor"` 可绕过印刷费、未签名的结账链接可被用于购物车劫持、过期报价仍可按旧价结账、零侧边的快递袋无法下单等）。已全部修复，每组修复再经独立复核；线上探测确认限流、签名结账链接、退订确认页与价格校验生效。
+- 浏览器端到端（Playwright + 本地 storefront）：修复前 9 次（5.6–6.6 秒）、修复后 4 次（5.6–6.7 秒）全部通过；旧联系表单提交、AI 深链预填、过期报价重算、跟进任务（不重复发送）、一键退订、后台 Leads 页均通过。
 - 未在本环境验证：真实 Claude / Resend 调用（没有该应用的密钥）、线上域名（本环境网络策略拦截 packoasis.com 与 Railway 域名）、真实公司官网抓取（沙箱无直连外网）。
 
 ## 6. 需要你决定 / 提供
