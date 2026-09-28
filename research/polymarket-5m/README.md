@@ -9,11 +9,12 @@
 | `binary.py` | 亚式二元期权定价（60s TWAP 结算）、隐含波动率反推、手续费、盘口、Kelly |
 | `simulate.py` | 两个合成世界里的策略实验，输出 `results.md` |
 | `results.md` | 模拟完整结果（20 万个窗口/世界） |
-| `test_binary.py` | 用蒙特卡洛验证定价公式 |
+| `backtest_book.py` | 在真实逐秒盘口数据上回测吃单策略和报价校准（§9） |
+| `test_binary.py` / `test_backtest_book.py` | 用蒙特卡洛验证定价公式；用合成盘口验证回测工具 |
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q          # 15 个测试
+python -m pytest -q          # 22 个测试
 python simulate.py           # 约 20 秒，重写 results.md
 ```
 
@@ -187,6 +188,26 @@ python simulate.py           # 约 20 秒，重写 results.md
 3. **隐含波动率曲面**：用 `binary.implied_vol_s` 对每个 (τ, d) 反推市场的隐含波动率，看它相对已实现波动率是否存在稳定的溢价（波动率风险溢价），以及是否随距离呈“微笑”。
 4. **执行**：优先挂 maker 单（0 费加返佣），但要量化逆向选择：你的挂单被吃，往往是因为价格刚动过。
 5. **仓位**：`binary.kelly_fraction` 给出全 Kelly，实际用 1/4 或更少。按单窗口最大亏损和相关性（同一时刻多个币种高度相关）设上限。
+
+## 9. 真实数据回测：`backtest_book.py`
+
+这是 §8 第 2 步里不需要标的价格的部分：只用盘口和结算结果，检验两件事——报价是否校准（按剩余时间），以及按 ask 吃单买强势方或弱势方扣掉价差和手续费后是否赚钱。
+
+```bash
+pip install -U huggingface_hub
+hf download kachoio/polymarket-5-minute-crypto-up-down-markets \
+  --repo-type dataset --include "btc_*" --local-dir data
+python backtest_book.py data/btc_markets.parquet data/btc_ticks.parquet --out real_btc.md
+# 全部币种：python backtest_book.py data/*_markets.parquet data/*_ticks.parquet --out real_all.md
+```
+
+- 列名按候选名自动识别（如 `condition_id`、`ts_utc`、`bu`、`au`）。识别不了会列出现有列，并提示用 `--col ticks.bid_up=<列名>` 或 `--col markets.outcome=<列名>` 指定。
+- 快照取收盘前 τ（120/60/30/10 秒）或更早的最后一个 tick（最多早 5 秒）。Down 的 ask 用 1 − Up 的最佳 bid。
+- 结果按结算规则分段：单点结算、30s TWAP（2026-08-07 起）、60s TWAP（2026-08-14 起）。kacho 数据集是 2026 年 3–5 月的，只覆盖单点结算。
+- t 值按收盘时间聚类：同一时刻各币种的市场一起波动，不能当独立样本。
+- 已用合成盘口验证过：在一个定价正确的合成市场里，工具报出的毛 EV ≈ 0，净 EV ≈ −(价差 + 费)。
+
+**判断标准**：只有某一行的净 EV 在足够大的样本上显著为正，而且在另一段时间里也能复现，才值得进入下一步——录制带 Chainlink 价格的实时数据，用 `binary.prob_up` 做完整的隐含波动率测试，再小资金纸面交易。
 
 ## 来源
 
