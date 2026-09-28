@@ -15,7 +15,7 @@
   
   补丁中唯一适用于线上的部分（已接受报价的购物车行不再显示空的 "Variant:"）已单独提交：https://github.com/yangyangnovelist-hub/packoasis-storefront/pull/456
 - **线上移植（2026-09-28，业主已同意对可即时下单的品类放宽 INV-2）**：
-  - 后端：https://github.com/yangyangnovelist-hub/packoasis-backend/pull/54 。内容包括锁价报价与下单接口 `/store/instant-offers`、`/store/instant-orders`（按公开价格表该档位的上限锁价，业主配置成本、毛利不达标即拒绝，服务端重新定价），以及已付款报价订单无法进入 ORDERED 的线上缺陷修复与补数脚本。浏览记录、线索画像、自动邮件与跟进也会并入这个 PR。
+  - 后端：https://github.com/yangyangnovelist-hub/packoasis-backend/pull/54 。内容包括锁价报价与下单接口 `/store/instant-offers`、`/store/instant-orders`（按公开价格表该档位的上限锁价，业主配置成本、毛利不达标即拒绝，服务端重新定价），以及已付款报价订单无法进入 ORDERED 的线上缺陷修复与补数脚本。浏览记录、线索画像（可选 Claude）、下单邮件、销售提醒、未付款跟进与退订也已并入这个 PR，且经过独立安全审查和修复（限流、预算、防滥用、令牌脱敏）。
   - 前端：https://github.com/yangyangnovelist-hub/packoasis-storefront/pull/457 。`/instant-quote` 页在区间旁显示锁定价，一键进入结账；付款链接改为 `#` 片段；修复付款成功后跳转 404；加入首方浏览信标（遵守 DNT/GPC，不在结账、账户、订单页运行）。
   - 功能开关默认全部关闭。业主配置好成本表并开启后才会出现锁定价。
 - **审计前**：网站没有任何 AI 自动化（没有 LLM 调用、没有自动报价、没有自动联系客户），询价表单提交不出去，后端按当前代码无法启动，RFQ 也没有路径变成订单。
