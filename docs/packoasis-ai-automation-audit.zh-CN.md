@@ -4,7 +4,16 @@
 
 ## 1. 结论速览
 
-- **仓库**：后端（Medusa）就在本仓库 `apps/backend`。`apps/storefront` 是已废弃的副本（见 `apps/storefront/DEPLOY-DEPRECATED.md`），线上前端在 `yangyangnovelist-hub/packoasis-storefront`，当前 Claude GitHub App 无权访问该仓库。前端改动已做成补丁 `docs/patches/packoasis-storefront-instant-quote.patch`，可直接 `git apply`。
+- **仓库（已核实线上结构）**：
+  - 线上前端是 `yangyangnovelist-hub/packoasis-storefront`，线上后端（Railway）是 `yangyangnovelist-hub/packoasis-backend`。
+  - 本 PR 的后端改动做在 `whole-web-station-clone/apps/backend` 上。这是较早的基线，不是线上正在运行的代码；要上线，需要把这些后端能力移植到 `packoasis-backend`。
+  - 第 2–5 节的审计与验证针对的是本仓库里的副本。线上两个仓库已经并行实现了区间报价引擎、RFQ 流程、人工报价审核与付款交接、SEO 流水线等，情况与这里不同。
+- **前端补丁不能直接应用到线上前端**：`docs/patches/packoasis-storefront-instant-quote.patch` 有三个问题：
+  - 它依赖的后端接口（`/packoasis/widget.js`、`/packoasis/checkout-token`、`/packoasis/resume-cart`、`/store/instant-quote/*`）在 `packoasis-backend` 中不存在；
+  - 悬浮报价组件违反该仓库"不做自创 UI"的标准；
+  - 单一确定报价违反该仓库的 INV-2（单价只以区间展示，精确价格由 24 小时人工逐项报价确认）。
+  
+  补丁中唯一适用于线上的部分（已接受报价的购物车行不再显示空的 "Variant:"）已单独提交：https://github.com/yangyangnovelist-hub/packoasis-storefront/pull/456
 - **审计前**：网站没有任何 AI 自动化（没有 LLM 调用、没有自动报价、没有自动联系客户），询价表单提交不出去，后端按当前代码无法启动，RFQ 也没有路径变成订单。
 - **现在**：客户点页面上的 "Request a Quote / Submit a quick quote"（或右下角 Instant quote），0.1–0.2 秒出价，改尺寸/数量/工艺实时重算，填姓名邮箱后直接进入结账。实测：
   - 浏览器自动化：从点击询价到订单确认 **5.6–7.6 秒**（共 16 次运行全部通过；两轮安全修复后的最终代码上 3 次为 6.0 / 7.0 / 7.6 秒）
@@ -140,9 +149,14 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 
 ## 4. 部署步骤
 
-**部署顺序**：先部署前端（应用 4.2 的补丁），再部署后端，或两者同时上线。否则后端发出的结账链接和报价邮件会指向前端尚不存在的 `/api/quote-checkout`、`/api/quote-resume`。
+**上线路径**：本 PR 不能直接部署到线上（线上后端是 `packoasis-backend`）。要让即时下单在线上可用，需要三步：
+1. 把本 PR 的后端能力移植到 `packoasis-backend`；
+2. 在 `packoasis-storefront` 现有的 `/instant-quote` 页面里接入下单，沿用站点现有的镜像外框与品牌样式，不用悬浮组件；
+3. 决定是否对可即时下单的品类放宽 INV-2，改为展示确定价格。
 
-### 4.1 后端（Railway，本仓库）
+下面的 4.1 适用于在本仓库副本上部署和验证。
+
+### 4.1 后端（本仓库副本）
 
 1. 合并本 PR 后按原方式部署（`medusa build` 现已通过；`start:railway` 会自动跑新迁移：rfq 新字段、lead_event 表）。
 2. 设置环境变量（见 4.3），至少 `STOREFRONT_URL`、`SALES_NOTIFY_EMAIL`、邮件 provider、`ANTHROPIC_API_KEY`。
@@ -151,7 +165,13 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 
 ### 4.2 前端（packoasis-storefront）
 
-1. 在该仓库根目录：`git apply <本仓库>/docs/patches/packoasis-storefront-instant-quote.patch`（新增绑定浏览器的 `/api/quote-checkout`、邮件链接用的 `/api/quote-resume`、报价商品数量固定、全站挂载组件及页面内跳转时的路由同步、移动端吸底购买栏出现时上移浮动按钮、自定义行项目显示、商品页 canonical + Product JSON-LD）。
+不要把 `docs/patches` 的补丁应用到 `packoasis-storefront`，也不要把 `scripts/optimize-seo-geo.mjs` 复制过去运行：
+- 该仓库禁止向镜像 HTML 注入可见的正文内容，而这个脚本会注入价格提示条；
+- 该仓库已有自己的 SEO/GEO 流水线，包括 `inject-seo-head`、实体图谱、目录页 SEO 头部、品牌残留清理和未核实信任信号清理。
+
+已移植的部分见 https://github.com/yangyangnovelist-hub/packoasis-storefront/pull/456 。以下原步骤仅适用于本仓库自带的已废弃前端副本：
+
+1. 在该前端副本的根目录：`git apply <本仓库>/docs/patches/packoasis-storefront-instant-quote.patch`（新增绑定浏览器的 `/api/quote-checkout`、邮件链接用的 `/api/quote-resume`、报价商品数量固定、全站挂载组件及页面内跳转时的路由同步、移动端吸底购买栏出现时上移浮动按钮、自定义行项目显示、商品页 canonical + Product JSON-LD）。
 2. 复制 `scripts/optimize-seo-geo.mjs` 到该仓库，部署前运行：
    ```bash
    node scripts/optimize-seo-geo.mjs public \
@@ -197,5 +217,5 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 2. **品牌与合规**：提供 PackOasis logo 与电话；删除/替换 38 页里的 PakFactory 评价和评分背书。
 3. **密钥**：`ANTHROPIC_API_KEY`、`RESEND_API_KEY`（或 SendGrid，并配置发信域名 SPF/DKIM）、`SALES_NOTIFY_EMAIL`；如需在线刷卡再加 Stripe。
 4. **隐私政策**：补充首方浏览分析、根据客户提供的网站/邮箱域名查询公开企业信息、报价跟进邮件及退订方式。
-5. **前端仓库权限**：在 https://claude.ai/connect-github 为 `packoasis-storefront` 安装 Claude GitHub App，我就能直接提交前端改动；或按 4.2 手动应用补丁。
+5. **线上移植**：是否把本 PR 的后端能力（即时报价下单、线索情报与自动跟进、AI 画像）移植到 `packoasis-backend`，以及是否对可即时下单的品类放宽 INV-2。
 6. **缺失图片**：重新抓取或替换 98 张横幅背景图（清单见优化器报告 `missingBackgroundImages`）。
