@@ -44,6 +44,81 @@ if (
   })
 }
 
+// The PostHog provider reads `posthogEventsKey` / `posthogHost` and throws at
+// boot when the key is missing, so only register it when a key is configured.
+const posthogEventsKey =
+  process.env.POSTHOG_EVENTS_API_KEY || process.env.POSTHOG_API_KEY
+const analyticsProvider = posthogEventsKey
+  ? {
+      resolve: "@medusajs/analytics-posthog",
+      id: "posthog",
+      options: {
+        posthogEventsKey,
+        posthogHost:
+          process.env.POSTHOG_HOST ||
+          process.env.POSTHOG_API_URL ||
+          "https://us.i.posthog.com",
+      },
+    }
+  : {
+      resolve: "@medusajs/medusa/analytics-local",
+      id: "local",
+    }
+
+// Automation emails (quotes, follow-ups, order confirmations, sales alerts)
+// go through Medusa's Notification module: Resend or SendGrid when a key is
+// set, otherwise the local provider just logs them.
+const emailFrom =
+  process.env.PACKOASIS_EMAIL_FROM || "PackOasis <quotes@packoasis.com>"
+const emailProvider = process.env.RESEND_API_KEY
+  ? {
+      resolve: "./src/modules/resend-notification",
+      id: "resend",
+      options: {
+        channels: ["email"],
+        api_key: process.env.RESEND_API_KEY,
+        from: emailFrom,
+      },
+    }
+  : process.env.SENDGRID_API_KEY
+    ? {
+        resolve: "@medusajs/medusa/notification-sendgrid",
+        id: "sendgrid",
+        options: {
+          channels: ["email"],
+          api_key: process.env.SENDGRID_API_KEY,
+          from: emailFrom,
+        },
+      }
+    : {
+        resolve: "@medusajs/medusa/notification-local",
+        id: "local",
+        options: { channels: ["email"] },
+      }
+
+// Card payments at checkout. Without a key only the manual (system)
+// provider exists, which places the order and invoices offline.
+const paymentModules = process.env.STRIPE_API_KEY
+  ? [
+      {
+        resolve: "@medusajs/medusa/payment",
+        options: {
+          providers: [
+            {
+              resolve: "@medusajs/medusa/payment-stripe",
+              id: "stripe",
+              options: {
+                apiKey: process.env.STRIPE_API_KEY,
+                webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+                capture: process.env.STRIPE_AUTO_CAPTURE === "true",
+              },
+            },
+          ],
+        },
+      },
+    ]
+  : []
+
 module.exports = defineConfig({
   projectConfig: {
     databaseUrl: process.env.DATABASE_URL,
@@ -77,16 +152,7 @@ module.exports = defineConfig({
     {
       resolve: "@medusajs/medusa/analytics",
       options: {
-        providers: [
-          {
-            resolve: "@medusajs/analytics-posthog",
-            id: "posthog",
-            options: {
-              apiKey: process.env.POSTHOG_API_KEY || "phc_dummy",
-              apiUrl: process.env.POSTHOG_API_URL || "https://app.posthog.com",
-            },
-          },
-        ],
+        providers: [analyticsProvider],
       },
     },
     {
@@ -95,5 +161,15 @@ module.exports = defineConfig({
     {
       resolve: "./src/modules/project-draft",
     },
+    {
+      resolve: "./src/modules/lead",
+    },
+    {
+      resolve: "@medusajs/medusa/notification",
+      options: {
+        providers: [emailProvider],
+      },
+    },
+    ...paymentModules,
   ],
 })

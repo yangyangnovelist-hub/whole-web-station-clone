@@ -1,0 +1,670 @@
+diff --git a/src/app/[countryCode]/(main)/products/[handle]/page.tsx b/src/app/[countryCode]/(main)/products/[handle]/page.tsx
+index 0ec111b..92ae6cc 100644
+--- a/src/app/[countryCode]/(main)/products/[handle]/page.tsx
++++ b/src/app/[countryCode]/(main)/products/[handle]/page.tsx
+@@ -4,6 +4,7 @@ import { listProducts } from "@lib/data/products"
+ import { getRegion, listRegions } from "@lib/data/regions"
+ import ProductTemplate from "@modules/products/templates"
+ import { HttpTypes } from "@medusajs/types"
++import { getBaseURL } from "@lib/util/env"
+ 
+ type Props = {
+   params: Promise<{ countryCode: string; handle: string }>
+@@ -87,17 +88,55 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
+     notFound()
+   }
+ 
++  const description =
++    product.description?.slice(0, 160) ||
++    `${product.title}: custom printed packaging by PackOasis with instant pricing.`
++
+   return {
+     title: `${product.title} | PackOasis`,
+-    description: `${product.title}`,
++    description,
++    alternates: {
++      canonical: `${getBaseURL()}/${params.countryCode}/products/${handle}`,
++    },
+     openGraph: {
+       title: `${product.title} | PackOasis`,
+-      description: `${product.title}`,
++      description,
+       images: product.thumbnail ? [product.thumbnail] : [],
+     },
+   }
+ }
+ 
++function productJsonLd(product: HttpTypes.StoreProduct, countryCode: string) {
++  const url = `${getBaseURL()}/${countryCode}/products/${product.handle}`
++  const prices = (product.variants ?? [])
++    .map((variant) => variant.calculated_price?.calculated_amount)
++    .filter((amount): amount is number => typeof amount === "number")
++  const currency = product.variants?.find((variant) => variant.calculated_price)
++    ?.calculated_price?.currency_code
++
++  return {
++    "@context": "https://schema.org",
++    "@type": "Product",
++    name: product.title,
++    description: product.description ?? undefined,
++    image: product.thumbnail ? [product.thumbnail] : undefined,
++    sku: product.variants?.[0]?.sku ?? undefined,
++    url,
++    brand: { "@type": "Brand", name: "PackOasis" },
++    offers: prices.length
++      ? {
++          "@type": "AggregateOffer",
++          priceCurrency: currency?.toUpperCase(),
++          lowPrice: Math.min(...prices),
++          highPrice: Math.max(...prices),
++          offerCount: prices.length,
++          availability: "https://schema.org/InStock",
++          url,
++        }
++      : undefined,
++  }
++}
++
+ export default async function ProductPage(props: Props) {
+   const params = await props.params
+   const region = await getRegion(params.countryCode)
+@@ -121,11 +160,21 @@ export default async function ProductPage(props: Props) {
+   const images = getImagesForVariant(pricedProduct, selectedVariantId)
+ 
+   return (
+-    <ProductTemplate
+-      product={pricedProduct}
+-      region={region}
+-      countryCode={params.countryCode}
+-      images={images}
+-    />
++    <>
++      <script
++        type="application/ld+json"
++        dangerouslySetInnerHTML={{
++          __html: JSON.stringify(
++            productJsonLd(pricedProduct, params.countryCode)
++          ).replace(/</g, "\\u003c"),
++        }}
++      />
++      <ProductTemplate
++        product={pricedProduct}
++        region={region}
++        countryCode={params.countryCode}
++        images={images}
++      />
++    </>
+   )
+ }
+diff --git a/src/app/api/quote-checkout/route.ts b/src/app/api/quote-checkout/route.ts
+new file mode 100644
+index 0000000..281c7a1
+--- /dev/null
++++ b/src/app/api/quote-checkout/route.ts
+@@ -0,0 +1,127 @@
++import { NextRequest, NextResponse } from "next/server"
++
++const CART_ID = /^cart_[0-9A-Z]{26}$/
++const TOKEN = /^[A-Za-z0-9_-]{1,128}$/
++const HANDOFF = /^[A-Za-z0-9_-]{16,128}$/
++const EXP = /^\d{1,12}$/
++const RFQ_ID = /^[A-Za-z0-9_-]{1,64}$/
++
++const BACKEND_URL = (
++  process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
++).replace(/\/$/, "")
++
++type HandoffCheck = { valid: boolean; resumeUrl?: string }
++
++/**
++ * Asks the backend whether this link was signed for this cart, this browser's
++ * po_qn cookie (set by the quote widget when it requested the quote) and an
++ * unexpired `exp`, and whether the cart is still its quote's open cart. A
++ * link opened in any other browser, or after 30 minutes, is refused. Any
++ * failure counts as invalid.
++ */
++async function checkHandoff(
++  cartId: string,
++  token: string,
++  exp: string,
++  handoff: string
++): Promise<HandoffCheck> {
++  try {
++    const url = new URL(`${BACKEND_URL}/packoasis/checkout-token`)
++    url.searchParams.set("cart_id", cartId)
++    url.searchParams.set("token", token)
++    url.searchParams.set("exp", exp)
++    url.searchParams.set("handoff", handoff)
++    const response = await fetch(url, {
++      cache: "no-store",
++      signal: AbortSignal.timeout(5000),
++    })
++    if (!response.ok) {
++      return { valid: false }
++    }
++    const body = (await response.json()) as {
++      valid?: unknown
++      resume_url?: unknown
++    }
++    return {
++      valid: body?.valid === true,
++      resumeUrl:
++        typeof body?.resume_url === "string" ? body.resume_url : undefined,
++    }
++  } catch {
++    return { valid: false }
++  }
++}
++
++/**
++ * Same-origin /api/quote-resume link for the backend's resume_url, where the
++ * buyer can have an expired quote re-priced into a fresh cart.
++ */
++function resumeRedirect(resumeUrl: string, request: NextRequest) {
++  try {
++    const params = new URL(resumeUrl).searchParams
++    const rfq = params.get("rfq") ?? ""
++    const token = params.get("token") ?? ""
++    if (!RFQ_ID.test(rfq) || !TOKEN.test(token)) {
++      return null
++    }
++    const target = new URL("/api/quote-resume", request.url)
++    target.searchParams.set("rfq", rfq)
++    target.searchParams.set("token", token)
++    return target
++  } catch {
++    return null
++  }
++}
++
++/**
++ * Hand-off from the instant quote widget to checkout: the backend already
++ * created a cart with the locked quote price, so attach it to the browser
++ * that requested the quote and jump straight to the address step. Quote
++ * emails use /api/quote-resume instead.
++ */
++export async function GET(request: NextRequest) {
++  const cartId = request.nextUrl.searchParams.get("cart_id") ?? ""
++  const token = request.nextUrl.searchParams.get("token") ?? ""
++  const exp = request.nextUrl.searchParams.get("exp") ?? ""
++  const handoff = request.cookies.get("po_qn")?.value ?? ""
++  const country = (
++    request.nextUrl.searchParams.get("country") ??
++    process.env.NEXT_PUBLIC_DEFAULT_REGION ??
++    "us"
++  ).toLowerCase()
++  const countryCode = /^[a-z]{2}$/.test(country) ? country : "us"
++  const contactUs = NextResponse.redirect(
++    new URL("/contact-us.html", request.url),
++    303
++  )
++
++  if (
++    !CART_ID.test(cartId) ||
++    !TOKEN.test(token) ||
++    !EXP.test(exp) ||
++    !HANDOFF.test(handoff)
++  ) {
++    return contactUs
++  }
++
++  const check = await checkHandoff(cartId, token, exp, handoff)
++  if (!check.valid) {
++    const resume = check.resumeUrl && resumeRedirect(check.resumeUrl, request)
++    return resume ? NextResponse.redirect(resume, 303) : contactUs
++  }
++
++  const response = NextResponse.redirect(
++    new URL(`/${countryCode}/checkout?step=address`, request.url),
++    303
++  )
++  response.cookies.set("_medusa_cart_id", cartId, {
++    maxAge: 60 * 60 * 24 * 7,
++    httpOnly: true,
++    sameSite: "lax",
++    secure: process.env.NODE_ENV === "production",
++    path: "/",
++  })
++  // One use: the nonce has done its job.
++  response.cookies.set("po_qn", "", { maxAge: 0, path: "/" })
++  return response
++}
+diff --git a/src/app/api/quote-resume/route.ts b/src/app/api/quote-resume/route.ts
+new file mode 100644
+index 0000000..940e4fb
+--- /dev/null
++++ b/src/app/api/quote-resume/route.ts
+@@ -0,0 +1,223 @@
++import { randomBytes, timingSafeEqual } from "crypto"
++import { NextRequest, NextResponse } from "next/server"
++
++const RFQ_ID = /^[A-Za-z0-9_-]{1,64}$/
++const TOKEN = /^[A-Za-z0-9_-]{1,128}$/
++const CART_ID = /^cart_[0-9A-Z]{26}$/
++/** The po_rs form nonce: 32 random bytes, base64url. */
++const NONCE = /^[A-Za-z0-9_-]{43}$/
++const NONCE_COOKIE = "po_rs"
++
++const BACKEND_URL = (
++  process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
++).replace(/\/$/, "")
++
++/**
++ * Asks the backend for a cart for this signed quote link: the cart this
++ * browser already holds when that is still the quote's current, unexpired
++ * cart, otherwise a fresh one. The cart id comes back only on this
++ * server-to-server call and goes straight into this browser's HttpOnly
++ * cookie. Any failure counts as no cart.
++ */
++async function resumeCart(rfq: string, token: string, heldCartId?: string) {
++  try {
++    const response = await fetch(`${BACKEND_URL}/packoasis/resume-cart`, {
++      method: "POST",
++      headers: { "content-type": "application/json" },
++      body: JSON.stringify({
++        rfq,
++        token,
++        ...(heldCartId ? { current_cart_id: heldCartId } : {}),
++      }),
++      cache: "no-store",
++      signal: AbortSignal.timeout(15000),
++    })
++    if (!response.ok) {
++      return null
++    }
++    const body = (await response.json()) as {
++      cart_id?: unknown
++      country_code?: unknown
++    }
++    if (typeof body?.cart_id !== "string" || !CART_ID.test(body.cart_id)) {
++      return null
++    }
++    const country =
++      typeof body.country_code === "string"
++        ? body.country_code.toLowerCase()
++        : ""
++    return {
++      cartId: body.cart_id,
++      countryCode: /^[a-z]{2}$/.test(country)
++        ? country
++        : (process.env.NEXT_PUBLIC_DEFAULT_REGION ?? "us").toLowerCase(),
++    }
++  } catch {
++    return null
++  }
++}
++
++function contactUs(request: NextRequest) {
++  return NextResponse.redirect(new URL("/contact-us.html", request.url), 303)
++}
++
++/** Back to the GET confirmation page, which asks the buyer to confirm. */
++function confirmRedirect(request: NextRequest, rfq: string, token: string) {
++  const confirm = new URL("/api/quote-resume", request.url)
++  confirm.searchParams.set("rfq", rfq)
++  confirm.searchParams.set("token", token)
++  return NextResponse.redirect(confirm, 303)
++}
++
++/** Constant-time check that the form's nonce is this browser's po_rs cookie. */
++function sameNonce(field: string, cookie: string) {
++  if (!NONCE.test(field) || !NONCE.test(cookie)) {
++    return false
++  }
++  const encoder = new TextEncoder()
++  return timingSafeEqual(encoder.encode(field), encoder.encode(cookie))
++}
++
++function nonceCookie(value: string, maxAge: number) {
++  return {
++    name: NONCE_COOKIE,
++    value,
++    maxAge,
++    httpOnly: true,
++    sameSite: "strict" as const,
++    secure: process.env.NODE_ENV === "production",
++    path: "/api/quote-resume",
++  }
++}
++
++/**
++ * rfq, token and nonce only ever hold [A-Za-z0-9_-] (checked by the callers
++ * or generated here).
++ */
++function confirmPage(rfq: string, token: string, nonce: string) {
++  return `<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<meta name="robots" content="noindex">
++<title>Complete your PackOasis order</title>
++<style>
++body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f6f6f4;color:#1f2328}
++main{max-width:30rem;margin:12vh auto;padding:2rem;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
++h1{font-size:1.4rem;margin:0 0 .75rem}
++p{line-height:1.5;margin:0 0 1rem;color:#4a4f55}
++button{font:inherit;font-weight:600;padding:.8rem 1.4rem;border:0;border-radius:8px;background:#1f2328;color:#fff;cursor:pointer}
++a{color:inherit}
++</style>
++</head>
++<body>
++<main>
++<h1>Complete your PackOasis order</h1>
++<p>Continue to checkout to order your quote. If it has expired, it is re-priced at today's prices first, in a new checkout.</p>
++<p>Already checking out this quote in another tab of this browser? Continuing here takes you back to that checkout. On another device or in another browser? Finish there: continuing here starts a new checkout, and the other one can no longer be completed.</p>
++<form method="post" action="/api/quote-resume">
++<input type="hidden" name="rfq" value="${rfq}">
++<input type="hidden" name="token" value="${token}">
++<input type="hidden" name="rs" value="${nonce}">
++<button type="submit">Continue to checkout</button>
++</form>
++<p style="margin-top:1.5rem">Questions? <a href="/contact-us.html">Contact us</a>.</p>
++</main>
++</body>
++</html>`
++}
++
++/**
++ * "Complete my order" link from quote emails. Opening it only shows a
++ * confirmation page: mail scanners and link previews fetch links, and a
++ * resume can mint a fresh cart that supersedes the quote's current one (such
++ * as a cart the buyer is checking out with in another browser). The cart is
++ * only made when the buyer presses the button (POST below). The page's form
++ * carries a random nonce that is also set as this browser's po_rs cookie
++ * (SameSite=Strict, only sent to this route), and the POST requires both to
++ * match. Another site can post the form's fields but cannot read the cookie;
++ * only something able to set cookies for this site (such as a compromised
++ * subdomain) could forge a match.
++ */
++export async function GET(request: NextRequest) {
++  const rfq = request.nextUrl.searchParams.get("rfq") ?? ""
++  const token = request.nextUrl.searchParams.get("token") ?? ""
++  if (!RFQ_ID.test(rfq) || !TOKEN.test(token)) {
++    return contactUs(request)
++  }
++  const nonce = randomBytes(32).toString("base64url")
++  const response = new NextResponse(confirmPage(rfq, token, nonce), {
++    headers: {
++      "content-type": "text/html; charset=utf-8",
++      "cache-control": "no-store",
++      "referrer-policy": "same-origin",
++      "x-robots-tag": "noindex",
++      "content-security-policy":
++        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
++    },
++  })
++  response.cookies.set(nonceCookie(nonce, 30 * 60))
++  return response
++}
++
++/**
++ * The confirmation page's form: the backend returns the quote's cart this
++ * browser already holds if it is still current, or mints a fresh cart for the
++ * quote (re-priced if it expired), which is attached to this browser before
++ * jumping to the address step. A forwarded link never gets its opener a cart
++ * somebody else can read: an existing cart only comes back to the browser
++ * whose cookie already holds it. Posts from other sites (a
++ * Sec-Fetch-Site other than same-origin) and posts without this browser's
++ * po_rs nonce are sent to the confirmation page instead.
++ */
++export async function POST(request: NextRequest) {
++  let form: FormData | null = null
++  try {
++    form = await request.formData()
++  } catch {
++    form = null
++  }
++  const rfq = String(form?.get("rfq") ?? "")
++  const token = String(form?.get("token") ?? "")
++  if (!RFQ_ID.test(rfq) || !TOKEN.test(token)) {
++    return contactUs(request)
++  }
++
++  const site = request.headers.get("sec-fetch-site")
++  const nonce = request.cookies.get(NONCE_COOKIE)?.value ?? ""
++  if (
++    (site && site !== "same-origin") ||
++    !sameNonce(String(form?.get("rs") ?? ""), nonce)
++  ) {
++    return confirmRedirect(request, rfq, token)
++  }
++
++  const heldCartId = request.cookies.get("_medusa_cart_id")?.value
++  const resumed = await resumeCart(
++    rfq,
++    token,
++    heldCartId && CART_ID.test(heldCartId) ? heldCartId : undefined
++  )
++  if (!resumed) {
++    const failed = contactUs(request)
++    failed.cookies.set(nonceCookie("", 0))
++    return failed
++  }
++
++  const response = NextResponse.redirect(
++    new URL(`/${resumed.countryCode}/checkout?step=address`, request.url),
++    303
++  )
++  response.cookies.set(nonceCookie("", 0))
++  // Lax (not Strict) so the cart is still there when the buyer comes back
++  // through a link on another site, such as a later quote email.
++  response.cookies.set("_medusa_cart_id", resumed.cartId, {
++    maxAge: 60 * 60 * 24 * 7,
++    httpOnly: true,
++    sameSite: "lax",
++    secure: process.env.NODE_ENV === "production",
++    path: "/",
++  })
++  return response
++}
+diff --git a/src/app/layout.tsx b/src/app/layout.tsx
+index 6db3994..824a3d4 100644
+--- a/src/app/layout.tsx
++++ b/src/app/layout.tsx
+@@ -1,7 +1,12 @@
+ import { getBaseURL } from "@lib/util/env"
++import PackOasisRouteSync from "@modules/common/components/packoasis-route-sync"
+ import { Metadata } from "next"
++import Script from "next/script"
+ import "styles/globals.css"
+ 
++const BACKEND_URL = process.env.MEDUSA_BACKEND_URL || "http://localhost:9000"
++const PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY
++
+ export const metadata: Metadata = {
+   metadataBase: new URL(getBaseURL()),
+ }
+@@ -11,6 +16,16 @@ export default function RootLayout(props: { children: React.ReactNode }) {
+     <html lang="en" data-mode="light">
+       <body>
+         <main className="relative">{props.children}</main>
++        {PUBLISHABLE_KEY && (
++          <>
++            <Script
++              src={`${BACKEND_URL}/packoasis/widget.js`}
++              strategy="afterInteractive"
++              data-publishable-key={PUBLISHABLE_KEY}
++            />
++            <PackOasisRouteSync />
++          </>
++        )}
+       </body>
+     </html>
+   )
+diff --git a/src/modules/cart/components/item/index.tsx b/src/modules/cart/components/item/index.tsx
+index b35f1c4..a8986d8 100644
+--- a/src/modules/cart/components/item/index.tsx
++++ b/src/modules/cart/components/item/index.tsx
+@@ -40,6 +40,11 @@ const Item = ({ item, type = "full", currencyCode }: ItemProps) => {
+       })
+   }
+ 
++  // Instant-quote items (custom, variant-less) are priced for the quoted run
++  // and can only be ordered as quoted, so their quantity is fixed.
++  const isQuoteItem =
++    !item.variant_id || Boolean(item.metadata?.packoasis_rfq_id)
++
+   // TODO: Update this to grab the actual max inventory
+   const maxQtyFromInventory = 10
+   const maxQuantity = item.variant?.manage_inventory ? 10 : maxQtyFromInventory
+@@ -76,28 +81,39 @@ const Item = ({ item, type = "full", currencyCode }: ItemProps) => {
+         <Table.Cell>
+           <div className="flex gap-2 items-center w-28">
+             <DeleteButton id={item.id} data-testid="product-delete-button" />
+-            <CartItemSelect
+-              value={item.quantity}
+-              onChange={(value) => changeQuantity(parseInt(value.target.value))}
+-              className="w-14 h-10 p-4"
+-              data-testid="product-select-button"
+-            >
+-              {/* TODO: Update this with the v2 way of managing inventory */}
+-              {Array.from(
+-                {
+-                  length: Math.min(maxQuantity, 10),
+-                },
+-                (_, i) => (
+-                  <option value={i + 1} key={i}>
+-                    {i + 1}
+-                  </option>
+-                )
+-              )}
++            {isQuoteItem ? (
++              <Text
++                className="txt-medium text-ui-fg-base w-14 text-center"
++                data-testid="product-quantity"
++              >
++                {item.quantity}
++              </Text>
++            ) : (
++              <CartItemSelect
++                value={item.quantity}
++                onChange={(value) =>
++                  changeQuantity(parseInt(value.target.value))
++                }
++                className="w-14 h-10 p-4"
++                data-testid="product-select-button"
++              >
++                {/* TODO: Update this with the v2 way of managing inventory */}
++                {Array.from(
++                  {
++                    length: Math.min(maxQuantity, 10),
++                  },
++                  (_, i) => (
++                    <option value={i + 1} key={i}>
++                      {i + 1}
++                    </option>
++                  )
++                )}
+ 
+-              <option value={1} key={1}>
+-                1
+-              </option>
+-            </CartItemSelect>
++                <option value={1} key={1}>
++                  1
++                </option>
++              </CartItemSelect>
++            )}
+             {updating && <Spinner />}
+           </div>
+           <ErrorMessage error={error} data-testid="product-error-message" />
+diff --git a/src/modules/common/components/line-item-options/index.tsx b/src/modules/common/components/line-item-options/index.tsx
+index 69ad527..4673898 100644
+--- a/src/modules/common/components/line-item-options/index.tsx
++++ b/src/modules/common/components/line-item-options/index.tsx
+@@ -12,6 +12,12 @@ const LineItemOptions = ({
+   "data-testid": dataTestid,
+   "data-value": dataValue,
+ }: LineItemOptionsProps) => {
++  // Instant-quote items are custom line items without a variant; their specs
++  // are already in the product title.
++  if (!variant) {
++    return null
++  }
++
+   return (
+     <Text
+       data-testid={dataTestid}
+diff --git a/src/modules/common/components/packoasis-route-sync/index.tsx b/src/modules/common/components/packoasis-route-sync/index.tsx
+new file mode 100644
+index 0000000..6782f92
+--- /dev/null
++++ b/src/modules/common/components/packoasis-route-sync/index.tsx
+@@ -0,0 +1,25 @@
++"use client"
++
++import { usePathname } from "next/navigation"
++import { useEffect } from "react"
++
++type PackOasisWindow = Window & {
++  PackOasisQuote?: { onRoute?: () => void }
++}
++
++/**
++ * The instant quote widget is loaded once in the root layout, so it never sees
++ * App Router client-side navigations on its own. Tell it about each new route
++ * so it can re-check where it is (e.g. hide the button during checkout).
++ */
++const PackOasisRouteSync = () => {
++  const pathname = usePathname()
++
++  useEffect(() => {
++    ;(window as PackOasisWindow).PackOasisQuote?.onRoute?.()
++  }, [pathname])
++
++  return null
++}
++
++export default PackOasisRouteSync
+diff --git a/src/modules/products/components/product-actions/mobile-actions.tsx b/src/modules/products/components/product-actions/mobile-actions.tsx
+index 90b98ae..801b1c7 100644
+--- a/src/modules/products/components/product-actions/mobile-actions.tsx
++++ b/src/modules/products/components/product-actions/mobile-actions.tsx
+@@ -1,6 +1,6 @@
+ import { Dialog, Transition } from "@headlessui/react"
+ import { Button, clx } from "@medusajs/ui"
+-import React, { Fragment, useMemo } from "react"
++import React, { Fragment, useEffect, useMemo, useRef } from "react"
+ 
+ import useToggleState from "@lib/hooks/use-toggle-state"
+ import ChevronDown from "@modules/common/icons/chevron-down"
+@@ -35,6 +35,30 @@ const MobileActions: React.FC<MobileActionsProps> = ({
+   optionsDisabled,
+ }) => {
+   const { state, open, close } = useToggleState()
++  const barRef = useRef<HTMLDivElement>(null)
++
++  // Lift the instant quote widget's floating button above this bar while the
++  // bar is shown, so it does not cover "Add to cart".
++  useEffect(() => {
++    const root = document.documentElement
++    const bar = barRef.current
++    if (!show || !bar) {
++      root.style.setProperty("--po-fab-offset", "0px")
++      return
++    }
++    const update = () =>
++      root.style.setProperty("--po-fab-offset", `${bar.offsetHeight}px`)
++    update()
++    const observer =
++      typeof ResizeObserver === "undefined"
++        ? undefined
++        : new ResizeObserver(update)
++    observer?.observe(bar)
++    return () => {
++      observer?.disconnect()
++      root.style.setProperty("--po-fab-offset", "0px")
++    }
++  }, [show])
+ 
+   const price = getProductPrice({
+     product: product,
+@@ -55,6 +79,7 @@ const MobileActions: React.FC<MobileActionsProps> = ({
+   return (
+     <>
+       <div
++        ref={barRef}
+         className={clx("lg:hidden inset-x-0 bottom-0 fixed z-50", {
+           "pointer-events-none": !show,
+         })}

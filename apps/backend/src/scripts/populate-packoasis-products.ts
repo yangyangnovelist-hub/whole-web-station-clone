@@ -4,7 +4,7 @@ import {
 import { 
   IProductModuleService,
 } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import { Modules, ProductStatus } from "@medusajs/framework/utils"
 
 export default async function populatePackOasisProducts({ container }) {
   const productModuleService: IProductModuleService = container.resolve(Modules.PRODUCT)
@@ -47,7 +47,7 @@ export default async function populatePackOasisProducts({ container }) {
           options: { "Size": "Large", "Material": "Recycled Paper" }
         }
       ],
-      status: "published"
+      status: ProductStatus.PUBLISHED
     },
     {
       title: "Folding Carton Boxes",
@@ -72,7 +72,7 @@ export default async function populatePackOasisProducts({ container }) {
           options: { "Finish": "Glossy" }
         }
       ],
-      status: "published"
+      status: ProductStatus.PUBLISHED
     }
   ]
 

@@ -29,6 +29,24 @@ const RFQ = model.define("rfq", {
     ])
     .default("DRAFT"),
   expires_at: model.dateTime().nullable(),
+  // Instant quote → order funnel
+  quote_payload: model.json().nullable(),
+  quoted_total: model.float().nullable(),
+  currency_code: model.text().nullable(),
+  country_code: model.text().nullable(),
+  cart_id: model.text().nullable(),
+  order_id: model.text().nullable(),
+  // Lead intelligence (browsing trail, company enrichment, AI scoring)
+  website: model.text().nullable(),
+  visitor_id: model.text().nullable(),
+  lead_score: model.number().nullable(),
+  lead_grade: model.text().nullable(),
+  enrichment_payload: model.json().nullable(),
+  enriched_at: model.dateTime().nullable(),
+  // Automated contact
+  followup_count: model.number().default(0),
+  last_contacted_at: model.dateTime().nullable(),
+  contact_opt_out: model.boolean().default(false),
 })
 
 export default RFQ

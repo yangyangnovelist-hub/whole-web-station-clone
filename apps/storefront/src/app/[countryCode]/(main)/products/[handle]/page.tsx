@@ -4,6 +4,7 @@ import { listProducts } from "@lib/data/products"
 import { getRegion, listRegions } from "@lib/data/regions"
 import ProductTemplate from "@modules/products/templates"
 import { HttpTypes } from "@medusajs/types"
+import { getBaseURL } from "@lib/util/env"
 
 type Props = {
   params: Promise<{ countryCode: string; handle: string }>
@@ -87,14 +88,52 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
     notFound()
   }
 
+  const description =
+    product.description?.slice(0, 160) ||
+    `${product.title}: custom printed packaging by PackOasis with instant pricing.`
+
   return {
     title: `${product.title} | PackOasis`,
-    description: `${product.title}`,
+    description,
+    alternates: {
+      canonical: `${getBaseURL()}/${params.countryCode}/products/${handle}`,
+    },
     openGraph: {
       title: `${product.title} | PackOasis`,
-      description: `${product.title}`,
+      description,
       images: product.thumbnail ? [product.thumbnail] : [],
     },
+  }
+}
+
+function productJsonLd(product: HttpTypes.StoreProduct, countryCode: string) {
+  const url = `${getBaseURL()}/${countryCode}/products/${product.handle}`
+  const prices = (product.variants ?? [])
+    .map((variant) => variant.calculated_price?.calculated_amount)
+    .filter((amount): amount is number => typeof amount === "number")
+  const currency = product.variants?.find((variant) => variant.calculated_price)
+    ?.calculated_price?.currency_code
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: product.title,
+    description: product.description ?? undefined,
+    image: product.thumbnail ? [product.thumbnail] : undefined,
+    sku: product.variants?.[0]?.sku ?? undefined,
+    url,
+    brand: { "@type": "Brand", name: "PackOasis" },
+    offers: prices.length
+      ? {
+          "@type": "AggregateOffer",
+          priceCurrency: currency?.toUpperCase(),
+          lowPrice: Math.min(...prices),
+          highPrice: Math.max(...prices),
+          offerCount: prices.length,
+          availability: "https://schema.org/InStock",
+          url,
+        }
+      : undefined,
   }
 }
 
@@ -121,11 +160,21 @@ export default async function ProductPage(props: Props) {
   const images = getImagesForVariant(pricedProduct, selectedVariantId)
 
   return (
-    <ProductTemplate
-      product={pricedProduct}
-      region={region}
-      countryCode={params.countryCode}
-      images={images}
-    />
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(
+            productJsonLd(pricedProduct, params.countryCode)
+          ).replace(/</g, "\\u003c"),
+        }}
+      />
+      <ProductTemplate
+        product={pricedProduct}
+        region={region}
+        countryCode={params.countryCode}
+        images={images}
+      />
+    </>
   )
 }
