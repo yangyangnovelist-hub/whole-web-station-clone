@@ -145,16 +145,28 @@ const FINISH_PATTERNS: [RegExp, FinishId][] = [
 ]
 
 /**
- * Whole-word keyword match that also takes plural, -ed and -ing forms
- * ("labels", "labelled", "wrapping", "taping"), so "printing" is not "tin".
+ * Keywords that are also verbs for the product ("labeled jars", "taped
+ * boxes"). Other keywords such as "display" or "insert" are ordinary verbs in
+ * a description ("displayed on shelves", "product inserted"), so their -ed and
+ * -ing forms must not pick a product type.
+ */
+const VERB_KEYWORDS = new Set(["label", "sticker", "wrap", "tape"])
+
+/**
+ * Whole-word keyword match that takes plural forms ("boxes", "tins"), so
+ * "printing" is not "tin". Keywords in VERB_KEYWORDS also take -ed and -ing
+ * forms ("labelled", "wrapping", "taping").
  */
 function keywordPattern(keyword: string) {
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   const word = escape(keyword)
+  if (!VERB_KEYWORDS.has(keyword.toLowerCase())) {
+    return new RegExp(`\\b${word}(?:e?s)?\\b`, "i")
+  }
   const forms = /e$/i.test(keyword)
     ? // tape: tapes, taped, taping
       `${word}[sd]?|${escape(keyword.slice(0, -1))}ing`
-    : // label: labels, labeled, labelling; wrap: wrapped; box: boxes
+    : // label: labels, labeled, labelling; wrap: wraps, wrapped
       `${word}(?:e?s|${escape(keyword.slice(-1))}?(?:ed|ing))?`
   return new RegExp(`\\b(?:${forms})\\b`, "i")
 }

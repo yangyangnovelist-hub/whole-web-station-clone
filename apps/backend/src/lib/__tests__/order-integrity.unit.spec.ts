@@ -1,5 +1,7 @@
 import path from "path"
 import { MedusaError, Modules } from "@medusajs/framework/utils"
+// The default provider of Medusa's Locking module (Modules.LOCKING).
+import { InMemoryLockingProvider } from "@medusajs/locking/dist/providers/in-memory"
 import {
   completeCartWorkflow,
   createCartWorkflow,
@@ -661,7 +663,7 @@ describe("order.placed subscriber", () => {
     }
   }
 
-  it("links the RFQ quoted for the order's cart and only stops reminders for earlier quotes of the same product", async () => {
+  it("links the RFQ quoted for the order's cart and only stops reminders for the same product's quotes from before the order", async () => {
     const hourAgo = new Date(Date.now() - 60 * 60_000)
     const setup = orderSetup({
       items: [quoteItem()],
@@ -680,9 +682,15 @@ describe("order.placed subscriber", () => {
           created_at: hourAgo,
         },
         {
+          // After the ordered quote, before the order.
           id: "rfq_later",
           quote_payload: { product_type: "mailer-box" },
           created_at: new Date(),
+        },
+        {
+          id: "rfq_after_order",
+          quote_payload: { product_type: "mailer-box" },
+          created_at: new Date(Date.now() + 60_000),
         },
       ],
     })
@@ -710,11 +718,10 @@ describe("order.placed subscriber", () => {
       expect.anything()
     )
     expect(setup.rfqService.closeRFQ).not.toHaveBeenCalled()
-    expect(setup.rfqService.updateRFQS).toHaveBeenCalledTimes(1)
-    expect(setup.rfqService.updateRFQS).toHaveBeenCalledWith({
-      id: "rfq_earlier",
-      followup_count: 2,
-    })
+    expect(setup.rfqService.updateRFQS.mock.calls).toEqual([
+      [{ id: "rfq_earlier", followup_count: 2 }],
+      [{ id: "rfq_later", followup_count: 2 }],
+    ])
     expect(setup.log.warn).not.toHaveBeenCalled()
   })
 
@@ -939,6 +946,18 @@ describe("POST /packoasis/resume-cart", () => {
   const quote = priceQuote({ product_type: "mailer-box", quantity: 1000 })
   const NEW_CART = "cart_01NEWCARTNEWCARTNEWCARTNEW"
 
+  /** The quote's line item in its cart, as createQuoteCart adds it. */
+  function cartQuoteItem(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "item_1",
+      variant_id: null,
+      unit_price: quote.total,
+      quantity: 1,
+      metadata: { packoasis_rfq_id: "rfq_1" },
+      ...overrides,
+    }
+  }
+
   function resumeRequest(
     rfq: any,
     options: { body?: Record<string, unknown>; cart?: any } = {}
@@ -968,11 +987,14 @@ describe("POST /packoasis/resume-cart", () => {
             region_id: "reg_1",
             sales_channel_id: "sc_1",
             completed_at: null,
+            items: [cartQuoteItem()],
           }
     const graph = jest.fn(async () => ({ data: cart ? [cart] : [] }))
+    const locking = new InMemoryLockingProvider()
     const services: Record<string, unknown> = {
       logger: logger(),
       query: { graph },
+      [Modules.LOCKING]: locking,
       [RFQ_MODULE]: rfqService,
     }
     const req = {
@@ -982,7 +1004,7 @@ describe("POST /packoasis/resume-cart", () => {
       },
       scope: { resolve: (key: string) => services[key] },
     } as any
-    return { req, rfqService, cartRun, graph }
+    return { req, rfqService, cartRun, graph, locking }
   }
 
   function currentQuote(overrides: Record<string, unknown> = {}) {
@@ -1106,6 +1128,259 @@ describe("POST /packoasis/resume-cart", () => {
     expect(rfqService.updateRFQS).not.toHaveBeenCalled()
   })
 
+  it("gives a browser already holding the quote's current cart that cart, without minting", async () => {
+    const held = {
+      rfq: "rfq_1",
+      token: signToken("resume", "rfq_1"),
+      current_cart_id: CART_ID,
+    }
+    const { req, rfqService, cartRun } = resumeRequest(currentQuote(), {
+      body: held,
+    })
+    const res = mockRes()
+    await resumeCart(req, res)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toEqual({ cart_id: CART_ID, country_code: "ca" })
+    expect(cartRun).not.toHaveBeenCalled()
+    expect(rfqService.updateRFQS).not.toHaveBeenCalled()
+    expect(rfqService.submitQuote).not.toHaveBeenCalled()
+
+    // Another cart, an expired quote or a changed quote item (which the
+    // validate hook would refuse) gets a fresh cart.
+    const openCart = {
+      id: CART_ID,
+      region_id: "reg_1",
+      sales_channel_id: "sc_1",
+      completed_at: null,
+    }
+    const cases: [any, Record<string, unknown>][] = [
+      [
+        currentQuote(),
+        {
+          body: {
+            ...held,
+            current_cart_id: "cart_01OTHERCARTOTHERCARTOTHERCA",
+          },
+        },
+      ],
+      [
+        currentQuote({ quote_payload: { ...quote, valid_until: yesterday } }),
+        { body: held },
+      ],
+      [
+        currentQuote(),
+        {
+          body: held,
+          cart: { ...openCart, items: [cartQuoteItem({ quantity: 2 })] },
+        },
+      ],
+      [currentQuote(), { body: held, cart: { ...openCart, items: [] } }],
+    ]
+    for (const [rfq, options] of cases) {
+      const { req, rfqService, cartRun } = resumeRequest(rfq, options)
+      const res = mockRes()
+      await resumeCart(req, res)
+      expect(res.body.cart_id).toBe(`${NEW_CART}1`)
+      expect(cartRun).toHaveBeenCalledTimes(1)
+      expect(rfqService.updateRFQS).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "rfq_1", cart_id: `${NEW_CART}1` })
+      )
+    }
+
+    // A completed cart is refused as before.
+    const completed = resumeRequest(currentQuote(), {
+      body: held,
+      cart: { ...openCart, completed_at: new Date(), items: [cartQuoteItem()] },
+    })
+    const refused = mockRes()
+    await resumeCart(completed.req, refused)
+    expect(refused.statusCode).toBe(409)
+    expect(refused.body.cart_id).toBeUndefined()
+  })
+
+  /**
+   * An RFQ and carts behind calls that take a few milliseconds, like the
+   * database, so that two resumes running side by side would interleave. The
+   * first cart takes longest to create, like a request slowed down by load.
+   */
+  function slowStore(rfq: any) {
+    const later = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms))
+    const state = { ...rfq }
+    const rounds = [1]
+    let carts = 0
+    const cartRun = jest.fn(async () => {
+      const n = ++carts
+      await later(n === 1 ? 30 : 5)
+      return { result: { id: `${NEW_CART}${n}` } }
+    })
+    ;(createCartWorkflow as unknown as jest.Mock).mockReturnValue({
+      run: cartRun,
+    })
+    const rfqService = {
+      retrieveRFQ: jest.fn(async () => {
+        await later()
+        return { ...state }
+      }),
+      updateRFQS: jest.fn(async (data: Record<string, unknown>) => {
+        await later()
+        return Object.assign(state, data)
+      }),
+      // Like RFQModuleService.submitQuote: the round after the highest one.
+      submitQuote: jest.fn(async () => {
+        const round = Math.max(...rounds) + 1
+        await later()
+        rounds.push(round)
+        return {}
+      }),
+    }
+    const graph = jest.fn(async ({ filters }: any) => {
+      await later()
+      return {
+        data: [
+          {
+            id: filters.id,
+            region_id: "reg_1",
+            sales_channel_id: "sc_1",
+            completed_at: null,
+            items: [cartQuoteItem()],
+          },
+        ],
+      }
+    })
+    const services: Record<string, unknown> = {
+      logger: logger(),
+      query: { graph },
+      [Modules.LOCKING]: new InMemoryLockingProvider(),
+      [RFQ_MODULE]: rfqService,
+    }
+    const scope = { resolve: (key: string) => services[key] }
+    async function resume(body: Record<string, unknown>) {
+      const res = mockRes()
+      await resumeCart(
+        {
+          body: { rfq: "rfq_1", token: signToken("resume", "rfq_1"), ...body },
+          scope,
+        } as any,
+        res
+      )
+      return res
+    }
+    return { state, rounds, resume, rfqService }
+  }
+
+  it("runs concurrent resumes of one quote one after the other", async () => {
+    // A double-submitted confirmation in a browser without the quote's cart:
+    // the browser keeps the response to the second request.
+    const store = slowStore(currentQuote())
+    const [first, second] = await Promise.all([
+      store.resume({}),
+      store.resume({}),
+    ])
+    expect(first.body.cart_id).toBe(`${NEW_CART}1`)
+    expect(second.body.cart_id).toBe(`${NEW_CART}2`)
+    expect(store.state.cart_id).toBe(second.body.cart_id)
+
+    // In the browser holding the quote's current cart, both keep it.
+    const held = slowStore(currentQuote())
+    const kept = await Promise.all([
+      held.resume({ current_cart_id: CART_ID }),
+      held.resume({ current_cart_id: CART_ID }),
+    ])
+    expect(kept.map((res) => res.body.cart_id)).toEqual([CART_ID, CART_ID])
+    expect(held.state.cart_id).toBe(CART_ID)
+    expect(held.rfqService.updateRFQS).not.toHaveBeenCalled()
+
+    // An expired quote is re-priced into one new round, even from the browser
+    // holding the stale cart: the second request finds it re-priced and only
+    // swaps the cart.
+    const stale = { ...quote, total: 1, valid_until: yesterday }
+    const expired = slowStore(
+      currentQuote({ quote_payload: stale, quoted_total: 1 })
+    )
+    const responses = await Promise.all([
+      expired.resume({ current_cart_id: CART_ID }),
+      expired.resume({ current_cart_id: CART_ID }),
+    ])
+    expect(responses.map((res) => res.statusCode)).toEqual([200, 200])
+    expect(expired.state.cart_id).toBe(responses[1].body.cart_id)
+    expect(expired.state.cart_id).not.toBe(responses[0].body.cart_id)
+    const fresh = priceQuote(quote.specs)
+    expect(expired.state.quote_payload).toEqual(fresh)
+    expect(expired.rounds).toEqual([1, 2])
+    expect(expired.rfqService.submitQuote).toHaveBeenCalledTimes(1)
+    expect(expired.rfqService.updateRFQS.mock.calls).toEqual([
+      [
+        {
+          id: "rfq_1",
+          cart_id: responses[0].body.cart_id,
+          quote_payload: fresh,
+          quoted_total: fresh.total,
+        },
+      ],
+      [{ id: "rfq_1", cart_id: responses[1].body.cart_id }],
+    ])
+  })
+
+  it("does not interleave with a completion of the quote's current cart", async () => {
+    // completeCartWorkflow's acquireLockStep holds the cart id as a lock from
+    // before its validate hook until the cart is completed.
+    const waiting = resumeRequest(currentQuote())
+    await waiting.locking.acquire(CART_ID, { expire: 120 })
+    const res = mockRes()
+    const resumed = resumeCart(waiting.req, res)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(waiting.graph).not.toHaveBeenCalled()
+    waiting.graph.mockResolvedValue({
+      data: [{ id: CART_ID, completed_at: new Date() }],
+    })
+    await waiting.locking.release(CART_ID)
+    await resumed
+    expect(res.statusCode).toBe(409)
+    expect(waiting.cartRun).not.toHaveBeenCalled()
+    expect(waiting.rfqService.updateRFQS).not.toHaveBeenCalled()
+
+    // A completion starting mid-resume cannot take the lock until the RFQ
+    // has moved to the new cart (and its validate hook then refuses).
+    const swapping = resumeRequest(currentQuote())
+    let completionBlocked: boolean | undefined
+    swapping.cartRun.mockImplementationOnce(async () => {
+      completionBlocked = await swapping.locking
+        .acquire(CART_ID, { expire: 120 })
+        .then(
+          () => false,
+          () => true
+        )
+      return { result: { id: `${NEW_CART}1` } }
+    })
+    const swapped = mockRes()
+    await resumeCart(swapping.req, swapped)
+    expect(swapped.body.cart_id).toBe(`${NEW_CART}1`)
+    expect(completionBlocked).toBe(true)
+    await expect(
+      swapping.locking.acquire(CART_ID, { expire: 120 })
+    ).resolves.toBeUndefined()
+  })
+
+  it("changes nothing when a lock cannot be had in time", async () => {
+    const { req, rfqService, cartRun } = resumeRequest(currentQuote())
+    const resolve = req.scope.resolve
+    const timedOut = {
+      execute: async () => {
+        throw new Error("Timed-out acquiring lock.")
+      },
+    }
+    req.scope = {
+      resolve: (key: string) =>
+        key === Modules.LOCKING ? timedOut : resolve(key),
+    }
+    const res = mockRes()
+    await resumeCart(req, res)
+    expect(res.statusCode).toBe(503)
+    expect(res.body.cart_id).toBeUndefined()
+    expect(cartRun).not.toHaveBeenCalled()
+    expect(rfqService.updateRFQS).not.toHaveBeenCalled()
+  })
+
   it("caps the carts one signed link can mint without counting forged ones", async () => {
     const limiter = middlewares.routes!.find(
       (route) => route.matcher === "/packoasis/resume-cart"
@@ -1167,6 +1442,8 @@ describe("storefront /api/quote-resume", () => {
   )
   const SHOP = "https://shop.example.com"
   const NEW_CART = "cart_01NEWCARTNEWCARTNEWCARTNEW"
+  // A po_rs nonce as the confirmation page sets it: 32 bytes, base64url.
+  const NONCE = "N0nce_".repeat(7) + "x"
   let fetchSpy: jest.SpyInstance | undefined
 
   afterEach(() => {
@@ -1192,8 +1469,9 @@ describe("storefront /api/quote-resume", () => {
       submitQuote: jest.fn(async () => ({})),
       updateRFQS: jest.fn(async (data: unknown) => Object.assign(rfq, data)),
     }
+    const cartRun = jest.fn(async () => ({ result: { id: NEW_CART } }))
     ;(createCartWorkflow as unknown as jest.Mock).mockReturnValue({
-      run: jest.fn(async () => ({ result: { id: NEW_CART } })),
+      run: cartRun,
     })
     const graph = jest.fn(async ({ filters }: any) => ({
       data: [
@@ -1202,12 +1480,22 @@ describe("storefront /api/quote-resume", () => {
           region_id: "reg_1",
           sales_channel_id: "sc_1",
           completed_at: null,
+          items: [
+            {
+              id: "item_1",
+              variant_id: null,
+              unit_price: quote.total,
+              quantity: 1,
+              metadata: { packoasis_rfq_id: "rfq_1" },
+            },
+          ],
         },
       ],
     }))
     const services: Record<string, unknown> = {
       logger: logger(),
       query: { graph },
+      [Modules.LOCKING]: new InMemoryLockingProvider(),
       [RFQ_MODULE]: rfqService,
     }
     const scope = { resolve: (key: string) => services[key] }
@@ -1230,7 +1518,7 @@ describe("storefront /api/quote-resume", () => {
       await checkoutToken({ query: checkoutLink(), scope } as any, res)
       return res.body.valid
     }
-    return { rfq, fetch: fetchSpy, widgetCartValid }
+    return { rfq, fetch: fetchSpy, cartRun, widgetCartValid }
   }
 
   function emailLink(token = signToken("resume", "rfq_1")) {
@@ -1239,12 +1527,38 @@ describe("storefront /api/quote-resume", () => {
     return new NextRequest(`${SHOP}/api/quote-resume${url.search}`)
   }
 
-  function confirm(site: string, token = signToken("resume", "rfq_1")) {
+  /**
+   * The confirmation form posted with the rs field `nonce` and the browser's
+   * `cookies` (by default the po_rs cookie matching it). `site` is the
+   * Sec-Fetch-Site header, which older browsers do not send.
+   */
+  function confirm(
+    site: string | null,
+    token = signToken("resume", "rfq_1"),
+    { nonce = NONCE, cookies = { po_rs: NONCE } as Record<string, string> } = {}
+  ) {
+    const headers: Record<string, string> = {
+      cookie: Object.entries(cookies)
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; "),
+    }
+    if (site) {
+      headers["sec-fetch-site"] = site
+    }
     return new NextRequest(`${SHOP}/api/quote-resume`, {
       method: "POST",
-      body: new URLSearchParams({ rfq: "rfq_1", token }),
-      headers: { "sec-fetch-site": site },
+      body: new URLSearchParams({ rfq: "rfq_1", token, rs: nonce }),
+      headers,
     })
+  }
+
+  function expectConfirmPage(res: any) {
+    expect(res.status).toBe(303)
+    const target = new URL(res.headers.get("location"))
+    expect(target.origin + target.pathname).toBe(`${SHOP}/api/quote-resume`)
+    expect(target.searchParams.get("rfq")).toBe("rfq_1")
+    expect(target.searchParams.get("token")).toBe(signToken("resume", "rfq_1"))
+    expect(res.cookies.get("_medusa_cart_id")).toBeUndefined()
   }
 
   it("leaves the widget cart valid when the email link is only opened", async () => {
@@ -1252,10 +1566,12 @@ describe("storefront /api/quote-resume", () => {
     expect(await widgetCartValid()).toBe(true)
 
     // The buyer on another device, a mail scanner, a link preview.
+    const nonces = new Set<string>()
     for (let i = 0; i < 3; i++) {
       const res = await route.GET(emailLink())
       expect(res.status).toBe(200)
       expect(res.headers.get("cache-control")).toBe("no-store")
+      expect(res.headers.get("referrer-policy")).toBe("same-origin")
       expect(res.cookies.get("_medusa_cart_id")).toBeUndefined()
       const html = await res.text()
       expect(html).toContain('<form method="post" action="/api/quote-resume">')
@@ -1263,7 +1579,20 @@ describe("storefront /api/quote-resume", () => {
       expect(html).toContain(
         `name="token" value="${signToken("resume", "rfq_1")}"`
       )
+      // A fresh nonce per page, in the form and in a cookie only this route
+      // gets and only on same-site requests.
+      const nonce = res.cookies.get("po_rs")
+      expect(nonce).toMatchObject({
+        httpOnly: true,
+        sameSite: "strict",
+        path: "/api/quote-resume",
+        maxAge: 1800,
+      })
+      expect(nonce.value).toMatch(/^[A-Za-z0-9_-]{43}$/)
+      expect(html).toContain(`name="rs" value="${nonce.value}"`)
+      nonces.add(nonce.value)
     }
+    expect(nonces.size).toBe(3)
 
     expect(fetch).not.toHaveBeenCalled()
     expect(rfq.cart_id).toBe(CART_ID)
@@ -1272,7 +1601,11 @@ describe("storefront /api/quote-resume", () => {
 
   it("mints a fresh cart for this browser once the buyer confirms", async () => {
     const { rfq, fetch, widgetCartValid } = setup()
-    const res = await route.POST(confirm("same-origin"))
+    const page = await route.GET(emailLink())
+    const nonce = page.cookies.get("po_rs").value
+    const res = await route.POST(
+      confirm("same-origin", undefined, { nonce, cookies: { po_rs: nonce } })
+    )
 
     expect(res.status).toBe(303)
     expect(res.headers.get("location")).toBe(`${SHOP}/ca/checkout?step=address`)
@@ -1282,22 +1615,81 @@ describe("storefront /api/quote-resume", () => {
       sameSite: "lax",
       path: "/",
     })
+    expect(res.cookies.get("po_rs")).toMatchObject({
+      value: "",
+      maxAge: 0,
+      path: "/api/quote-resume",
+    })
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(rfq.cart_id).toBe(NEW_CART)
     // Deliberately continuing here supersedes the widget cart.
     expect(await widgetCartValid()).toBe(false)
   })
 
+  it("keeps the cart this browser already holds for the quote", async () => {
+    // The buyer continues from the email, then opens the link again in
+    // another tab and continues there too.
+    const { rfq, fetch, cartRun } = setup()
+    const first = await route.POST(confirm("same-origin"))
+    const held = first.cookies.get("_medusa_cart_id").value
+    expect(held).toBe(NEW_CART)
+
+    const res = await route.POST(
+      confirm("same-origin", undefined, {
+        cookies: { po_rs: NONCE, _medusa_cart_id: held },
+      })
+    )
+    expect(res.headers.get("location")).toBe(`${SHOP}/ca/checkout?step=address`)
+    expect(res.cookies.get("_medusa_cart_id")).toMatchObject({ value: held })
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({
+      current_cart_id: held,
+    })
+    expect(cartRun).toHaveBeenCalledTimes(1)
+    expect(rfq.cart_id).toBe(held)
+
+    // Only a cart id is passed on.
+    const other = setup()
+    const minted = await route.POST(
+      confirm("same-origin", undefined, {
+        cookies: { po_rs: NONCE, _medusa_cart_id: "not-a-cart" },
+      })
+    )
+    expect(minted.cookies.get("_medusa_cart_id").value).toBe(NEW_CART)
+    expect(
+      JSON.parse(other.fetch.mock.calls[0][1].body).current_cart_id
+    ).toBeUndefined()
+  })
+
+  it("sends posts without this browser's nonce to the confirmation page, without calling the backend", async () => {
+    // Forged forms auto-submitted from another site by a browser that sends
+    // no Sec-Fetch-Site: the SameSite=Strict po_rs cookie is not sent along,
+    // and the other site cannot read it.
+    const { rfq, fetch, widgetCartValid } = setup()
+    const other = "M0nce_".repeat(7) + "x"
+    const forged: { nonce?: string; cookies?: Record<string, string> }[] = [
+      { cookies: {} },
+      { cookies: { _medusa_cart_id: CART_ID } },
+      { nonce: other },
+      { nonce: "" },
+      { nonce: "short", cookies: { po_rs: "short" } },
+    ]
+    for (const browser of forged) {
+      expectConfirmPage(await route.POST(confirm(null, undefined, browser)))
+    }
+    expect(fetch).not.toHaveBeenCalled()
+    expect(rfq.cart_id).toBe(CART_ID)
+    expect(await widgetCartValid()).toBe(true)
+
+    // The confirmation page's own post in such a browser goes through.
+    const res = await route.POST(confirm(null))
+    expect(res.headers.get("location")).toBe(`${SHOP}/ca/checkout?step=address`)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it("shows cross-site posts the confirmation page and sends bad links to contact us", async () => {
     const { rfq, fetch } = setup()
 
-    const crossSite = await route.POST(confirm("cross-site"))
-    expect(crossSite.status).toBe(303)
-    const target = new URL(crossSite.headers.get("location"))
-    expect(target.origin + target.pathname).toBe(`${SHOP}/api/quote-resume`)
-    expect(target.searchParams.get("rfq")).toBe("rfq_1")
-    expect(target.searchParams.get("token")).toBe(signToken("resume", "rfq_1"))
-    expect(crossSite.cookies.get("_medusa_cart_id")).toBeUndefined()
+    expectConfirmPage(await route.POST(confirm("cross-site")))
     expect(fetch).not.toHaveBeenCalled()
 
     const contactUs = `${SHOP}/contact-us.html`

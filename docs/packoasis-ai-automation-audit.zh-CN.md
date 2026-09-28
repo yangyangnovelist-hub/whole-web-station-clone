@@ -102,7 +102,7 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 
 - `POST /store/instant-quote/order`：服务端重新计价 → 建 RFQ（`instant_quote`）+ Quote（`packoasis-instant`）→ 建 Medusa 购物车（锁定价格、`requires_shipping: false` 的自定义行项目）→ 返回同源结账链接。非美国地址、需结构评审的品类自动转人工复核（不建购物车）。
 - 结账链接绑定询价的浏览器：组件下单前在本站写入 30 分钟有效的随机 cookie `po_qn`，并把它随订单提交；结账链接的签名覆盖 购物车 + 该随机值 + 过期时间。storefront `GET /api/quote-checkout` 把 cookie 交给后端 `GET /packoasis/checkout-token` 校验，通过后才写入 `_medusa_cart_id`（SameSite=Lax）并进入结账地址页。别人拿到链接在自己浏览器里打开只会落到联系页，无法把自己的购物车塞进客户浏览器、窃取客户填写的地址。
-- 邮件里的"完成订单"链接指向 storefront `/api/quote-resume`：打开只显示确认页（邮件安全网关预扫不会产生任何变化），点"Continue to checkout"后才由后端 `POST /packoasis/resume-cart` 新建一个购物车（报价过期则按现价重算；不预填邮箱，转发出去的链接无法把订单确认发给链接主人）。旧邮件里的后端 `/packoasis/resume` 链接会自动转到这里。
+- 邮件里的"完成订单"链接指向 storefront `/api/quote-resume`：打开只显示确认页（邮件安全网关预扫不会产生任何变化），点"Continue to checkout"后才由后端 `POST /packoasis/resume-cart` 处理：如果这个浏览器已持有该报价当前有效的购物车（例如另一个标签页正在结账），就沿用它；否则新建一个购物车（报价过期则按现价重算；不预填邮箱，转发出去的链接无法把订单确认发给链接主人）。确认页带一次性表单令牌，其他网站无法代为提交；同一报价的并发请求与结账完成通过 Medusa 锁串行执行。旧邮件里的后端 `/packoasis/resume` 链接会自动转到这里。
 - 下单时校验：报价已过期、已被新报价取代或已被关闭的购物车无法完成结账（`completeCartWorkflow` 的 validate 钩子），提示客户用邮件链接重新结账；购物车里报价商品的数量固定为 1。
 - `src/scripts/setup-instant-quote.ts`（幂等）：确保美国区域/税区、仓库、服务区和 **"Freight included in your quote" $0 配送选项**。
 - `order.placed` 订阅器：按订单的来源购物车（服务端数据）匹配 RFQ 并核对金额，不信任可被修改的购物车 metadata；RFQ → ACCEPTED → ORDERED，发订单确认与销售提醒，记录"报价到下单分钟数"；同一客户此前同品类的未下单报价停止跟进（报价本身保持有效）。
@@ -174,6 +174,7 @@ INSTANT_QUOTE_PRICING_JSON='{"margin_multiplier":1.5,"product_types":{"mailer-bo
 | `PACKOASIS_FOLLOWUPS_ENABLED`（`true`）/ `PACKOASIS_FOLLOWUP_DELAYS_HOURS`（`24,72`） | 自动跟进 |
 | `PACKOASIS_ENRICHMENT_ENABLED`（`true`）/ `PACKOASIS_LEAD_EVENT_RETENTION_DAYS`（`180`） | 官网补全 / 浏览数据保留 |
 | `PACKOASIS_SIGNING_SECRET` | 退订/恢复/结账链接签名（缺省用 `COOKIE_SECRET`） |
+| （多实例部署时，无新变量） | 后端如果运行多个实例，需在 `medusa-config.ts` 给锁模块配置共享提供方：`@medusajs/medusa/locking-postgres`（直接用现有数据库）或 `@medusajs/medusa/locking-redis`（选项 `redisUrl`）；否则"继续结账"的并发保护只在单个进程内有效。单实例无需配置 |
 | `TRUST_CF_CONNECTING_IP` | 仅当后端前面有 Cloudflare 代理、且所有请求都经过 Cloudflare 时设为 `true`（限流按 `CF-Connecting-IP` 识别客户端）；Railway 直连时不要设置，否则限流可被伪造请求头绕过 |
 | `POSTHOG_EVENTS_API_KEY` / `POSTHOG_HOST` | 可选，PostHog 分析 |
 | `STRIPE_API_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_AUTO_CAPTURE` | 可选，在线刷卡（需同时设置 storefront 的 `NEXT_PUBLIC_STRIPE_KEY`） |

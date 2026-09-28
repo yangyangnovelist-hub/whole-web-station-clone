@@ -67,9 +67,10 @@ export function unsubscribeUrl(rfqId: string) {
  * Signed "complete my order" link for emails. It opens a confirmation page on
  * the storefront; pressing "Continue to checkout" there asks the backend
  * server-to-server (POST /packoasis/resume-cart) for a fresh cart for the
- * quote. Only that browser learns the cart's id (in an HttpOnly cookie), so
- * whoever sent the link cannot read what is entered at checkout, and a mail
- * scanner fetching the link changes nothing.
+ * quote, unless that browser already holds the quote's current cart. Only
+ * that browser learns the cart's id (in an HttpOnly cookie), so whoever sent
+ * the link cannot read what is entered at checkout, and a mail scanner
+ * fetching the link changes nothing.
  */
 export function resumeQuoteUrl(rfqId: string, origin?: string) {
   const base = (origin || packoasisConfig.storefrontUrl()).replace(/\/$/, "")

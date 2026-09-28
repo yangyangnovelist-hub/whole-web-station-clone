@@ -140,10 +140,13 @@ export default async function orderPlacedHandler({
     }
   }
 
-  // The buyer converted: stop the "Review and order" follow-ups of their open
-  // instant quotes for the same product from before this one (e.g. an earlier
-  // revision). The quotes stay QUOTED, so their order links keep working.
+  // The buyer converted: stop the "Review and order" follow-ups of their other
+  // open instant quotes for the same product that were requested before this
+  // order (e.g. an earlier revision, or a quantity they compared and passed
+  // over). Quotes requested after the order are new and keep theirs. The
+  // quotes stay QUOTED, so their order links keep working.
   const followups = packoasisConfig.followupDelaysHours().length
+  const orderedAt = new Date(order.created_at as string | Date).getTime()
   for (const email of new Set(linked.map((rfq) => rfq.email))) {
     try {
       const open = await rfqService.listRFQS(
@@ -159,8 +162,7 @@ export default async function orderPlacedHandler({
             rfq.email === email &&
             productType(rfq) !== undefined &&
             productType(other) === productType(rfq) &&
-            new Date(other.created_at).getTime() <=
-              new Date(rfq.created_at).getTime()
+            new Date(other.created_at).getTime() <= orderedAt
         )
         if (!superseded || (other.followup_count ?? 0) >= followups) {
           continue

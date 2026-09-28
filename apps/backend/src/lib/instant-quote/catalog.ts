@@ -557,9 +557,7 @@ export const DEFAULT_PRICING: PricingConfig = {
       production_days: [5, 8],
       volume_exponent: 0.22,
       volume_floor: 0.45,
-      // "seals", not "seal": the parser also matches -ed/-ing forms, and
-      // "sealed" or "sealing" usually describes a bag or pouch
-      keywords: ["label", "sticker", "stickers", "labels", "decal", "seals"],
+      keywords: ["label", "sticker", "stickers", "labels", "decal", "seal"],
       description:
         "Roll or sheet labels and stickers for products, jars, bottles and boxes.",
     },

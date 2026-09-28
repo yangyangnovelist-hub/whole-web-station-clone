@@ -89,6 +89,9 @@ describe("heuristicParseSpecs", () => {
     expect(heuristicParseSpecs("custom seals 2x2, 5000 pcs").product_type).toBe(
       "label"
     )
+    expect(heuristicParseSpecs("custom seal 2x2, 5000 pcs").product_type).toBe(
+      "label"
+    )
     expect(heuristicParseSpecs("2000 tins 4x3x1").product_type).toBe("tin-box")
     expect(
       heuristicParseSpecs("custom shipping boxes 12x10x8, 500 pcs").product_type
@@ -106,6 +109,26 @@ describe("heuristicParseSpecs", () => {
     ["custom taping, 50 rolls", "packing-tape"],
   ])("matches -ed and -ing forms of keywords in %j", (text, type) => {
     expect(heuristicParseSpecs(text).product_type).toBe(type)
+  })
+
+  it.each([
+    ["boxes displayed on store shelves 8x6x3, 1000 pcs", "folding-carton"],
+    ["cartons displaying our logo 5x3x2 5000 pcs", "folding-carton"],
+    ["boxes with the product inserted, 8x6x3 500", "rigid-box"],
+    ["boxes partitioned into 6 cells 8x6x3 500", "rigid-box"],
+  ])(
+    "does not read -ed or -ing forms of noun keywords in %j over the %s hint",
+    (text, hint) => {
+      expect(heuristicParseSpecs(text, hint).product_type).toBe(hint)
+    }
+  )
+
+  it("does not read displayed as a floor display", () => {
+    expect(
+      heuristicParseSpecs(
+        "custom boxes displayed on retail shelves 8x6x3, 1000 pcs"
+      ).product_type
+    ).toBe("mailer-box")
   })
 
   it("keeps the page hint when another type only ties its score", () => {

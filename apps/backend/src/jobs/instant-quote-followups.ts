@@ -106,10 +106,16 @@ export default async function instantQuoteFollowups(
         continue
       }
 
-      // The buyer already ordered a later (e.g. revised) quote for the same
-      // product: stop the reminders but leave the quote open, so its order
-      // link keeps working. Quotes for other products still get theirs.
-      const ordered = await rfqService.listRFQS(
+      // The buyer placed an order for the same product after requesting this
+      // quote (e.g. for a revision, or a quantity they picked over this one):
+      // stop the reminders but leave the quote open, so its order link keeps
+      // working. Quotes for other products, and quotes requested after the
+      // order, still get theirs.
+      const sameProduct = (other: any) =>
+        other.id !== rfq.id &&
+        other.quote_payload?.product_type === quote.product_type
+      // A quote requested after this one was also ordered after it.
+      const later = await rfqService.listRFQS(
         {
           email: rfq.email,
           order_id: { $ne: null },
@@ -117,13 +123,36 @@ export default async function instantQuoteFollowups(
         },
         { select: ["id", "quote_payload"], take: 100 }
       )
-      if (
-        ordered.some(
-          (other: any) =>
-            other.id !== rfq.id &&
-            other.quote_payload?.product_type === quote.product_type
-        )
-      ) {
+      let converted = later.some(sameProduct)
+      if (!converted) {
+        // An earlier quote counts only when its order came after this quote.
+        // Linking the order updates the RFQ, so its updated_at is at or after
+        // the order time; the order's created_at decides.
+        const earlier = (
+          await rfqService.listRFQS(
+            {
+              email: rfq.email,
+              order_id: { $ne: null },
+              created_at: { $lt: rfq.created_at },
+              updated_at: { $gte: rfq.created_at },
+            },
+            { select: ["id", "quote_payload", "order_id"], take: 100 }
+          )
+        ).filter(sameProduct)
+        if (earlier.length) {
+          const { data: orders } = await query.graph({
+            entity: "order",
+            fields: ["id", "created_at"],
+            filters: { id: earlier.map((other: any) => other.order_id) },
+          })
+          converted = orders.some(
+            (order: any) =>
+              new Date(order.created_at).getTime() >=
+              new Date(rfq.created_at).getTime()
+          )
+        }
+      }
+      if (converted) {
         await rfqService
           .updateRFQS({ id: rfq.id, followup_count: delays.length })
           .catch((error: Error) =>

@@ -30,8 +30,8 @@ function checkoutTokenLimit(
 }
 
 /**
- * /packoasis/resume-cart (also called by the storefront server) creates a
- * cart per call. As above, only correctly signed requests are counted, in a
+ * /packoasis/resume-cart (also called by the storefront server) creates at
+ * most one cart per call. As above, only correctly signed requests are counted, in a
  * bucket per quote and caller IP, which caps the carts one resume link can
  * mint through the storefront.
  */

@@ -6,13 +6,14 @@ import { findQuotedLineItem } from "../../modules/rfq/service"
 
 /**
  * Instant-quote carts carry a custom-priced (variant-less) line item. Such a
- * cart can only become an order while it is the cart its RFQ points at (each
- * confirmed resume from the quote email moves the RFQ to a fresh cart), the
- * RFQ is not closed, the quote has not expired and the item still totals the
- * quoted price. Only server-owned RFQ fields decide this, since cart and
- * line-item metadata are editable through the store API. The link in the
- * quote email mints a fresh cart at the quoted (or re-priced) total, so that
- * is the remedy offered.
+ * cart can only become an order while it is the cart its RFQ points at (a
+ * confirmed resume from the quote email moves the RFQ to a fresh cart, unless
+ * that browser already holds the quote's current cart and it can still be
+ * ordered as is), the RFQ is not closed, the quote has not expired and the item
+ * still totals the quoted price. Only server-owned RFQ fields decide this,
+ * since cart and line-item metadata are editable through the store API. The
+ * link in the quote email mints a fresh cart at the quoted (or re-priced)
+ * total, so that is the remedy offered.
  */
 export async function validateInstantQuoteCart(
   cart: any,
