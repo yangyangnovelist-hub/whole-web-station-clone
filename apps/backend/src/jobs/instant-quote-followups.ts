@@ -15,6 +15,9 @@ import { RFQ_MODULE } from "../modules/rfq"
 
 const HOUR = 60 * 60 * 1000
 const MIN_SPACING = 12 * HOUR
+/** How long after the last follow-up is due a quote is still tried. */
+const GRACE = 7 * 24 * HOUR
+const PAGE_SIZE = 200
 
 /**
  * Follows up on instant quotes that were not ordered (24h and 72h after the
@@ -27,23 +30,41 @@ export default async function instantQuoteFollowups(
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
   const rfqService: any = container.resolve(RFQ_MODULE)
 
-  if (packoasisConfig.followupsEnabled()) {
-    const delays = packoasisConfig.followupDelaysHours()
-    const candidates = await rfqService.listRFQS(
-      {
-        source: "instant_quote",
-        status: "QUOTED",
-        contact_opt_out: false,
-        order_id: null,
-      },
-      { take: 200, order: { created_at: "ASC" } }
-    )
-
+  const delays = packoasisConfig.followupDelaysHours()
+  if (packoasisConfig.followupsEnabled() && delays.length) {
     const now = Date.now()
+    // Only rows that can still be due, so finished or abandoned quotes never
+    // crowd out new ones. All pages are read before any row is updated.
+    const filters = {
+      source: "instant_quote",
+      status: "QUOTED",
+      contact_opt_out: false,
+      order_id: null,
+      cart_id: { $ne: null },
+      followup_count: { $lt: delays.length },
+      created_at: {
+        $gte: new Date(now - Math.max(...delays) * HOUR - GRACE),
+        $lte: new Date(now - Math.min(...delays) * HOUR),
+      },
+    }
+    const candidates: any[] = []
+    for (let skip = 0; ; skip += PAGE_SIZE) {
+      const page = await rfqService.listRFQS(filters, {
+        skip,
+        take: PAGE_SIZE,
+        order: { created_at: "ASC", id: "ASC" },
+      })
+      candidates.push(...page)
+      if (page.length < PAGE_SIZE) {
+        break
+      }
+    }
+
     for (const rfq of candidates) {
       const attempt = (rfq.followup_count ?? 0) + 1
       const quote = rfq.quote_payload as QuoteResult | null
-      if (!quote || attempt > delays.length) {
+      // Without a cart the "Review and order" link has nothing to resume.
+      if (!quote || !rfq.cart_id || attempt > delays.length) {
         continue
       }
       const due =
@@ -55,17 +76,33 @@ export default async function instantQuoteFollowups(
         continue
       }
 
-      if (rfq.cart_id) {
-        const {
-          data: [cart],
-        } = await query.graph({
-          entity: "cart",
-          fields: ["id", "completed_at"],
-          filters: { id: rfq.cart_id },
-        })
-        if (!cart || cart.completed_at) {
-          continue
-        }
+      const {
+        data: [cart],
+      } = await query.graph({
+        entity: "cart",
+        fields: ["id", "completed_at"],
+        filters: { id: rfq.cart_id },
+      })
+      if (!cart || cart.completed_at) {
+        continue
+      }
+
+      // The buyer already ordered a later (e.g. revised) quote.
+      const [converted] = await rfqService.listRFQS(
+        {
+          email: rfq.email,
+          order_id: { $ne: null },
+          created_at: { $gte: rfq.created_at },
+        },
+        { select: ["id"], take: 1 }
+      )
+      if (converted) {
+        await rfqService.closeRFQ(rfq.id).catch((error: Error) =>
+          logger.warn(
+            `[followups] could not close ${rfq.id}: ${error.message}`
+          )
+        )
+        continue
       }
 
       const profile = (
@@ -110,6 +147,9 @@ export default async function instantQuoteFollowups(
         logger.info(
           `[followups] sent follow-up ${attempt} for ${rfq.id} (${copy.source})`
         )
+      } else {
+        // Back off MIN_SPACING before retrying the same attempt.
+        await rfqService.recordContact(rfq.id)
       }
     }
   }

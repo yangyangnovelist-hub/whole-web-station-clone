@@ -13,7 +13,14 @@
 
 export type Shape = "box" | "bag" | "pouch" | "flat" | "unit"
 
-export type PrintOptionId = "none" | "one_color" | "cmyk_outside" | "cmyk_both"
+export const PRINT_OPTION_IDS = [
+  "none",
+  "one_color",
+  "cmyk_outside",
+  "cmyk_both",
+] as const
+
+export type PrintOptionId = (typeof PRINT_OPTION_IDS)[number]
 
 export type FinishId =
   | "matte_lamination"

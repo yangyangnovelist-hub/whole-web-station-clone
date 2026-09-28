@@ -88,6 +88,17 @@ function isPlainObject(value: unknown): value is PlainObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/**
+ * Own-key check for lookups keyed by client input, so ids such as
+ * "constructor" or "__proto__" never resolve to Object.prototype members.
+ */
+export function hasOwn<T extends object>(
+  object: T,
+  key: string
+): key is Extract<keyof T, string> {
+  return Object.prototype.hasOwnProperty.call(object, key)
+}
+
 export function deepMerge<T>(base: T, override: unknown): T {
   if (!isPlainObject(base) || !isPlainObject(override)) {
     return (override === undefined ? base : override) as T
@@ -95,10 +106,64 @@ export function deepMerge<T>(base: T, override: unknown): T {
 
   const result: PlainObject = { ...base }
   for (const [key, value] of Object.entries(override)) {
-    result[key] = key in result ? deepMerge(result[key], value) : value
+    if (
+      value === null &&
+      (!hasOwn(result, key) || isPlainObject(result[key]))
+    ) {
+      // null removes an entry, e.g. {"print":{"cmyk_both":null}} disables it
+      delete result[key]
+      continue
+    }
+    result[key] = hasOwn(result, key) ? deepMerge(result[key], value) : value
   }
 
   return result as T
+}
+
+/**
+ * An override can remove print options ({"print":{"one_color":null}}). Keep
+ * only real rates, point default_print at one of them, and drop a product
+ * type that has no print option left.
+ */
+function withAvailablePrints(config: PricingConfig): PricingConfig {
+  const productTypes: Record<string, ProductTypeConfig> = {}
+  let changed = false
+  for (const [id, type] of Object.entries(config.product_types)) {
+    const rates = Object.entries(type.print).filter(([, rate]) =>
+      isPlainObject(rate)
+    )
+    const ids = rates.map(([printId]) => printId as PrintOptionId)
+    const defaultPrint = ids.includes(type.default_print)
+      ? type.default_print
+      : ids[0]
+    if (
+      defaultPrint === type.default_print &&
+      rates.length === Object.keys(type.print).length
+    ) {
+      productTypes[id] = type
+      continue
+    }
+
+    changed = true
+    if (!defaultPrint) {
+      console.error(
+        `[instant-quote] INSTANT_QUOTE_PRICING_JSON leaves ${id} without a print option; it is not offered.`
+      )
+      continue
+    }
+    if (defaultPrint !== type.default_print) {
+      console.error(
+        `[instant-quote] INSTANT_QUOTE_PRICING_JSON removes the default print "${type.default_print}" of ${id}; using "${defaultPrint}".`
+      )
+    }
+    productTypes[id] = {
+      ...type,
+      print: Object.fromEntries(rates),
+      default_print: defaultPrint,
+    }
+  }
+
+  return changed ? { ...config, product_types: productTypes } : config
 }
 
 let cachedConfig: { raw: string | undefined; config: PricingConfig } | null =
@@ -118,7 +183,7 @@ export function loadPricingConfig(
   let config = DEFAULT_PRICING
   if (raw && raw.trim()) {
     try {
-      config = deepMerge(DEFAULT_PRICING, JSON.parse(raw))
+      config = withAvailablePrints(deepMerge(DEFAULT_PRICING, JSON.parse(raw)))
     } catch (error) {
       console.error(
         `[instant-quote] INSTANT_QUOTE_PRICING_JSON is not valid JSON, using defaults: ${
@@ -155,7 +220,7 @@ export function getProductType(
   id: string,
   config: PricingConfig = loadPricingConfig()
 ): ProductTypeConfig | undefined {
-  return config.product_types[id]
+  return hasOwn(config.product_types, id) ? config.product_types[id] : undefined
 }
 
 export function normalizeSpecs(
@@ -169,7 +234,7 @@ export function normalizeSpecs(
 
   const warnings: string[] = []
   const unit: DimensionUnit =
-    input.unit && input.unit in UNIT_TO_INCH ? input.unit : "in"
+    input.unit && hasOwn(UNIT_TO_INCH, input.unit) ? input.unit : "in"
 
   const dimensions = type.default_dimensions.map((fallback, index) => {
     const raw = input.dimensions?.[index]
@@ -216,19 +281,26 @@ export function normalizeSpecs(
 
   let print = type.default_print
   if (input.print) {
-    if (input.print in type.print) {
+    const rate = hasOwn(type.print, input.print)
+      ? type.print[input.print]
+      : undefined
+    if (isPlainObject(rate)) {
       print = input.print as PrintOptionId
     } else {
+      const label = hasOwn(config.print_labels, input.print)
+        ? config.print_labels[input.print]
+        : input.print
       warnings.push(
-        `${config.print_labels[input.print as PrintOptionId] ?? input.print} is not available for ${type.label}; using ${config.print_labels[type.default_print]}.`
+        `${label} is not available for ${type.label}; using ${config.print_labels[type.default_print]}.`
       )
     }
   }
 
   const finishes = Array.from(new Set(input.finishes ?? [])).filter(
     (finish): finish is FinishId => {
-      const allowed = type.finishes.includes(finish as FinishId)
-      if (!allowed && finish in config.finishes) {
+      const known = hasOwn(config.finishes, finish)
+      const allowed = known && type.finishes.includes(finish as FinishId)
+      if (!allowed && known) {
         warnings.push(
           `${config.finishes[finish as FinishId].label} is not available for ${type.label}.`
         )
@@ -255,7 +327,8 @@ export function normalizeSpecs(
   }
 
   const addons = Array.from(new Set(input.addons ?? [])).filter(
-    (addon): addon is AddonId => type.addons.includes(addon as AddonId)
+    (addon): addon is AddonId =>
+      hasOwn(config.addons, addon) && type.addons.includes(addon as AddonId)
   )
 
   return {
@@ -382,15 +455,14 @@ function priceAtQuantity(
   const cost =
     model.variableUnitCost * volumeFactor(type, quantity) * quantity +
     model.setupCost
-  const total = Math.max(
-    config.min_order_total,
-    round(
-      cost * config.margin_multiplier * (rush ? config.rush_multiplier : 1),
-      2
-    )
+  // raw is the price before the order minimum is applied
+  const raw = round(
+    cost * config.margin_multiplier * (rush ? config.rush_multiplier : 1),
+    2
   )
+  const total = Math.max(config.min_order_total, raw)
 
-  return { total, unit_price: round(total / quantity, 4) }
+  return { raw, total, unit_price: round(total / quantity, 4) }
 }
 
 function addBusinessDays(start: Date, days: number) {
@@ -427,7 +499,7 @@ export function priceQuote(
   const now = options.now ?? new Date()
   const { specs, type, warnings } = normalizeSpecs(input, config)
   const model = buildCostModel(specs, type, config)
-  const { total, unit_price } = priceAtQuantity(
+  const { raw, total, unit_price } = priceAtQuantity(
     model,
     type,
     config,
@@ -446,11 +518,21 @@ export function priceQuote(
     ),
   }))
   const breakdownSum = breakdown.reduce((sum, line) => sum + line.amount, 0)
-  if (total - breakdownSum > 0.009) {
+  if (total > raw) {
     breakdown.push({
       label: "Minimum order adjustment",
       amount: round(total - breakdownSum, 2),
     })
+  } else {
+    // Lines are rounded one by one; put the leftover cents on the largest
+    // line so the breakdown always adds up to the total.
+    const residue = round(total - breakdownSum, 2)
+    if (residue !== 0) {
+      const largest = breakdown.reduce((max, line) =>
+        line.amount > max.amount ? line : max
+      )
+      largest.amount = round(largest.amount + residue, 2)
+    }
   }
 
   const tiers = tierQuantities(type, specs.quantity).map((quantity) => {

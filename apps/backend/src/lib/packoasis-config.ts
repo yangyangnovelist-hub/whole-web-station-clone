@@ -69,6 +69,11 @@ export function resumeQuoteUrl(rfqId: string) {
   )}&token=${signToken("resume", rfqId)}`
 }
 
+/**
+ * Storefront hand-off that attaches a quote cart to the buyer's browser. The
+ * token lets the storefront check (via /packoasis/checkout-token) that the
+ * link came from us, so nobody can plant their own cart in a victim's browser.
+ */
 export function storefrontCheckoutUrl(
   cartId: string,
   countryCode: string,
@@ -77,5 +82,8 @@ export function storefrontCheckoutUrl(
   const base = (origin || packoasisConfig.storefrontUrl()).replace(/\/$/, "")
   return `${base}/api/quote-checkout?cart_id=${encodeURIComponent(
     cartId
-  )}&country=${encodeURIComponent(countryCode)}`
+  )}&country=${encodeURIComponent(countryCode)}&token=${signToken(
+    "checkout",
+    cartId
+  )}`
 }

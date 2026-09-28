@@ -4,8 +4,9 @@ import {
   FinishId,
   PricingConfig,
   PrintOptionId,
+  ProductTypeConfig,
 } from "../instant-quote/catalog"
-import { loadPricingConfig, QuoteInput } from "../instant-quote/engine"
+import { hasOwn, loadPricingConfig, QuoteInput } from "../instant-quote/engine"
 import { generateStructured } from "./claude"
 
 export type ParsedSpecs = QuoteInput & {
@@ -143,6 +144,20 @@ const FINISH_PATTERNS: [RegExp, FinishId][] = [
   [/\bwindow\b/i, "window"],
 ]
 
+/** Whole-word keyword match (plurals allowed), so "printing" is not "tin". */
+function keywordPattern(keyword: string) {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`\\b${escaped}(?:e?s)?\\b`, "i")
+}
+
+function keywordScore(type: ProductTypeConfig, lower: string) {
+  return type.keywords.reduce(
+    (sum, keyword) =>
+      sum + (keywordPattern(keyword).test(lower) ? keyword.length : 0),
+    0
+  )
+}
+
 /** Regex fallback so the "describe your project" box works without an API key. */
 export function heuristicParseSpecs(
   text: string,
@@ -153,33 +168,50 @@ export function heuristicParseSpecs(
   const missing: string[] = []
 
   let productType =
-    hintProductType && config.product_types[hintProductType]
+    hintProductType && hasOwn(config.product_types, hintProductType)
       ? hintProductType
       : null
-  let bestScore = 0
+  // The page hint is replaced only by a type with a strictly higher score.
+  let bestScore = productType
+    ? keywordScore(config.product_types[productType], lower)
+    : 0
   for (const type of Object.values(config.product_types)) {
-    const score = type.keywords.reduce(
-      (sum, keyword) => sum + (lower.includes(keyword) ? keyword.length : 0),
-      0
-    )
+    const score = keywordScore(type, lower)
     if (score > bestScore) {
       bestScore = score
       productType = type.id
     }
   }
-  productType = productType ?? "mailer-box"
+  // mailer-box can be removed by a null pricing override
+  productType =
+    productType ??
+    (hasOwn(config.product_types, "mailer-box")
+      ? "mailer-box"
+      : Object.keys(config.product_types)[0])
+  const type = config.product_types[productType]
 
   let unit: "in" | "cm" | "mm" = "in"
   let dimensions: number[] = []
   const dimensionMatch = text.match(
-    /(\d+(?:\.\d+)?)\s*(?:"|in(?:ch(?:es)?)?|cm|mm)?\s*(?:x|×|\*|by)\s*(\d+(?:\.\d+)?)\s*(?:"|in(?:ch(?:es)?)?|cm|mm)?(?:\s*(?:x|×|\*|by)\s*(\d+(?:\.\d+)?))?\s*("|in(?:ch(?:es)?)?\b|cm\b|mm\b)?/i
+    /(\d+(?:\.\d+)?)\s*(?:"|in(?:ch(?:es)?)?|cm|mm)?\s*(?:x|×|\*|by)\s*(\d+(?:\.\d+)?)\s*(?:"|in(?:ch(?:es)?)?|cm|mm)?(?:\s*(?:x|×|\*|by)\s*(\d+(?:\.\d+)?))?(?:\s*\(?\s*("|in(?:ch(?:es)?)?\b|cm\b|mm\b|centimet(?:er|re)s?\b|millimet(?:er|re)s?\b))?/i
   )
   if (dimensionMatch) {
     dimensions = [dimensionMatch[1], dimensionMatch[2], dimensionMatch[3]]
       .filter((value): value is string => Boolean(value))
       .map(Number)
     const unitToken = (dimensionMatch[4] ?? dimensionMatch[0]).toLowerCase()
-    unit = /mm/.test(unitToken) ? "mm" : /cm/.test(unitToken) ? "cm" : "in"
+    unit = /mm|millimet/.test(unitToken)
+      ? "mm"
+      : /cm|centimet/.test(unitToken)
+        ? "cm"
+        : "in"
+    if (type.shape === "bag" && dimensions.length === 2) {
+      // Bags list Width x Gusset x Height, but "10x13" means width x height:
+      // keep the catalog's default gusset, converted to the parsed unit.
+      const toUnit = { in: 1, cm: 2.54, mm: 25.4 }[unit]
+      const gusset = Math.round(type.default_dimensions[1] * toUnit * 100) / 100
+      dimensions = [dimensions[0], gusset, dimensions[1]]
+    }
   } else {
     missing.push("dimensions")
   }
@@ -216,7 +248,6 @@ export function heuristicParseSpecs(
     addons.push("zipper")
   }
 
-  const type = config.product_types[productType]
   const material = type.materials.find((m) =>
     m.label
       .toLowerCase()
@@ -238,7 +269,7 @@ export function heuristicParseSpecs(
     print,
     finishes,
     addons,
-    rush: /\b(rush|urgent|asap|expedit|as soon as possible|next week)\b/i.test(
+    rush: /\b(rush|urgent|asap|expedit\w*|as soon as possible|next week)\b/i.test(
       text
     ),
     notes: "",

@@ -17,12 +17,6 @@ export class UnsafeUrlError extends Error {
   }
 }
 
-function ipv4ToInt(ip: string) {
-  return (
-    ip.split(".").reduce((acc, octet) => (acc << 8) + Number(octet), 0) >>> 0
-  )
-}
-
 const BLOCKED_V4: [string, number][] = [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
@@ -41,41 +35,36 @@ const BLOCKED_V4: [string, number][] = [
   ["240.0.0.0", 4],
 ]
 
+// ::/96 unspecified, loopback and IPv4-compatible, fc00::/7 unique local,
+// fe80::/10 link local, ff00::/8 multicast, 2001:db8::/32 docs,
+// 64:ff9b::/32 NAT64 (well-known and local-use prefixes)
+const BLOCKED_V6: [string, number][] = [
+  ["::", 96],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+  ["2001:db8::", 32],
+  ["64:ff9b::", 32],
+]
+
+// BlockList parses every textual IPv6 form and checks IPv4-mapped addresses
+// (::ffff:a.b.c.d, ::ffff:7f00:1, ...) against the IPv4 rules.
+const BLOCKLIST = new net.BlockList()
+for (const [base, bits] of BLOCKED_V4) {
+  BLOCKLIST.addSubnet(base, bits, "ipv4")
+}
+for (const [base, bits] of BLOCKED_V6) {
+  BLOCKLIST.addSubnet(base, bits, "ipv6")
+}
+
 export function isPublicIp(address: string): boolean {
   const family = net.isIP(address)
-
   if (family === 4) {
-    const value = ipv4ToInt(address)
-    return !BLOCKED_V4.some(([base, bits]) => {
-      const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0
-      return (value & mask) === (ipv4ToInt(base) & mask)
-    })
+    return !BLOCKLIST.check(address, "ipv4")
   }
-
   if (family === 6) {
-    const lower = address.toLowerCase()
-    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-    if (mapped) {
-      return isPublicIp(mapped[1])
-    }
-    if (lower === "::" || lower === "::1") {
-      return false
-    }
-    const first = parseInt(lower.split(":")[0] || "0", 16)
-    // fc00::/7 unique local, fe80::/10 link local, ff00::/8 multicast, 2001:db8::/32 docs
-    if (
-      (first & 0xfe00) === 0xfc00 ||
-      (first & 0xffc0) === 0xfe80 ||
-      (first & 0xff00) === 0xff00
-    ) {
-      return false
-    }
-    if (lower.startsWith("2001:db8:") || lower.startsWith("64:ff9b:")) {
-      return false
-    }
-    return true
+    return !BLOCKLIST.check(address, "ipv6")
   }
-
   return false
 }
 
@@ -278,9 +267,11 @@ export function isAllowedByRobots(
   let current: (typeof groups)[number] | null = null
   let lastWasAgent = false
 
-  for (const rawLine of robotsTxt.split(/\r?\n/)) {
-    const line = rawLine.replace(/#.*$/, "").trim()
-    const match = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/)
+  // Split on every robots.txt EOL; [\s\S]* with no trailing $ can't backtrack,
+  // so a hostile file (100 KB of spaces before a \u2028) stays linear.
+  for (const rawLine of robotsTxt.split(/\r\n|\r|\n/)) {
+    const line = rawLine.replace(/#[\s\S]*/, "").trim()
+    const match = line.match(/^([A-Za-z-]+)\s*:([\s\S]*)/)
     if (!match) {
       continue
     }
@@ -313,7 +304,7 @@ export function isAllowedByRobots(
     if (!rule.path) {
       continue
     }
-    const prefix = rule.path.replace(/\*.*$/, "").replace(/\$$/, "")
+    const prefix = rule.path.replace(/\*[\s\S]*/, "").replace(/\$$/, "")
     // Longest match wins; on a tie the less restrictive (Allow) rule wins.
     if (
       path.startsWith(prefix) &&

@@ -1,5 +1,37 @@
-import { defineMiddlewares } from "@medusajs/framework/http"
+import {
+  defineMiddlewares,
+  type MedusaNextFunction,
+  type MedusaRequest,
+  type MedusaResponse,
+} from "@medusajs/framework/http"
 import { rateLimit } from "../lib/http"
+import { verifyToken } from "../lib/packoasis-config"
+
+/**
+ * The storefront calls /packoasis/checkout-token server-to-server, so every
+ * buyer shares its IP. Forged tokens are refused by the HMAC check alone and
+ * are not counted; each signed link gets its own bucket, so neither forged
+ * nor replayed links can lock other buyers out of checkout.
+ */
+function checkoutTokenLimit(
+  req: MedusaRequest,
+  res: MedusaResponse,
+  next: MedusaNextFunction
+) {
+  const query = req.query as Record<string, unknown>
+  const cartId = query.cart_id
+  if (
+    typeof cartId !== "string" ||
+    !verifyToken("checkout", cartId, query.token)
+  ) {
+    return next()
+  }
+  return rateLimit({
+    key: `checkout-token:${cartId}`,
+    limit: 30,
+    windowMs: 60_000,
+  })(req, res, next)
+}
 
 export default defineMiddlewares({
   routes: [
@@ -39,6 +71,11 @@ export default defineMiddlewares({
       middlewares: [
         rateLimit({ key: "public-quote", limit: 60, windowMs: 60_000 }),
       ],
+    },
+    {
+      matcher: "/packoasis/checkout-token",
+      method: ["GET"],
+      middlewares: [checkoutTokenLimit],
     },
   ],
 })

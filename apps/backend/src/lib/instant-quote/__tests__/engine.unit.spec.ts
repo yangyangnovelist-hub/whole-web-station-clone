@@ -1,3 +1,4 @@
+import { SpecsSchema } from "../../../api/store/instant-quote/validators"
 import { DEFAULT_PRICING } from "../catalog"
 import {
   loadPricingConfig,
@@ -9,6 +10,8 @@ import {
 } from "../engine"
 
 const NOW = new Date("2026-09-28T12:00:00Z") // a Monday
+
+const cents = (value: number) => Math.round(value * 100) / 100
 
 describe("instant quote engine", () => {
   it("prices the default mailer box at MOQ", () => {
@@ -22,7 +25,7 @@ describe("instant quote engine", () => {
     expect(quote.unit_price).toBeCloseTo(quote.total / quote.quantity, 3)
     // breakdown lines add up to the total
     const sum = quote.breakdown.reduce((acc, line) => acc + line.amount, 0)
-    expect(sum).toBeCloseTo(quote.total, 0)
+    expect(cents(sum)).toBe(quote.total)
     expect(quote.summary).toContain("Custom Mailer Box")
     expect(quote.valid_until).toBe("2026-10-12")
   })
@@ -184,6 +187,110 @@ describe("instant quote engine", () => {
     )
   })
 
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "rejects the Object.prototype key %s as a product type",
+    (id) => {
+      expect(() => priceQuote({ product_type: id })).toThrow(QuoteInputError)
+    }
+  )
+
+  it("ignores Object.prototype keys for print, unit, finishes and add-ons", () => {
+    // tissue paper has no unprinted option, so print must never cost $0
+    const printed = priceQuote(
+      { product_type: "tissue-paper", quantity: 10000 },
+      { now: NOW }
+    )
+    const proto = priceQuote(
+      { product_type: "tissue-paper", quantity: 10000, print: "constructor" },
+      { now: NOW }
+    )
+    expect(proto.specs.print).toBe("one_color")
+    expect(proto.total).toBe(printed.total)
+    expect(proto.summary).not.toMatch(/function/)
+    expect(proto.warnings.join(" ")).toMatch(/constructor is not available/)
+
+    const { specs, warnings } = normalizeSpecs({
+      product_type: "mailer-box",
+      dimensions: [12, 9, 4],
+      unit: "constructor" as never,
+      finishes: ["constructor", "toString", "foil"],
+      addons: ["__proto__", "insert"],
+    })
+    expect(specs.dimensions).toEqual([12, 9, 4])
+    expect(specs.finishes).toEqual(["foil"])
+    expect(specs.addons).toEqual(["insert"])
+    expect(warnings).toEqual([])
+  })
+
+  it("accepts a zero gusset where the catalog minimum is 0", () => {
+    const flat = normalizeSpecs({
+      product_type: "poly-mailer",
+      dimensions: [10, 0, 13],
+    })
+    expect(flat.specs.dimensions).toEqual([10, 0, 13])
+    expect(flat.warnings).toEqual([])
+
+    // a zero below the catalog minimum is raised, not rejected
+    const box = normalizeSpecs({
+      product_type: "mailer-box",
+      dimensions: [10, 8, 0],
+    })
+    expect(box.specs.dimensions).toEqual([10, 8, 1])
+    expect(box.warnings[0]).toMatch(/Height adjusted/)
+
+    const specs = { product_type: "poly-mailer", dimensions: [10, 0, 13] }
+    expect(SpecsSchema.safeParse(specs).success).toBe(true)
+    expect(
+      SpecsSchema.safeParse({ ...specs, dimensions: [10, -1, 13] }).success
+    ).toBe(false)
+  })
+
+  it("only accepts known print ids in the request schema", () => {
+    const specs = { product_type: "tissue-paper" }
+    expect(
+      SpecsSchema.safeParse({ ...specs, print: "one_color" }).success
+    ).toBe(true)
+    for (const print of ["constructor", "toString", "gold"]) {
+      expect(SpecsSchema.safeParse({ ...specs, print }).success).toBe(false)
+    }
+  })
+
+  it("keeps the breakdown equal to the total without spurious adjustments", () => {
+    const combos = [
+      {
+        product_type: "mailer-box",
+        quantity: 1037,
+        print: "none",
+        finishes: ["soft_touch", "foil", "spot_uv"],
+        rush: true,
+      },
+      ...Object.values(DEFAULT_PRICING.product_types).flatMap((type) =>
+        [type.moq, type.moq + 37, type.moq * 3 + 1].flatMap((quantity) =>
+          [false, true].map((rush) => ({
+            product_type: type.id,
+            quantity,
+            finishes: type.finishes.slice(0, 3),
+            addons: type.addons,
+            rush,
+          }))
+        )
+      ),
+    ]
+
+    for (const input of combos) {
+      const quote = priceQuote(input, { now: NOW })
+      const sum = quote.breakdown.reduce((acc, line) => acc + line.amount, 0)
+      const adjusted = quote.breakdown.some(
+        (line) => line.label === "Minimum order adjustment"
+      )
+      expect({ input, sum: cents(sum), adjusted }).toEqual({
+        input,
+        sum: quote.total,
+        adjusted: quote.total === DEFAULT_PRICING.min_order_total,
+      })
+    }
+  })
+
   it("applies overrides from INSTANT_QUOTE_PRICING_JSON", () => {
     const override = JSON.stringify({
       margin_multiplier: 2,
@@ -200,8 +307,99 @@ describe("instant quote engine", () => {
     expect(quote.breakdown.map((line) => line.label)).toContain(
       "Minimum order adjustment"
     )
+    const sum = quote.breakdown.reduce((acc, line) => acc + line.amount, 0)
+    expect(cents(sum)).toBe(5000)
 
     expect(loadPricingConfig("{not json")).toEqual(DEFAULT_PRICING)
+  })
+
+  it("removes an option that INSTANT_QUOTE_PRICING_JSON sets to null", () => {
+    const config = loadPricingConfig(
+      JSON.stringify({
+        product_types: { "mailer-box": { print: { cmyk_both: null } } },
+      })
+    )
+    expect(config.product_types["mailer-box"].print).not.toHaveProperty(
+      "cmyk_both"
+    )
+    expect(DEFAULT_PRICING.product_types["mailer-box"].print).toHaveProperty(
+      "cmyk_both"
+    )
+
+    const disabled = priceQuote(
+      { product_type: "mailer-box", print: "cmyk_both" },
+      { config, now: NOW }
+    )
+    const fallback = priceQuote(
+      { product_type: "mailer-box", print: "cmyk_outside" },
+      { config, now: NOW }
+    )
+    expect(disabled.specs.print).toBe("cmyk_outside")
+    expect(disabled.total).toBe(fallback.total)
+    expect(disabled.warnings.join(" ")).toMatch(/not available/)
+
+    const listed = publicCatalog(config).product_types.find(
+      (type) => type.id === "mailer-box"
+    )
+    expect(listed?.print_options).not.toContain("cmyk_both")
+  })
+
+  it("moves default_print off an option set to null", () => {
+    const error = jest.spyOn(console, "error").mockImplementation(() => {})
+    const config = loadPricingConfig(
+      JSON.stringify({
+        product_types: {
+          "tissue-paper": { print: { one_color: null } },
+          "floor-display": { print: { cmyk_outside: null } },
+        },
+      })
+    )
+    expect(error).toHaveBeenCalledTimes(2)
+    error.mockRestore()
+    expect(DEFAULT_PRICING.product_types["tissue-paper"].default_print).toBe(
+      "one_color"
+    )
+
+    const byDefault = priceQuote(
+      { product_type: "tissue-paper", quantity: 10000 },
+      { config, now: NOW }
+    )
+    const explicit = priceQuote(
+      { product_type: "tissue-paper", quantity: 10000, print: "cmyk_outside" },
+      { config, now: NOW }
+    )
+    expect(byDefault.specs.print).toBe("cmyk_outside")
+    expect(byDefault.total).toBe(explicit.total)
+    expect(byDefault.spec_labels.print).toBe("Full color CMYK (outside)")
+
+    // the removed option falls back to the new default at its real price
+    const removed = priceQuote(
+      { product_type: "tissue-paper", quantity: 10000, print: "one_color" },
+      { config, now: NOW }
+    )
+    expect(removed.specs.print).toBe("cmyk_outside")
+    expect(removed.total).toBe(explicit.total)
+    expect(removed.warnings.join(" ")).toMatch(
+      /1-color print \(outside\) is not available .*; using Full color CMYK \(outside\)/
+    )
+
+    const catalog = publicCatalog(config)
+    for (const type of catalog.product_types) {
+      expect(type.print_options).toContain(type.default_print)
+    }
+    const tissue = catalog.product_types.find(
+      (type) => type.id === "tissue-paper"
+    )
+    expect(tissue?.default_print).toBe("cmyk_outside")
+    expect(tissue?.print_options).toEqual(["cmyk_outside"])
+
+    // a product type with no print option left is not offered at all
+    expect(catalog.product_types.map((type) => type.id)).not.toContain(
+      "floor-display"
+    )
+    expect(() =>
+      priceQuote({ product_type: "floor-display" }, { config, now: NOW })
+    ).toThrow(QuoteInputError)
   })
 
   it("marks structural formats as not instant", () => {

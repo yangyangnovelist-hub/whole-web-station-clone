@@ -2,6 +2,7 @@ import { SubscriberArgs, SubscriberConfig } from "@medusajs/framework"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { buildLeadProfile } from "../lib/ai/lead-profile"
 import {
+  greetingName,
   renderQuoteEmail,
   renderRequestReceivedEmail,
   renderSalesLeadEmail,
@@ -20,6 +21,56 @@ import { LEAD_MODULE } from "../modules/lead"
 import type LeadModuleService from "../modules/lead/service"
 import { RFQ_MODULE } from "../modules/rfq"
 
+const ACK_WINDOW_MS = 24 * 60 * 60 * 1000
+const MAX_RECENT_ACKS = 10_000
+/** Addresses acknowledged by this process, so concurrent RFQs can't race. */
+const recentAcks = new Map<string, number>()
+
+/**
+ * Anyone can submit an RFQ for any address, so the buyer acknowledgement goes
+ * out at most once per address per 24h: skipped when this process already
+ * claimed it, or when another RFQ for the address got an automatic email
+ * (last_contacted_at) in the window. Sales is alerted either way.
+ */
+export async function claimAcknowledgement(
+  rfqService: any,
+  rfq: { id: string; email: string },
+  now = Date.now()
+) {
+  const email = rfq.email.trim().toLowerCase()
+  const since = now - ACK_WINDOW_MS
+  const claimedAt = recentAcks.get(email)
+  if (claimedAt !== undefined && claimedAt > since) {
+    return false
+  }
+  recentAcks.delete(email)
+  if (recentAcks.size >= MAX_RECENT_ACKS) {
+    recentAcks.delete(recentAcks.keys().next().value!)
+  }
+  recentAcks.set(email, now)
+
+  const recent = await rfqService
+    .listRFQS(
+      {
+        id: { $ne: rfq.id },
+        email: Array.from(new Set([rfq.email, email])),
+        last_contacted_at: { $gte: new Date(since) },
+      },
+      { select: ["id"], take: 1 }
+    )
+    .catch(() => null)
+  if (!recent || recent.length) {
+    // Already emailed (or the check failed): skip, the DB decides next time.
+    releaseAcknowledgement(email)
+    return false
+  }
+  return true
+}
+
+export function releaseAcknowledgement(email: string) {
+  recentAcks.delete(email.trim().toLowerCase())
+}
+
 /**
  * Lead automation for every new RFQ:
  * 1. email the buyer right away (instant quote with checkout link, or an
@@ -36,7 +87,7 @@ export default async function instantQuoteLeadHandler({
   const rfqService: any = container.resolve(RFQ_MODULE)
   const rfq = await rfqService.retrieveRFQ(data.id)
   const quote = (rfq.quote_payload ?? null) as QuoteResult | null
-  const firstName = rfq.contact_name.split(/\s+/)[0] || "there"
+  const firstName = greetingName(rfq.contact_name)
 
   if (quote && rfq.cart_id) {
     const sent = await sendEmail(container, {
@@ -60,8 +111,8 @@ export default async function instantQuoteLeadHandler({
     if (sent) {
       await rfqService.recordContact(rfq.id)
     }
-  } else {
-    await sendEmail(container, {
+  } else if (await claimAcknowledgement(rfqService, rfq)) {
+    const sent = await sendEmail(container, {
       to: rfq.email,
       template: "packoasis-request-received",
       idempotencyKey: `received:${rfq.id}`,
@@ -70,10 +121,18 @@ export default async function instantQuoteLeadHandler({
       email: renderRequestReceivedEmail({
         firstName,
         rfqId: rfq.id,
-        title: rfq.title,
         quote,
       }),
     })
+    if (sent) {
+      await rfqService.recordContact(rfq.id)
+    } else {
+      releaseAcknowledgement(rfq.email)
+    }
+  } else {
+    logger.info(
+      `[lead] ${rfq.id}: buyer acknowledgement skipped (one per address per 24h)`
+    )
   }
 
   let trail: TrailSummary | null = null

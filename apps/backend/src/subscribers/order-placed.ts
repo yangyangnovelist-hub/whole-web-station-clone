@@ -8,6 +8,7 @@ import { sendEmail } from "../lib/email/send"
 import { recordLeadEvent } from "../lib/lead-intel/record"
 import { packoasisConfig } from "../lib/packoasis-config"
 import { RFQ_MODULE } from "../modules/rfq"
+import { findQuotedLineItem } from "../modules/rfq/service"
 
 /**
  * Closes the loop for every order: links instant-quote RFQs (QUOTED ->
@@ -46,26 +47,65 @@ export default async function orderPlacedHandler({
     return
   }
 
-  const rfqIds = new Set<string>()
+  // Cart and line-item metadata are editable through the store API, so an RFQ
+  // only counts when it was quoted for the cart this order came from and the
+  // order carries its custom line item at the quoted total.
+  const claimedRfqIds = new Set<string>()
   const orderMetadataRfq = (order.metadata as Record<string, unknown> | null)
     ?.packoasis_rfq_id
   if (typeof orderMetadataRfq === "string") {
-    rfqIds.add(orderMetadataRfq)
+    claimedRfqIds.add(orderMetadataRfq)
   }
   for (const item of order.items ?? []) {
     const rfqId = (item?.metadata as Record<string, unknown> | null)
       ?.packoasis_rfq_id
     if (typeof rfqId === "string") {
-      rfqIds.add(rfqId)
+      claimedRfqIds.add(rfqId)
+    }
+  }
+
+  const ordered: { rfq: any; amount: number }[] = []
+  try {
+    const {
+      data: [orderCart],
+    } = await container.resolve(ContainerRegistrationKeys.QUERY).graph({
+      entity: "order_cart",
+      fields: ["cart_id"],
+      filters: { order_id: order.id },
+    })
+    const rfqs = orderCart?.cart_id
+      ? await rfqService.listRFQS({ cart_id: orderCart.cart_id })
+      : []
+    for (const rfq of rfqs) {
+      const item = findQuotedLineItem(order.items, rfq)
+      if (item) {
+        ordered.push({
+          rfq,
+          amount: Number(item.unit_price) * Number(item.quantity),
+        })
+      }
+    }
+  } catch (error) {
+    logger.warn(
+      `[order-placed] could not find the quote cart of ${order.id}: ${(error as Error).message}`
+    )
+  }
+  for (const rfqId of claimedRfqIds) {
+    if (!ordered.some(({ rfq }) => rfq.id === rfqId)) {
+      logger.warn(
+        `[order-placed] ${order.id} names RFQ ${rfqId} but was not placed from its quote cart at the quoted total; not linking it`
+      )
     }
   }
 
   let minutesFromQuote: number | null = null
   let firstRfqId: string | null = null
-  for (const rfqId of rfqIds) {
+  const linked: any[] = []
+  for (const { rfq, amount } of ordered) {
+    const rfqId = rfq.id
     try {
-      const rfq = await rfqService.retrieveRFQ(rfqId)
-      await rfqService.markOrdered(rfqId, order.id)
+      await rfqService.markOrdered(rfqId, order.id, amount)
+      linked.push(rfq)
       firstRfqId = firstRfqId ?? rfqId
       minutesFromQuote =
         Math.round(
@@ -90,6 +130,28 @@ export default async function orderPlacedHandler({
     } catch (error) {
       logger.warn(
         `[order-placed] could not link RFQ ${rfqId} to ${order.id}: ${(error as Error).message}`
+      )
+    }
+  }
+
+  // The buyer converted: close their other open instant quotes (e.g. an
+  // earlier revision) so they get no "Review and order" follow-ups.
+  for (const email of new Set(linked.map((rfq) => rfq.email))) {
+    try {
+      const open = await rfqService.listRFQS(
+        { email, source: "instant_quote", status: "QUOTED", order_id: null },
+        { select: ["id"], take: 100 }
+      )
+      for (const other of open) {
+        await rfqService.closeRFQ(other.id).catch((error: Error) =>
+          logger.warn(
+            `[order-placed] could not close RFQ ${other.id}: ${error.message}`
+          )
+        )
+      }
+    } catch (error) {
+      logger.warn(
+        `[order-placed] could not close open quotes for ${order.id}: ${(error as Error).message}`
       )
     }
   }

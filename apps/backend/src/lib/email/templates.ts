@@ -18,6 +18,15 @@ export function escapeHtml(value: unknown) {
     .replace(/'/g, "&#39;")
 }
 
+/**
+ * First name for "Hi <name>," greetings. Contact names are buyer-supplied, so
+ * anything that is not a plain name falls back to "there".
+ */
+export function greetingName(contactName: string | null | undefined) {
+  const first = String(contactName ?? "").trim().split(/\s+/)[0]
+  return /^[\p{L}\p{M}'\u2019-]{1,40}$/u.test(first) ? first : "there"
+}
+
 export function money(amount: number, currency = "usd") {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -165,10 +174,13 @@ ${tiersTable(quote)}
   return { subject, html, text }
 }
 
+/**
+ * Sent automatically to whatever address was submitted, so it never echoes
+ * buyer free text: the request is referenced only by its server-side ref.
+ */
 export function renderRequestReceivedEmail(input: {
   firstName: string
   rfqId: string
-  title: string
   quote: QuoteResult | null
 }): RenderedEmail {
   const ref = input.rfqId.slice(-8).toUpperCase()
@@ -176,7 +188,7 @@ export function renderRequestReceivedEmail(input: {
   const html = layout(
     subject,
     `<p>Hi ${escapeHtml(input.firstName)},</p>
-<p>Thanks for your request for <strong>${escapeHtml(input.title)}</strong>. A packaging specialist is reviewing it and will send a confirmed quote within one business day.</p>
+<p>Thanks for your request. A packaging specialist is reviewing it and will send a confirmed quote within one business day.</p>
 ${
   input.quote
     ? `<p>Indicative budget based on your specs:</p>${quoteTable(input.quote)}<p style="font-size:13px;color:${MUTED};">${input.quote.assumptions
@@ -187,7 +199,7 @@ ${
 <p>Reply to this email to add artwork, reference photos or deadlines.</p>
 <p style="color:${MUTED};font-size:13px;">Request reference: ${escapeHtml(ref)}</p>`
   )
-  const text = `Hi ${input.firstName},\n\nThanks for your request (${ref}) for ${input.title}. A PackOasis specialist will send a confirmed quote within one business day.${
+  const text = `Hi ${input.firstName},\n\nThanks for your request (${ref}). A PackOasis specialist will send a confirmed quote within one business day.${
     input.quote ? `\n\nIndicative budget:\n${quoteText(input.quote)}` : ""
   }\n\nReply to this email to add artwork or deadlines.`
 

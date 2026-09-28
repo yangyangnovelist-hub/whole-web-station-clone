@@ -25,11 +25,11 @@ export function packoasisWidget(win: any, doc: Document, boot: any) {
   const API = (script.dataset.backend || scriptUrl.origin).replace(/\/$/, "")
   const KEY = script.dataset.publishableKey || ""
   const COUNTRY = (script.dataset.country || "us").toLowerCase()
-  // Stay out of the way during checkout and in the account area.
-  const QUIET = /\/(checkout|account|cart|order)(\/|$)/.test(
-    win.location.pathname
-  )
-  const SHOW_BUTTON = script.dataset.button !== "false" && !QUIET
+  // Stay out of the way during checkout and in the account area. Read from
+  // the current path: the Next.js storefront navigates client-side.
+  const isQuiet = () =>
+    /\/(checkout|account|cart|order)(\/|$)/.test(win.location.pathname)
+  const BUTTON = script.dataset.button !== "false"
   const nav: any = win.navigator
   const TRACKING =
     script.dataset.tracking !== "false" &&
@@ -96,7 +96,7 @@ export function packoasisWidget(win: any, doc: Document, boot: any) {
     }
     return null
   }
-  const pageType = typeForPath(win.location.pathname)
+  let pageType = typeForPath(win.location.pathname)
 
   // --------------------------------------------------------------- tracking
   const queue: any[] = []
@@ -152,6 +152,14 @@ export function packoasisWidget(win: any, doc: Document, boot: any) {
   doc.addEventListener("visibilitychange", () => {
     if (doc.visibilityState === "hidden") {
       flush()
+    }
+  })
+  // Back from the checkout redirect via the bfcache: the widget kept
+  // submitting=true, so re-enable the contact form for a revised order.
+  win.addEventListener("pageshow", (event: any) => {
+    if (event.persisted && state.submitting) {
+      state.submitting = false
+      syncSubmit()
     }
   })
 
@@ -256,10 +264,12 @@ export function packoasisWidget(win: any, doc: Document, boot: any) {
   }
 
   // ------------------------------------------------------------------ view
+  // Host pages can lift the floating button above their own sticky bars by
+  // setting --po-fab-offset on <html> (custom properties survive all:initial).
   const css = `
 :host{all:initial}
 *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-.fab{position:fixed;right:20px;bottom:20px;z-index:2147483000;background:#1a7f45;color:#fff;border:0;border-radius:999px;padding:14px 20px;font-size:15px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.2);cursor:pointer;display:flex;gap:8px;align-items:center}
+.fab{position:fixed;right:20px;bottom:calc(20px + var(--po-fab-offset, 0px));z-index:2147483000;background:#1a7f45;color:#fff;border:0;border-radius:999px;padding:14px 20px;font-size:15px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.2);cursor:pointer;display:flex;gap:8px;align-items:center}
 .fab:hover{background:#156b3a}
 .fab:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #40C173;outline-offset:2px}
 .backdrop{position:fixed;inset:0;background:rgba(17,24,39,.55);z-index:2147483001;display:flex;align-items:center;justify-content:center;padding:16px}
@@ -304,7 +314,7 @@ textarea{min-height:64px;resize:vertical}
 .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
 .done{padding:10px 22px 26px}
 .badge{display:inline-block;background:#e8f6ee;color:#12542e;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;letter-spacing:.03em}
-@media (max-width:720px){.backdrop{padding:0}.dialog{max-height:100vh;height:100%;border-radius:0}.body{grid-template-columns:1fr}.price{position:static}.fab{right:12px;bottom:12px;padding:12px 16px}}
+@media (max-width:720px){.backdrop{padding:0}.dialog{max-height:100vh;height:100%;border-radius:0}.body{grid-template-columns:1fr}.price{position:static}.fab{right:12px;bottom:calc(12px + var(--po-fab-offset, 0px));padding:12px 16px}}
 `
 
   const host = doc.createElement("div")
@@ -324,7 +334,7 @@ textarea{min-height:64px;resize:vertical}
   }
 
   function fabHtml() {
-    return SHOW_BUTTON && !state.open
+    return BUTTON && !isQuiet() && !state.open
       ? `<button class="fab" data-act="open" aria-haspopup="dialog">
 <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg>Instant quote</button>`
       : ""
@@ -464,8 +474,32 @@ ${state.error ? `<div class="err">${esc(state.error)}</div>` : ""}
     )} specialists</span></div></div>`
   }
 
+  function submitLabel() {
+    const quote = state.quote
+    return state.submitting
+      ? "Locking your price..."
+      : quote && quote.instant
+        ? `Continue to checkout · ${usd(quote.total)}`
+        : "Send my request"
+  }
+
   function contactHtml() {
     const quote = state.quote
+    const countries = [
+      ["us", "United States"],
+      ["ca", "Canada"],
+      ["gb", "United Kingdom"],
+      ["au", "Australia"],
+    ]
+    const listed = countries.some((c) => c[0] === COUNTRY)
+    const countryOptions =
+      countries
+        .map(
+          (c) =>
+            `<option value="${c[0]}" ${c[0] === COUNTRY ? "selected" : ""}>${c[1]}</option>`
+        )
+        .join("") +
+      `<option value="xx" ${listed ? "" : "selected"}>Other country</option>`
     return `<div class="body"><div class="col">
 <form data-form="contact" novalidate>
 <label for="po-name">Full name</label><input id="po-name" name="name" autocomplete="name" required>
@@ -474,17 +508,11 @@ ${state.error ? `<div class="err">${esc(state.error)}</div>` : ""}
 <div><label for="po-phone">Phone</label><input id="po-phone" name="phone" type="tel" autocomplete="tel"></div></div>
 <div class="row"><div><label for="po-website">Website</label><input id="po-website" name="website" placeholder="yourbrand.com" autocomplete="url"></div>
 <div><label for="po-country">Ship to</label><select id="po-country" name="country">
-<option value="us" ${COUNTRY === "us" ? "selected" : ""}>United States</option><option value="ca">Canada</option><option value="gb">United Kingdom</option><option value="au">Australia</option><option value="xx">Other country</option></select></div></div>
+${countryOptions}</select></div></div>
 <label for="po-notes">Anything we should know? <span class="small">(optional)</span></label><textarea id="po-notes" name="notes" placeholder="Artwork status, deadline, delivery details"></textarea>
 <div class="hp" aria-hidden="true"><label>Leave empty<input name="hp" tabindex="-1" autocomplete="off"></label></div>
 ${state.error ? `<div class="err">${esc(state.error)}</div>` : ""}
-<button class="cta" type="submit" ${state.submitting ? "disabled" : ""}>${
-      state.submitting
-        ? "Locking your price..."
-        : quote && quote.instant
-          ? `Continue to checkout · ${usd(quote.total)}`
-          : "Send my request"
-    }</button>
+<button class="cta" type="submit" ${state.submitting ? "disabled" : ""}>${submitLabel()}</button>
 <p class="small">We email your quote and may follow up about this request; you can opt out with one click. By continuing you agree to the Terms of Service and Privacy Policy.</p>
 <button type="button" class="ghost" data-act="back">← Edit specs</button>
 </form></div><div class="col" data-slot="summary">${quote ? summaryHtml(quote) : ""}</div></div>`
@@ -550,6 +578,18 @@ ${
     const summary = container.querySelector('[data-slot="summary"]')
     if (summary && state.quote) {
       summary.innerHTML = summaryHtml(state.quote)
+      syncSubmit()
+    }
+  }
+
+  // Keep the contact step's submit button in line with state.quote.
+  function syncSubmit() {
+    const submit: any = container.querySelector(
+      '[data-form="contact"] [type="submit"]'
+    )
+    if (submit) {
+      submit.disabled = Boolean(state.submitting)
+      submit.textContent = submitLabel()
     }
   }
 
@@ -557,8 +597,13 @@ ${
     const type = typeById[state.typeId]
     for (let i = 0; i < type.dimension_labels.length; i++) {
       const value = Number(state.dims[i])
-      if (!(value > 0)) {
-        return `Enter the ${type.dimension_labels[i].toLowerCase()} as a number above 0.`
+      // 0 is valid where the catalog minimum is 0 (a flat poly mailer).
+      const zeroOk =
+        Boolean(type.min_dimensions) && type.min_dimensions[i] === 0
+      if (!(value > 0 || (zeroOk && value === 0))) {
+        return `Enter the ${type.dimension_labels[i].toLowerCase()} as a number ${
+          zeroOk ? "of 0 or more" : "above 0"
+        }.`
       }
     }
     if (!(Number(state.quantity) > 0)) {
@@ -572,8 +617,13 @@ ${
   let quoteSeq = 0
   function requestQuote(delay?: number) {
     clearTimeout(quoteTimer)
+    // Responses to earlier requests are stale from here on, even while this
+    // one is still debouncing.
+    const seq = ++quoteSeq
     const problem = invalidSpecs()
     if (problem) {
+      // No price (and no order button) for specs that can't be quoted.
+      state.quote = null
       state.error = problem
       state.loading = false
       return renderPrice()
@@ -582,7 +632,6 @@ ${
     renderPrice()
     quoteTimer = setTimeout(
       async () => {
-        const seq = ++quoteSeq
         try {
           const res = await api("/store/instant-quote/estimate", {
             specs: specs(),
@@ -598,6 +647,8 @@ ${
           if (seq !== quoteSeq) {
             return
           }
+          // The price on screen is for earlier specs; don't offer to order it.
+          state.quote = null
           state.error = error.message
         }
         state.loading = false
@@ -608,6 +659,14 @@ ${
   }
 
   // ---------------------------------------------------------------- events
+  // An AI parse still in flight when the buyer orders, closes or reopens is
+  // dropped, so it never replaces the specs they chose.
+  let parseSeq = 0
+  function dropParse() {
+    parseSeq++
+    state.aiBusy = false
+  }
+
   function applySpecs(s: any) {
     resetForType(s.product_type)
     if (s.dimensions && s.dimensions.length) state.dims = s.dimensions.slice()
@@ -632,6 +691,7 @@ ${
       resetForType(options.typeId)
     }
     lastFocus = doc.activeElement
+    dropParse()
     state.open = true
     state.step = "configure"
     state.error = ""
@@ -647,6 +707,7 @@ ${
   }
 
   function close() {
+    dropParse()
     state.open = false
     render()
     if (lastFocus && lastFocus.focus) {
@@ -675,13 +736,14 @@ ${
       return render()
     }
     if (action === "next") {
-      if (!state.quote || state.loading) {
+      if (!state.quote || state.loading || invalidSpecs()) {
         return
       }
       track("quote_order_click", {
         pt: state.typeId,
         d: { total: state.quote.total, quantity: state.quote.quantity },
       })
+      dropParse()
       state.step = "contact"
       state.error = ""
       render()
@@ -698,6 +760,7 @@ ${
       }
       state.aiBusy = true
       renderForm()
+      const seq = ++parseSeq
       try {
         const res = await api("/store/instant-quote/parse", {
           text,
@@ -705,8 +768,15 @@ ${
           visitor_id: TRACKING ? visitorId : undefined,
           page: page(),
         })
+        if (seq !== parseSeq) {
+          return
+        }
+        // The parsed quote wins over any estimate still debouncing or in flight.
+        clearTimeout(quoteTimer)
+        quoteSeq++
         applySpecs(res.quote.specs)
         state.quote = res.quote
+        state.loading = false
         state.error = ""
         renderPrice()
         state.aiNote =
@@ -714,6 +784,9 @@ ${
             ? `Please check: ${res.missing.join(", ")}. `
             : "Filled in from your description. ") + (res.notes || "")
       } catch (error: any) {
+        if (seq !== parseSeq) {
+          return
+        }
         state.aiNote = error.message
       }
       state.aiBusy = false
@@ -743,9 +816,11 @@ ${
   })
 
   function renderForm() {
+    // Only the configure step has this slot; never fall back to render(),
+    // which would wipe a contact form in progress.
     const slot = container.querySelector('[data-slot="form"]')
     if (!slot) {
-      return render()
+      return
     }
     const active: any = root.activeElement
     const activeId = active && active.id
@@ -902,7 +977,7 @@ ${
     "click",
     (event: any) => {
       if (
-        QUIET ||
+        isQuiet() ||
         event.defaultPrevented ||
         event.button !== 0 ||
         event.metaKey ||
@@ -1102,10 +1177,51 @@ ${
     }
   }
 
+  // Next.js swaps pages without reloading this script, so route state is
+  // re-derived per pathname: from popstate here and from the storefront via
+  // PackOasisQuote.onRoute() after each client-side navigation.
+  let lastPath = win.location.pathname
+  let lastHref = win.location.href
+  function onRoute() {
+    const path = win.location.pathname
+    if (path === lastPath) {
+      return
+    }
+    const referrer = lastHref
+    lastPath = path
+    lastHref = win.location.href
+    pageType = typeForPath(path)
+    maxScroll = 0
+    if (state.open && isQuiet()) {
+      close()
+    } else if (!state.open) {
+      // Like a fresh page load: the configurator starts on this page's type.
+      if (pageType && pageType !== state.typeId) {
+        resetForType(pageType)
+        // An estimate for the previous page's product must not land here.
+        clearTimeout(quoteTimer)
+        quoteSeq++
+        state.quote = null
+        state.loading = false
+      }
+      mount()
+      render()
+    }
+    fillTeasers()
+    // Give the app a moment to update document.title.
+    setTimeout(() => {
+      if (win.location.pathname === path) {
+        track("page_view", { r: referrer.slice(0, 500) })
+      }
+    }, 100)
+  }
+  win.addEventListener("popstate", onRoute)
+
   win.PackOasisQuote = {
     open: (options?: any) => open(options),
     close,
     visitorId: () => visitorId,
+    onRoute,
   }
 
   if (doc.readyState === "loading") {

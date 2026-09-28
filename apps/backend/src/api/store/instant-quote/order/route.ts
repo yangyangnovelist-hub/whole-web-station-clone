@@ -121,14 +121,9 @@ export async function POST(req: MedusaStoreRequest, res: MedusaResponse) {
 
   let cartId: string | null = null
   if (canOrderOnline) {
-    await rfqService.submitQuote({
-      rfq_id: rfq.id,
-      vendor_id: "packoasis-instant",
-      price: quote.total,
-      lead_time_days: quote.lead_time.production_days[1],
-      notes: `Instant quote ${quote.pricing_version}: ${quote.summary}`,
-    })
-
+    // The Quote round is recorded only once the cart exists, so a failed cart
+    // leaves a SUBMITTED RFQ for a specialist rather than a QUOTED one with
+    // nothing to order.
     try {
       const { result: cart } = await createCartWorkflow(req.scope).run({
         input: {
@@ -166,12 +161,28 @@ export async function POST(req: MedusaStoreRequest, res: MedusaResponse) {
           },
         },
       })
-      cartId = cart.id
+      await rfqService.submitQuote({
+        rfq_id: rfq.id,
+        vendor_id: "packoasis-instant",
+        price: quote.total,
+        lead_time_days: quote.lead_time.production_days[1],
+        notes: `Instant quote ${quote.pricing_version}: ${quote.summary}`,
+      })
       await rfqService.updateRFQS({ id: rfq.id, cart_id: cart.id })
+      cartId = cart.id
     } catch (error) {
       logger.error(
         `[instant-quote] cart creation failed for RFQ ${rfq.id}: ${(error as Error).message}`
       )
+      // The buyer is told a specialist will review it: put it in that queue
+      // (and out of the instant-quote follow-ups).
+      await rfqService
+        .updateRFQS({ id: rfq.id, source: "instant_quote_review" })
+        .catch((tagError: Error) =>
+          logger.error(
+            `[instant-quote] could not queue RFQ ${rfq.id} for review: ${tagError.message}`
+          )
+        )
     }
   }
 
