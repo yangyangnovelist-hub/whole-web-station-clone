@@ -70,6 +70,27 @@ export function packoasisWidget(win: any, doc: Document, boot: any) {
     return Array.from(bytes, (byte: number) => alphabet[byte & 63]).join("")
   }
 
+  // Binds the checkout link to this browser: the backend signs the link for
+  // this nonce, and the storefront only attaches the quote cart when the
+  // browser opening the link holds it in the po_qn cookie.
+  function handoffNonce() {
+    const bytes = new Uint8Array(32)
+    win.crypto.getRandomValues(bytes)
+    let binary = ""
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i])
+    }
+    const nonce = win
+      .btoa(binary)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "")
+    doc.cookie = `po_qn=${nonce}; path=/; max-age=1800; SameSite=Lax${
+      win.location.protocol === "https:" ? "; Secure" : ""
+    }`
+    return nonce
+  }
+
   let visitorId = ""
   try {
     visitorId = win.localStorage.getItem("po_vid") || ""
@@ -907,6 +928,7 @@ ${
         visitor_id: TRACKING ? visitorId : undefined,
         page: page(),
         hp: value("hp") || undefined,
+        handoff: handoffNonce(),
       })
       track("quote_submitted", {
         pt: state.typeId,

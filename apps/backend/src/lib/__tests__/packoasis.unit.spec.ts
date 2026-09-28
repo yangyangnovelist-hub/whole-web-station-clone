@@ -174,8 +174,8 @@ describeDom("widget in the browser", () => {
       }
       throw new Error(`no request to ${path}`)
     }
-    async function answer(pending: any, json?: any) {
-      pending.reply(json || { quote: priceQuote(pending.body.specs) })
+    async function answer(pending: any, json?: any, status?: number) {
+      pending.reply(json || { quote: priceQuote(pending.body.specs) }, status)
       await sleep(0)
       return pending.body.specs ? priceQuote(pending.body.specs) : null
     }
@@ -344,6 +344,52 @@ describeDom("widget in the browser", () => {
       `Continue to checkout · ${usd(quote!.total)}`
     )
     expect(w.$("#po-name").value).toBe("Jane Buyer")
+  })
+
+  it("binds each order request to a fresh handoff cookie", async () => {
+    const w = await boot("/us/products/mailer-box")
+    const cookieWrites: string[] = []
+    const cookie = Object.getOwnPropertyDescriptor(
+      w.win.Document.prototype,
+      "cookie"
+    )!
+    Object.defineProperty(w.win.document, "cookie", {
+      configurable: true,
+      get() {
+        return cookie.get!.call(this)
+      },
+      set(value: string) {
+        cookieWrites.push(value)
+        cookie.set!.call(this, value)
+      },
+    })
+    await w.toContact()
+    w.$("#po-name").value = "Jane Buyer"
+    w.$("#po-email").value = "jane@brand.com"
+    const submit = () =>
+      w
+        .$('[data-form="contact"]')
+        .dispatchEvent(
+          new w.win.Event("submit", { bubbles: true, cancelable: true })
+        )
+
+    submit()
+    const first = await w.request("/store/instant-quote/order")
+    const handoff = first.body.handoff
+    // 32 random bytes, base64url without padding.
+    expect(handoff).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(cookieWrites).toEqual([
+      `po_qn=${handoff}; path=/; max-age=1800; SameSite=Lax; Secure`,
+    ])
+    expect(w.win.document.cookie).toContain(`po_qn=${handoff}`)
+    await w.answer(first, { message: "Try again" }, 400)
+
+    submit()
+    const second = await w.request("/store/instant-quote/order")
+    expect(second.body.handoff).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(second.body.handoff).not.toBe(handoff)
+    expect(w.win.document.cookie).toContain(`po_qn=${second.body.handoff}`)
+    expect(w.win.document.cookie).not.toContain(handoff)
   })
 
   it("preselects the configured ship-to country", async () => {

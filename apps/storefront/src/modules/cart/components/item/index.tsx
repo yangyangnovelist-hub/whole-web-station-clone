@@ -40,6 +40,11 @@ const Item = ({ item, type = "full", currencyCode }: ItemProps) => {
       })
   }
 
+  // Instant-quote items (custom, variant-less) are priced for the quoted run
+  // and can only be ordered as quoted, so their quantity is fixed.
+  const isQuoteItem =
+    !item.variant_id || Boolean(item.metadata?.packoasis_rfq_id)
+
   // TODO: Update this to grab the actual max inventory
   const maxQtyFromInventory = 10
   const maxQuantity = item.variant?.manage_inventory ? 10 : maxQtyFromInventory
@@ -76,28 +81,39 @@ const Item = ({ item, type = "full", currencyCode }: ItemProps) => {
         <Table.Cell>
           <div className="flex gap-2 items-center w-28">
             <DeleteButton id={item.id} data-testid="product-delete-button" />
-            <CartItemSelect
-              value={item.quantity}
-              onChange={(value) => changeQuantity(parseInt(value.target.value))}
-              className="w-14 h-10 p-4"
-              data-testid="product-select-button"
-            >
-              {/* TODO: Update this with the v2 way of managing inventory */}
-              {Array.from(
-                {
-                  length: Math.min(maxQuantity, 10),
-                },
-                (_, i) => (
-                  <option value={i + 1} key={i}>
-                    {i + 1}
-                  </option>
-                )
-              )}
+            {isQuoteItem ? (
+              <Text
+                className="txt-medium text-ui-fg-base w-14 text-center"
+                data-testid="product-quantity"
+              >
+                {item.quantity}
+              </Text>
+            ) : (
+              <CartItemSelect
+                value={item.quantity}
+                onChange={(value) =>
+                  changeQuantity(parseInt(value.target.value))
+                }
+                className="w-14 h-10 p-4"
+                data-testid="product-select-button"
+              >
+                {/* TODO: Update this with the v2 way of managing inventory */}
+                {Array.from(
+                  {
+                    length: Math.min(maxQuantity, 10),
+                  },
+                  (_, i) => (
+                    <option value={i + 1} key={i}>
+                      {i + 1}
+                    </option>
+                  )
+                )}
 
-              <option value={1} key={1}>
-                1
-              </option>
-            </CartItemSelect>
+                <option value={1} key={1}>
+                  1
+                </option>
+              </CartItemSelect>
+            )}
             {updating && <Spinner />}
           </div>
           <ErrorMessage error={error} data-testid="product-error-message" />

@@ -5,31 +5,50 @@ import {
   type MedusaResponse,
 } from "@medusajs/framework/http"
 import { rateLimit } from "../lib/http"
-import { verifyToken } from "../lib/packoasis-config"
+import { verifyCheckoutLink, verifyToken } from "../lib/packoasis-config"
 
 /**
  * The storefront calls /packoasis/checkout-token server-to-server, so every
- * buyer shares its IP. Forged tokens are refused by the HMAC check alone and
- * are not counted; each signed link gets its own bucket, so neither forged
- * nor replayed links can lock other buyers out of checkout.
+ * buyer shares its IP. Forged or expired links are refused by the signature
+ * check alone and are not counted; each signed cart gets its own bucket, so
+ * neither forged nor replayed links can lock other buyers out of checkout.
  */
 function checkoutTokenLimit(
   req: MedusaRequest,
   res: MedusaResponse,
   next: MedusaNextFunction
 ) {
-  const query = req.query as Record<string, unknown>
-  const cartId = query.cart_id
-  if (
-    typeof cartId !== "string" ||
-    !verifyToken("checkout", cartId, query.token)
-  ) {
+  const cartId = verifyCheckoutLink(req.query as Record<string, unknown>)
+  if (!cartId) {
     return next()
   }
   return rateLimit({
     key: `checkout-token:${cartId}`,
     limit: 30,
     windowMs: 60_000,
+  })(req, res, next)
+}
+
+/**
+ * /packoasis/resume-cart (also called by the storefront server) creates a
+ * cart per call. As above, only correctly signed requests are counted, in a
+ * bucket per quote and caller IP, which caps the carts one resume link can
+ * mint through the storefront.
+ */
+function resumeCartLimit(
+  req: MedusaRequest,
+  res: MedusaResponse,
+  next: MedusaNextFunction
+) {
+  const body = (req.body ?? {}) as Record<string, unknown>
+  const rfqId = body.rfq
+  if (typeof rfqId !== "string" || !verifyToken("resume", rfqId, body.token)) {
+    return next()
+  }
+  return rateLimit({
+    key: `resume-cart:${rfqId}`,
+    limit: 10,
+    windowMs: 10 * 60_000,
   })(req, res, next)
 }
 
@@ -76,6 +95,12 @@ export default defineMiddlewares({
       matcher: "/packoasis/checkout-token",
       method: ["GET"],
       middlewares: [checkoutTokenLimit],
+    },
+    {
+      matcher: "/packoasis/resume-cart",
+      method: ["POST"],
+      bodyParser: { sizeLimit: "4kb" },
+      middlewares: [resumeCartLimit],
     },
   ],
 })

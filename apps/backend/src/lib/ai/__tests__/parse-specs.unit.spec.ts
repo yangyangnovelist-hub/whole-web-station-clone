@@ -68,15 +68,44 @@ describe("heuristicParseSpecs", () => {
         "mailer-box"
       ).product_type
     ).toBe("mailer-box")
-    // "resealable" must not match the label keyword "seal"
+    expect(
+      heuristicParseSpecs("full color printing on 500 tinted boxes")
+        .product_type
+    ).not.toBe("tin-box")
+    // "resealable", "sealed" and "sealing" must not match the label keyword
     expect(
       heuristicParseSpecs("resealable bags 6x9x3, 10000 pcs").product_type
     ).not.toBe("label")
+    expect(
+      heuristicParseSpecs("vacuum sealed bags 6x9, 5000 pcs").product_type
+    ).not.toBe("label")
+    expect(
+      heuristicParseSpecs("heat sealing film 6x9, 5000 pcs").product_type
+    ).not.toBe("label")
+    expect(
+      heuristicParseSpecs("sealing tape 2 in, 100 rolls").product_type
+    ).toBe("packing-tape")
     // plurals still count
+    expect(heuristicParseSpecs("custom seals 2x2, 5000 pcs").product_type).toBe(
+      "label"
+    )
     expect(heuristicParseSpecs("2000 tins 4x3x1").product_type).toBe("tin-box")
     expect(
       heuristicParseSpecs("custom shipping boxes 12x10x8, 500 pcs").product_type
     ).toBe("shipping-box")
+  })
+
+  it.each([
+    ["product labeling 2x3, 5000 pcs", "label"],
+    ["custom labelling for jars 2x3 5000 pcs", "label"],
+    ["labeled jars 2x3 5000", "label"],
+    ["labelled bottles 2x4 5000", "label"],
+    ["stickered bottles 2x3 5000", "label"],
+    ["branded wrapping 20x30 10000 sheets", "tissue-paper"],
+    ["taped boxes", "packing-tape"],
+    ["custom taping, 50 rolls", "packing-tape"],
+  ])("matches -ed and -ing forms of keywords in %j", (text, type) => {
+    expect(heuristicParseSpecs(text).product_type).toBe(type)
   })
 
   it("keeps the page hint when another type only ties its score", () => {

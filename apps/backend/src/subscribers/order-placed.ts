@@ -10,6 +10,12 @@ import { packoasisConfig } from "../lib/packoasis-config"
 import { RFQ_MODULE } from "../modules/rfq"
 import { findQuotedLineItem } from "../modules/rfq/service"
 
+function productType(rfq: { quote_payload?: unknown }) {
+  const value = (rfq.quote_payload as { product_type?: unknown } | null)
+    ?.product_type
+  return typeof value === "string" ? value : undefined
+}
+
 /**
  * Closes the loop for every order: links instant-quote RFQs (QUOTED ->
  * ACCEPTED -> ORDERED), measures quote-to-order time, confirms the order to
@@ -134,24 +140,42 @@ export default async function orderPlacedHandler({
     }
   }
 
-  // The buyer converted: close their other open instant quotes (e.g. an
-  // earlier revision) so they get no "Review and order" follow-ups.
+  // The buyer converted: stop the "Review and order" follow-ups of their open
+  // instant quotes for the same product from before this one (e.g. an earlier
+  // revision). The quotes stay QUOTED, so their order links keep working.
+  const followups = packoasisConfig.followupDelaysHours().length
   for (const email of new Set(linked.map((rfq) => rfq.email))) {
     try {
       const open = await rfqService.listRFQS(
         { email, source: "instant_quote", status: "QUOTED", order_id: null },
-        { select: ["id"], take: 100 }
+        {
+          select: ["id", "quote_payload", "created_at", "followup_count"],
+          take: 100,
+        }
       )
       for (const other of open) {
-        await rfqService.closeRFQ(other.id).catch((error: Error) =>
-          logger.warn(
-            `[order-placed] could not close RFQ ${other.id}: ${error.message}`
-          )
+        const superseded = linked.some(
+          (rfq) =>
+            rfq.email === email &&
+            productType(rfq) !== undefined &&
+            productType(other) === productType(rfq) &&
+            new Date(other.created_at).getTime() <=
+              new Date(rfq.created_at).getTime()
         )
+        if (!superseded || (other.followup_count ?? 0) >= followups) {
+          continue
+        }
+        await rfqService
+          .updateRFQS({ id: other.id, followup_count: followups })
+          .catch((error: Error) =>
+            logger.warn(
+              `[order-placed] could not stop follow-ups for RFQ ${other.id}: ${error.message}`
+            )
+          )
       }
     } catch (error) {
       logger.warn(
-        `[order-placed] could not close open quotes for ${order.id}: ${(error as Error).message}`
+        `[order-placed] could not stop follow-ups for ${order.id}: ${(error as Error).message}`
       )
     }
   }

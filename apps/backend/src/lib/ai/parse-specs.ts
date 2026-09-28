@@ -144,10 +144,19 @@ const FINISH_PATTERNS: [RegExp, FinishId][] = [
   [/\bwindow\b/i, "window"],
 ]
 
-/** Whole-word keyword match (plurals allowed), so "printing" is not "tin". */
+/**
+ * Whole-word keyword match that also takes plural, -ed and -ing forms
+ * ("labels", "labelled", "wrapping", "taping"), so "printing" is not "tin".
+ */
 function keywordPattern(keyword: string) {
-  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`\\b${escaped}(?:e?s)?\\b`, "i")
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const word = escape(keyword)
+  const forms = /e$/i.test(keyword)
+    ? // tape: tapes, taped, taping
+      `${word}[sd]?|${escape(keyword.slice(0, -1))}ing`
+    : // label: labels, labeled, labelling; wrap: wrapped; box: boxes
+      `${word}(?:e?s|${escape(keyword.slice(-1))}?(?:ed|ing))?`
+  return new RegExp(`\\b(?:${forms})\\b`, "i")
 }
 
 function keywordScore(type: ProductTypeConfig, lower: string) {

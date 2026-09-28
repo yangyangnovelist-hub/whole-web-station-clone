@@ -2,6 +2,7 @@ import type {
   MedusaResponse,
   MedusaStoreRequest,
 } from "@medusajs/framework/http"
+import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { createCartWorkflow } from "@medusajs/medusa/core-flows"
 import { z } from "zod"
@@ -9,11 +10,14 @@ import { PRODUCT_IMAGES } from "../../../../lib/instant-quote/catalog"
 import {
   priceQuote,
   QuoteInputError,
+  type QuoteResult,
 } from "../../../../lib/instant-quote/engine"
 import { trustedStorefrontOrigin } from "../../../../lib/http"
 import { recordLeadEvent } from "../../../../lib/lead-intel/record"
 import {
+  HANDOFF_NONCE,
   packoasisConfig,
+  resumeQuoteUrl,
   storefrontCheckoutUrl,
 } from "../../../../lib/packoasis-config"
 import { RFQ_MODULE } from "../../../../modules/rfq"
@@ -43,7 +47,63 @@ const OrderSchema = z.object({
   page: PageSchema,
   /** Honeypot: real visitors never fill this hidden field. */
   hp: z.string().max(200).optional(),
+  /** The widget's po_qn cookie nonce, which the checkout link is bound to. */
+  handoff: z.string().regex(HANDOFF_NONCE).optional(),
 })
+
+/**
+ * Creates the cart that carries an instant quote: one custom line item at the
+ * quoted total, with freight included. Also used by /packoasis/resume-cart.
+ */
+export async function createQuoteCart(
+  scope: MedusaContainer,
+  input: {
+    rfqId: string
+    quote: QuoteResult
+    regionId?: string
+    salesChannelId?: string
+    email?: string
+  }
+) {
+  const { rfqId, quote } = input
+  const { result: cart } = await createCartWorkflow(scope).run({
+    input: {
+      region_id: input.regionId,
+      sales_channel_id: input.salesChannelId,
+      email: input.email,
+      currency_code: quote.currency_code,
+      items: [
+        {
+          title: quote.product_label,
+          product_title: quote.summary,
+          variant_title: `${quote.quantity.toLocaleString("en-US")} pcs`,
+          thumbnail: PRODUCT_IMAGES[quote.product_type],
+          quantity: 1,
+          unit_price: quote.total,
+          // Freight is part of the quote; Medusa must not require a product
+          // shipping profile for this custom line item.
+          requires_shipping: false,
+          metadata: {
+            packoasis_rfq_id: rfqId,
+            packoasis_quote: {
+              summary: quote.summary,
+              quantity: quote.quantity,
+              unit_price: quote.unit_price,
+              specs: quote.specs,
+              pricing_version: quote.pricing_version,
+              valid_until: quote.valid_until,
+            },
+          },
+        },
+      ],
+      metadata: {
+        packoasis_rfq_id: rfqId,
+        packoasis_source: "instant_quote",
+      },
+    },
+  })
+  return cart
+}
 
 export async function POST(req: MedusaStoreRequest, res: MedusaResponse) {
   const parsed = OrderSchema.safeParse(req.body)
@@ -125,41 +185,12 @@ export async function POST(req: MedusaStoreRequest, res: MedusaResponse) {
     // leaves a SUBMITTED RFQ for a specialist rather than a QUOTED one with
     // nothing to order.
     try {
-      const { result: cart } = await createCartWorkflow(req.scope).run({
-        input: {
-          region_id: region!.id,
-          sales_channel_id: salesChannelId,
-          email: contact.email.toLowerCase(),
-          currency_code: quote.currency_code,
-          items: [
-            {
-              title: quote.product_label,
-              product_title: quote.summary,
-              variant_title: `${quote.quantity.toLocaleString("en-US")} pcs`,
-              thumbnail: PRODUCT_IMAGES[quote.product_type],
-              quantity: 1,
-              unit_price: quote.total,
-              // Freight is part of the quote; Medusa must not require a
-              // product shipping profile for this custom line item.
-              requires_shipping: false,
-              metadata: {
-                packoasis_rfq_id: rfq.id,
-                packoasis_quote: {
-                  summary: quote.summary,
-                  quantity: quote.quantity,
-                  unit_price: quote.unit_price,
-                  specs: quote.specs,
-                  pricing_version: quote.pricing_version,
-                  valid_until: quote.valid_until,
-                },
-              },
-            },
-          ],
-          metadata: {
-            packoasis_rfq_id: rfq.id,
-            packoasis_source: "instant_quote",
-          },
-        },
+      const cart = await createQuoteCart(req.scope, {
+        rfqId: rfq.id,
+        quote,
+        regionId: region!.id,
+        salesChannelId,
+        email: contact.email.toLowerCase(),
       })
       await rfqService.submitQuote({
         rfq_id: rfq.id,
@@ -200,16 +231,22 @@ export async function POST(req: MedusaStoreRequest, res: MedusaResponse) {
   const eventBus = req.scope.resolve(Modules.EVENT_BUS)
   await eventBus.emit({ name: LEAD_CREATED_EVENT, data: { id: rfq.id } })
 
+  // The checkout link only attaches the cart in the browser holding the
+  // widget's handoff cookie. Without one (a widget cached from before), the
+  // emailed resume link is used, which mints the buyer a fresh cart once they
+  // confirm.
+  const origin = trustedStorefrontOrigin(req) ?? undefined
+  let checkoutUrl: string | null = null
+  if (cartId) {
+    checkoutUrl = parsed.data.handoff
+      ? storefrontCheckoutUrl(cartId, countryCode, parsed.data.handoff, origin)
+      : resumeQuoteUrl(rfq.id, origin)
+  }
+
   res.status(201).json({
     rfq_id: rfq.id,
     cart_id: cartId,
-    checkout_url: cartId
-      ? storefrontCheckoutUrl(
-          cartId,
-          countryCode,
-          trustedStorefrontOrigin(req) ?? undefined
-        )
-      : null,
+    checkout_url: checkoutUrl,
     requires_review: !cartId,
     message: cartId
       ? "Quote locked. Complete the order at checkout."

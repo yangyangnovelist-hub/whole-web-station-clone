@@ -1,7 +1,10 @@
-import { MedusaContainer } from "@medusajs/framework/types"
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
+import {
+  FilterableNotificationProps,
+  MedusaContainer,
+} from "@medusajs/framework/types"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { writeFollowupCopy } from "../lib/ai/followup-copy"
-import { renderFollowupEmail } from "../lib/email/templates"
+import { greetingName, renderFollowupEmail } from "../lib/email/templates"
 import { sendEmail } from "../lib/email/send"
 import type { QuoteResult } from "../lib/instant-quote/engine"
 import {
@@ -29,6 +32,7 @@ export default async function instantQuoteFollowups(
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
   const rfqService: any = container.resolve(RFQ_MODULE)
+  const notificationService = container.resolve(Modules.NOTIFICATION)
 
   const delays = packoasisConfig.followupDelaysHours()
   if (packoasisConfig.followupsEnabled() && delays.length) {
@@ -75,6 +79,21 @@ export default async function instantQuoteFollowups(
       if (now < due || now - lastContact < MIN_SPACING) {
         continue
       }
+      // A failed send leaves a FAILURE row under this attempt's key (sendEmail
+      // appends the recipient); retry it MIN_SPACING later. last_contacted_at
+      // only records delivered emails.
+      const idempotencyKey = `followup:${rfq.id}:${attempt}`
+      const [recentFailure] = await notificationService.listNotifications(
+        {
+          idempotency_key: `${idempotencyKey}:${rfq.email}`,
+          status: "failure",
+          updated_at: { $gte: new Date(now - MIN_SPACING) },
+        } as FilterableNotificationProps,
+        { select: ["id"], take: 1 }
+      )
+      if (recentFailure) {
+        continue
+      }
 
       const {
         data: [cart],
@@ -87,28 +106,38 @@ export default async function instantQuoteFollowups(
         continue
       }
 
-      // The buyer already ordered a later (e.g. revised) quote.
-      const [converted] = await rfqService.listRFQS(
+      // The buyer already ordered a later (e.g. revised) quote for the same
+      // product: stop the reminders but leave the quote open, so its order
+      // link keeps working. Quotes for other products still get theirs.
+      const ordered = await rfqService.listRFQS(
         {
           email: rfq.email,
           order_id: { $ne: null },
           created_at: { $gte: rfq.created_at },
         },
-        { select: ["id"], take: 1 }
+        { select: ["id", "quote_payload"], take: 100 }
       )
-      if (converted) {
-        await rfqService.closeRFQ(rfq.id).catch((error: Error) =>
-          logger.warn(
-            `[followups] could not close ${rfq.id}: ${error.message}`
-          )
+      if (
+        ordered.some(
+          (other: any) =>
+            other.id !== rfq.id &&
+            other.quote_payload?.product_type === quote.product_type
         )
+      ) {
+        await rfqService
+          .updateRFQS({ id: rfq.id, followup_count: delays.length })
+          .catch((error: Error) =>
+            logger.warn(
+              `[followups] could not stop follow-ups for ${rfq.id}: ${error.message}`
+            )
+          )
         continue
       }
 
       const profile = (
         rfq.enrichment_payload as { profile?: Record<string, any> } | null
       )?.profile
-      const firstName = rfq.contact_name.split(/\s+/)[0] || "there"
+      const firstName = greetingName(rfq.contact_name)
       const copy = await writeFollowupCopy(
         {
           attempt,
@@ -125,7 +154,7 @@ export default async function instantQuoteFollowups(
       const sent = await sendEmail(container, {
         to: rfq.email,
         template: `packoasis-quote-followup-${attempt}`,
-        idempotencyKey: `followup:${rfq.id}:${attempt}`,
+        idempotencyKey,
         resourceId: rfq.id,
         resourceType: "rfq",
         email: renderFollowupEmail({
@@ -147,9 +176,6 @@ export default async function instantQuoteFollowups(
         logger.info(
           `[followups] sent follow-up ${attempt} for ${rfq.id} (${copy.source})`
         )
-      } else {
-        // Back off MIN_SPACING before retrying the same attempt.
-        await rfqService.recordContact(rfq.id)
       }
     }
   }

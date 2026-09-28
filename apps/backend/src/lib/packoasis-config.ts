@@ -63,27 +63,81 @@ export function unsubscribeUrl(rfqId: string) {
   )}&token=${signToken("unsubscribe", rfqId)}`
 }
 
-export function resumeQuoteUrl(rfqId: string) {
-  return `${packoasisConfig.backendUrl()}/packoasis/resume?rfq=${encodeURIComponent(
+/**
+ * Signed "complete my order" link for emails. It opens a confirmation page on
+ * the storefront; pressing "Continue to checkout" there asks the backend
+ * server-to-server (POST /packoasis/resume-cart) for a fresh cart for the
+ * quote. Only that browser learns the cart's id (in an HttpOnly cookie), so
+ * whoever sent the link cannot read what is entered at checkout, and a mail
+ * scanner fetching the link changes nothing.
+ */
+export function resumeQuoteUrl(rfqId: string, origin?: string) {
+  const base = (origin || packoasisConfig.storefrontUrl()).replace(/\/$/, "")
+  return `${base}/api/quote-resume?rfq=${encodeURIComponent(
     rfqId
   )}&token=${signToken("resume", rfqId)}`
 }
 
+/** Lifetime of a widget checkout link and its po_qn cookie, in seconds. */
+export const CHECKOUT_LINK_TTL_SECONDS = 30 * 60
+
+/** The widget's per-request nonce (base64url), kept in its po_qn cookie. */
+export const HANDOFF_NONCE = /^[A-Za-z0-9_-]{16,128}$/
+
+function checkoutPayload(cartId: string, handoff: string, exp: string) {
+  return `${cartId}:${handoff}:${exp}`
+}
+
 /**
- * Storefront hand-off that attaches a quote cart to the buyer's browser. The
- * token lets the storefront check (via /packoasis/checkout-token) that the
- * link came from us, so nobody can plant their own cart in a victim's browser.
+ * Widget hand-off that attaches a quote cart to the browser that requested
+ * it. The token signs the cart, the widget's po_qn cookie nonce (`handoff`)
+ * and an expiry, and the storefront forwards that browser's cookie to
+ * /packoasis/checkout-token, so the link only works for 30 minutes in the
+ * browser that asked for the quote. Anyone else opening it lacks the cookie.
  */
 export function storefrontCheckoutUrl(
   cartId: string,
   countryCode: string,
+  handoff: string,
   origin?: string
 ) {
   const base = (origin || packoasisConfig.storefrontUrl()).replace(/\/$/, "")
+  const exp = String(Math.floor(Date.now() / 1000) + CHECKOUT_LINK_TTL_SECONDS)
   return `${base}/api/quote-checkout?cart_id=${encodeURIComponent(
     cartId
-  )}&country=${encodeURIComponent(countryCode)}&token=${signToken(
+  )}&country=${encodeURIComponent(countryCode)}&exp=${exp}&token=${signToken(
     "checkout",
-    cartId
+    checkoutPayload(cartId, handoff, exp)
   )}`
+}
+
+/**
+ * The cart id of an unexpired checkout link signed for this handoff nonce
+ * (see storefrontCheckoutUrl), otherwise null.
+ */
+export function verifyCheckoutLink(input: {
+  cart_id?: unknown
+  token?: unknown
+  exp?: unknown
+  handoff?: unknown
+}) {
+  const { cart_id: cartId, exp, handoff } = input
+  if (
+    typeof cartId !== "string" ||
+    !/^[A-Za-z0-9_]{1,64}$/.test(cartId) ||
+    typeof handoff !== "string" ||
+    !HANDOFF_NONCE.test(handoff) ||
+    typeof exp !== "string" ||
+    !/^\d{1,12}$/.test(exp) ||
+    Number(exp) * 1000 <= Date.now()
+  ) {
+    return null
+  }
+  return verifyToken(
+    "checkout",
+    checkoutPayload(cartId, handoff, exp),
+    input.token
+  )
+    ? cartId
+    : null
 }

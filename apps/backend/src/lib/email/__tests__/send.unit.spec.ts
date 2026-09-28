@@ -1,19 +1,38 @@
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import instantQuoteFollowups from "../../../jobs/instant-quote-followups"
 import { RFQ_MODULE } from "../../../modules/rfq"
+import { writeFollowupCopy } from "../../ai/followup-copy"
 import { priceQuote } from "../../instant-quote/engine"
 import { sendEmail } from "../send"
+
+jest.mock("../../ai/followup-copy", () => {
+  const actual = jest.requireActual("../../ai/followup-copy")
+  return { ...actual, writeFollowupCopy: jest.fn(actual.writeFollowupCopy) }
+})
 
 const HOUR = 60 * 60 * 1000
 const email = { subject: "Hello", html: "<p>Hello</p>", text: "Hello" }
 
-type Row = { id: string; status: "pending" | "success" | "failure" }
+type Row = {
+  id: string
+  status: "pending" | "success" | "failure"
+  updated_at?: Date
+}
 
 function makeNotifications(existing: Record<string, Row[]> = {}) {
   return {
     listNotifications: jest.fn(
-      async (filters: { idempotency_key: string }) =>
-        existing[filters.idempotency_key] ?? []
+      async (filters: {
+        idempotency_key: string
+        status?: string
+        updated_at?: { $gte: Date }
+      }) =>
+        (existing[filters.idempotency_key] ?? []).filter(
+          (row) =>
+            (!filters.status || row.status === filters.status) &&
+            (!filters.updated_at ||
+              (row.updated_at ?? new Date()) >= filters.updated_at.$gte)
+        )
     ),
     softDeleteNotifications: jest.fn(async () => undefined),
     createNotifications: jest.fn(async (_data: any) => ({ id: "noti_new" })),
@@ -194,6 +213,7 @@ describe("instant quote follow-up job", () => {
         return candidates.slice(skip, skip + config.take)
       }),
       recordContact: jest.fn(async () => undefined),
+      updateRFQS: jest.fn(async () => undefined),
       closeRFQ: jest.fn(async () => undefined),
     }
     const query = {
@@ -248,15 +268,58 @@ describe("instant quote follow-up job", () => {
     })
   })
 
-  it("backs off after a failed send without counting it", async () => {
-    const notifications = makeNotifications()
-    notifications.createNotifications.mockRejectedValue(new Error("429"))
+  it("backs off after a failed send without recording a contact", async () => {
+    // The provider fails: Medusa leaves a FAILURE row under the key.
+    const rows: Record<string, Row[]> = {}
+    const notifications = makeNotifications(rows)
+    notifications.createNotifications.mockImplementation(async (data: any) => {
+      rows[data.idempotency_key] = [
+        { id: "noti_failed", status: "failure", updated_at: new Date() },
+      ]
+      throw new Error("429")
+    })
+    const { container, rfqService } = setup([makeRfq("r1")], [], notifications)
+
+    await instantQuoteFollowups(container)
+    await instantQuoteFollowups(container)
+
+    expect(notifications.createNotifications).toHaveBeenCalledTimes(1)
+    expect(notifications.listNotifications).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        idempotency_key: "followup:r1:1:r1@brand.com",
+        status: "failure",
+      }),
+      expect.anything()
+    )
+    const [filters] = notifications.listNotifications.mock.lastCall!
+    expect(
+      Math.abs(filters.updated_at!.$gte.getTime() - (Date.now() - 12 * HOUR))
+    ).toBeLessThan(60_000)
+    expect(rfqService.recordContact).not.toHaveBeenCalled()
+    expect(rfqService.updateRFQS).not.toHaveBeenCalled()
+  })
+
+  it("retries a failed attempt once MIN_SPACING has passed", async () => {
+    const notifications = makeNotifications({
+      "followup:r1:1:r1@brand.com": [
+        {
+          id: "noti_failed",
+          status: "failure",
+          updated_at: new Date(Date.now() - 13 * HOUR),
+        },
+      ],
+    })
     const { container, rfqService } = setup([makeRfq("r1")], [], notifications)
 
     await instantQuoteFollowups(container)
 
-    expect(rfqService.recordContact).toHaveBeenCalledTimes(1)
-    expect(rfqService.recordContact).toHaveBeenCalledWith("r1")
+    expect(notifications.softDeleteNotifications).toHaveBeenCalledWith([
+      "noti_failed",
+    ])
+    expect(notifications.createNotifications).toHaveBeenCalledTimes(1)
+    expect(rfqService.recordContact).toHaveBeenCalledWith("r1", {
+      followup: true,
+    })
   })
 
   it("counts a delivered follow-up without resending", async () => {
@@ -284,7 +347,7 @@ describe("instant quote follow-up job", () => {
     expect(rfqService.recordContact).not.toHaveBeenCalled()
   })
 
-  it("closes the quote when the buyer ordered a later quote", async () => {
+  it("stops follow-ups without closing when a later quote for the product was ordered", async () => {
     const rfq = makeRfq("r1")
     const { container, rfqService, notifications } = setup(
       [rfq],
@@ -293,15 +356,41 @@ describe("instant quote follow-up job", () => {
           id: "r2",
           email: rfq.email,
           created_at: new Date(rfq.created_at.getTime() + HOUR),
+          quote_payload: { product_type: "mailer-box" },
         },
       ]
     )
 
     await instantQuoteFollowups(container)
 
-    expect(rfqService.closeRFQ).toHaveBeenCalledWith("r1")
+    expect(rfqService.updateRFQS).toHaveBeenCalledWith({
+      id: "r1",
+      followup_count: 2,
+    })
+    expect(rfqService.closeRFQ).not.toHaveBeenCalled()
     expect(notifications.createNotifications).not.toHaveBeenCalled()
     expect(rfqService.recordContact).not.toHaveBeenCalled()
+  })
+
+  it("still follows up when the later order was for another product", async () => {
+    const rfq = makeRfq("r1")
+    const { container, rfqService, notifications } = setup(
+      [rfq],
+      [
+        {
+          id: "r2",
+          email: rfq.email,
+          created_at: new Date(rfq.created_at.getTime() + HOUR),
+          quote_payload: { product_type: "tissue-paper" },
+        },
+      ]
+    )
+
+    await instantQuoteFollowups(container)
+
+    expect(rfqService.updateRFQS).not.toHaveBeenCalled()
+    expect(rfqService.closeRFQ).not.toHaveBeenCalled()
+    expect(notifications.createNotifications).toHaveBeenCalledTimes(1)
   })
 
   it("still follows up when only an earlier quote was ordered", async () => {
@@ -313,13 +402,41 @@ describe("instant quote follow-up job", () => {
           id: "r0",
           email: rfq.email,
           created_at: new Date(rfq.created_at.getTime() - HOUR),
+          quote_payload: { product_type: "mailer-box" },
         },
       ]
     )
 
     await instantQuoteFollowups(container)
 
+    expect(rfqService.updateRFQS).not.toHaveBeenCalled()
     expect(rfqService.closeRFQ).not.toHaveBeenCalled()
     expect(notifications.createNotifications).toHaveBeenCalledTimes(1)
   })
+
+  it.each([
+    ["Sam Buyer", "Sam"],
+    ["evil.example/verify-your-account now", "there"],
+    [
+      "Your\u2800PackOasis\u2800account\u2800is\u2800on\u2800hold.\u2800Verify\u2800at\u2800https://evil.example/login",
+      "there",
+    ],
+  ])(
+    "greets %j as %j in the email and the copy prompt",
+    async (name, first) => {
+      const { container, notifications } = setup([
+        makeRfq("r1", { contact_name: name }),
+      ])
+
+      await instantQuoteFollowups(container)
+
+      expect(jest.mocked(writeFollowupCopy).mock.lastCall?.[0]).toMatchObject({
+        first_name: first,
+      })
+      const [data] = notifications.createNotifications.mock.calls[0]
+      expect(data.content.text.startsWith(`Hi ${first},\n`)).toBe(true)
+      expect(data.content.html).toContain(`<p>Hi ${first},</p>`)
+      expect(data.content.text).not.toContain("evil.example")
+    }
+  )
 })
