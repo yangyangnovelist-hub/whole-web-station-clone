@@ -294,7 +294,7 @@ def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
         trades = pd.concat(pooled[lag], ignore_index=True) if pooled[lag] else pd.DataFrame(columns=["strategy"])
         res = sz.summarize(trades, strategies, starts[lag] or [0], reps, ids)
         head = "主检验" if lag == STAGE2_LAG else "参考（信号只延后 1 秒，和 BTC 那次相同）"
-        lines += ["", f"## {head}：信号延后 {lag} 秒，{len(set(starts[lag]))} 个市场", "",
+        lines += ["", f"## {head}：信号延后 {lag} 秒，{len(starts[lag])} 个市场", "",
                   "| # | 策略 | 笔数 | 胜率 | 平均价 | EV/份 | ROI | 原始 p | 校正 p | 前半 EV | 后半 EV | 通过 |",
                   "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:-:|"]
         for r in res.itertuples():
