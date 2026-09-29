@@ -1,0 +1,77 @@
+import gzip
+import json
+
+import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pytest
+
+import latency as lt
+
+S0 = 1_789_300_000 // 300 * 300
+N = 30
+
+
+def write_zst_parts(path_stem, df):
+    buf = pa.BufferOutputStream()
+    with pa.CompressedOutputStream(buf, "zstd") as f:
+        f.write(df.to_csv(index=False).encode())
+    (path_stem.parent / (path_stem.name + ".part-aa")).write_bytes(buf.getvalue().to_pybytes())
+
+
+@pytest.fixture(scope="module")
+def export(tmp_path_factory):
+    """N markets: Binance jumps +0.4% at start+100; the Up ask sits at 0.50 until 0.4 s after the jump,
+    then 0.70. Up wins in 80% of markets."""
+    d = tmp_path_factory.mktemp("export")
+    rng = np.random.default_rng(4)
+    starts = [S0 + 300 * i for i in range(N)]
+    reg = pd.DataFrame({"market_id": [f"m{i}" for i in range(N)], "start_ts": starts,
+                        "up_token_id": "u", "down_token_id": "d", "updated_at": 0})
+    out = pd.DataFrame({"market_id": reg["market_id"], "winner": ["Up" if i % 5 else "Down" for i in range(N)],
+                        "resolution_ts": 0, "source": "x", "recorded_at": 0})
+    rows = []
+    for i, s in enumerate(starts):
+        for t, a in ((s, 0.50), (s + 100.4, 0.70)):
+            rows.append({"market_id": f"m{i}", "up_token_id": "u", "source_ts": t, "receive_ts": t + 0.01,
+                         "sequence": 1, "best_bid": a - 0.01, "best_ask": a,
+                         "bids_json": json.dumps([[round(a - 0.01, 2), 40.0]]), "asks_json": json.dumps([[a, 25.0]])})
+    write_zst_parts(d / "runtime_1000.poly_probability_observations_v1.csv.zst", pd.DataFrame(rows))
+    write_zst_parts(d / "runtime_1000.market_registry.csv.zst", reg)
+    write_zst_parts(d / "runtime_1000.market_outcomes.csv.zst", out)
+    secs = np.arange(S0 - 1200, S0 + 300 * N + 300)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-5, len(secs))))
+    for s in starts:
+        price[secs >= s + 100] *= 1.004
+    lines = [json.dumps({"event": "BINANCE_AGG_TRADE", "trade_ts": float(t) + 0.05, "receive_ts": float(t) + 0.15,
+                         "price": float(p)}) for t, p in zip(secs, price)]
+    buf = gzip.compress(("\n".join(lines) + "\n").encode())
+    (d / "shadow_current.jsonl.gz.part-aa").write_bytes(buf)
+    return d
+
+
+def test_triggers_and_reaction(export):
+    books, markets, binance = lt.load(export)
+    grid, sigma = lt.spot_grid(binance)
+    trig = lt.triggers(markets, grid, sigma, 3.0)
+    assert len(trig) == N and (trig["side"] == "Up").all()
+    assert (trig["t"] == [S0 + 300 * i + 100 for i in range(N)]).all()
+    book = lt.Book(books)
+    assert book.reaction("m0", S0 + 100, "Up") == pytest.approx(0.4)
+
+
+def test_lag_decides_the_price(export):
+    books, markets, binance = lt.load(export)
+    grid, sigma = lt.spot_grid(binance)
+    trig = lt.triggers(markets, grid, sigma, 3.0)
+    book = lt.Book(books)
+    fast, slow = lt.trade(trig, book, 0.2, False), lt.trade(trig, book, 1.0, False)
+    assert (fast["price"] == 0.50).all() and (slow["price"] == 0.70).all()
+    assert fast["pnl"].mean() > slow["pnl"].mean() and fast["size"].median() == 25
+    assert lt.trade(trig, book, 1.0, True).empty  # the ask moved: the stale limit does not fill
+
+
+def test_report(export, tmp_path):
+    lt.run(export, tmp_path / "r.md", reps=500)
+    text = (tmp_path / "r.md").read_text()
+    assert "中位 100 ms" in text and "| 0.2 秒 |" in text
