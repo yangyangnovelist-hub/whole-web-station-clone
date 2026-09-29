@@ -139,8 +139,16 @@ def build_panel(markets, spot, quotes, vols):
     first, last = vols.index.min(), vols.index.max()
     rows = []
     for mk in markets.itertuples():
-        if not mk.resolved or mk.start - 60 < first or mk.end > last or not np.isfinite(mk.strike):
+        if not mk.resolved or mk.start - 60 < first or mk.end > last:
             continue
+        log_strike = math.log(mk.strike) if np.isfinite(mk.strike) else np.nan
+        if not np.isfinite(log_strike):
+            # The live recorder sees Chainlink every few seconds, not every second, so it often has
+            # too few samples for the opening TWAP; the forward-filled grid still gives it. A market
+            # with no strike at all is kept: only the model's probability needs one.
+            w = vols["log_spot"].reindex(range(mk.start - bo.TWAP_S + 1, mk.start + 1)).to_numpy()
+            if np.isfinite(w).all():
+                log_strike = float(w.mean())
         t = np.arange(0, bo.WINDOW_S)
         times_ms = (mk.start + t) * 1000
         bu, au = quote_asof(quotes, mk.up_token, times_ms)
@@ -158,7 +166,7 @@ def build_panel(markets, spot, quotes, vols):
         csum = np.concatenate([[0.0], np.cumsum(window)])
         frame = pd.DataFrame(dict(
             slug=mk.slug, start=mk.start, end=mk.end, t=t, tau=bo.WINDOW_S - t,
-            bid_up=bid_up, ask_up=ask_up, up_won=mk.up_won, log_strike=math.log(mk.strike),
+            bid_up=bid_up, ask_up=ask_up, up_won=mk.up_won, log_strike=log_strike,
             t_info=t_info, log_spot=log_spot, known_sum=csum[seen], spot_ok=ok,
             history_s=vols["history_s"].reindex(info_sec).to_numpy(),
         ))

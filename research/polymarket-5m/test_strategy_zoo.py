@@ -127,3 +127,18 @@ def test_queue_maker_waits_for_the_size_ahead():
     assert rule(market([(at(260), "SELL", 20.0, 0.69), (at(270), "SELL", 15.0, 0.69)]))["price"] == 0.69
     assert rule(market([(at(260), "SELL", 1.0, 0.68)]))["kind"] == "maker"           # traded through
     assert rule(market([(at(260), "BUY", 50.0, 0.69)])) is None                       # buys do not fill a bid
+
+
+def test_markets_without_a_recorded_strike_still_trade(tmp_path):
+    import gzip as gz
+    root = make_bundle(tmp_path / "b")
+    path = next(root.rglob("*-markets-*.jsonl.gz"))
+    rows = [json.loads(line) for line in gz.open(path, "rt")]
+    for r in rows:
+        r["strike_value"] = None  # the live recorder saw too few Chainlink seconds before the open
+    with gz.open(path, "wt") as fh:
+        fh.write("\n".join(json.dumps(r) for r in rows))
+    write_gz(root / "data/polymarket/daily/last_trade_price/BTC-5m/BTC-5m-last_trade_price-2026-09-08.jsonl.gz", "")
+    markets = sz.build_markets(root)
+    assert markets and all(np.isfinite(m.rows["log_strike"]).all() for m in markets)
+    assert any(sz.late_favourite(30, 0.85, 0.99)(m) for m in markets)
