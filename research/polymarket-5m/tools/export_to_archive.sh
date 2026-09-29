@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Export the market data of a shadow runtime (SQLite) or a research data folder into the private
-# sgk90-shadow-archive repo, branch `research-export`, where a research session can read it.
+# Export the market data of a shadow runtime (SQLite), an engine log or a research data folder into
+# the private sgk90-shadow-archive repo, on its own branch `export/<label>`, where a research
+# session can read it. export_all.sh runs this for every known source on a machine.
 #
 #   bash export_to_archive.sh <label> <runtime.sqlite | data folder> [since YYYY-MM-DD] [until YYYY-MM-DD]
 #
@@ -19,7 +20,8 @@
 # - from a folder: the above for every SQLite / JSONL inside, plus its *.csv / *.csv.gz / *.parquet
 #   files, except any whose name looks like a key, secret, wallet, password or env file.
 # Everything is gzip-compressed, split into 90 MB parts and pushed with this machine's own git
-# credentials to the private repo; nothing is published elsewhere, nothing trades.
+# credentials to the private repo; nothing is published elsewhere, nothing trades. Re-running a
+# label replaces its branch.
 set -euo pipefail
 
 label=${1:?label, e.g. dublin-0926-0929}
@@ -27,6 +29,10 @@ src=${2:?runtime.sqlite or a data folder}
 since=${3:-}
 until=${4:-}
 repo=${ARCHIVE_URL:-https://github.com/yangyangnovelist-hub/sgk90-shadow-archive.git}
+git ls-remote "$repo" >/dev/null 2>&1 || {
+  echo "cannot reach $repo with this machine's git credentials; run: gh auth login && gh auth setup-git" >&2
+  exit 2
+}
 work=$(mktemp -d "${TMPDIR:-/tmp}/export.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 out="$work/out/$label"
@@ -48,24 +54,33 @@ TABLES = {  # table: time column used for since/until (None: whole table)
 secret = re.compile(r"key|secret|wallet|passw|mnemonic|\.env|\.pem", re.I)
 kept = []
 
-def export_db(db):
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    have = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+def export_db(db, name):
+    """Market-data tables of one SQLite file; `name` keeps files from equally named databases apart."""
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        have = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+    except sqlite3.DatabaseError as e:
+        kept.append(f"{name}: unreadable ({e})")
+        return
     for table, tcol in TABLES.items():
         if table not in have:
             continue
-        where = f' where "{tcol}" >= ? and "{tcol}" < ?' if tcol else ""
-        cur = con.execute(f'select * from "{table}"{where}', (lo, hi) if tcol else ())
-        path = out / f"{db.stem}.{table}.csv.gz"
+        path = out / f"{name}.{table}.csv.gz"
         n = 0
-        with gzip.open(path, "wt", newline="", compresslevel=6) as fh:
-            w = csv.writer(fh)
-            w.writerow([d[0] for d in cur.description])
-            for row in cur:
-                w.writerow(row)
-                n += 1
-        kept.append(f"{path.name}: {n:,} rows")
+        try:
+            where = f' where "{tcol}" >= ? and "{tcol}" < ?' if tcol else ""
+            cur = con.execute(f'select * from "{table}"{where}', (lo, hi) if tcol else ())
+            with gzip.open(path, "wt", newline="", compresslevel=6) as fh:
+                w = csv.writer(fh)
+                w.writerow([d[0] for d in cur.description])
+                for row in cur:
+                    w.writerow(row)
+                    n += 1
+            kept.append(f"{path.name}: {n:,} rows")
+        except sqlite3.DatabaseError as e:  # a damaged file: keep what was read
+            kept.append(f"{path.name}: {n:,} rows, then stopped ({e})")
     con.close()
+
 
 EVENTS = ("BINANCE_AGG_TRADE", "COINBASE_PERP_L2", "CHAINLINK_TWAP", "MARKET_REGISTERED", "MARKET_OUTCOME_RECORDED")
 event_re = re.compile(r'"event"\s*:\s*"([A-Z0-9_]+)"')
@@ -93,14 +108,14 @@ def is_db(f):
     return f.suffix in (".sqlite", ".db") or f.name.endswith(".sqlite3")
 
 if src.is_file():
-    export_db(src) if is_db(src) else export_log(src, src.name)
+    export_db(src, src.stem) if is_db(src) else export_log(src, src.name)
 else:
     for f in sorted(src.rglob("*")):
         if not f.is_file() or secret.search(f.name):
             continue
         rel = "__".join(f.relative_to(src).parts)
         if is_db(f):
-            export_db(f)
+            export_db(f, rel.rsplit(".", 1)[0])
         elif f.name.endswith((".jsonl", ".jsonl.gz")):
             export_log(f, rel)
         elif f.name.endswith((".csv", ".csv.gz", ".parquet")):
@@ -123,17 +138,17 @@ for f in "$out"/*; do
 done
 du -sh "$out"
 
-git clone -q --depth 1 --branch research-export "$repo" "$work/repo" 2>/dev/null \
-  || { git clone -q --depth 1 "$repo" "$work/repo" && git -C "$work/repo" checkout -q --orphan research-export \
-       && git -C "$work/repo" rm -rqf . ; }
+branch="export/$label"
+git init -q "$work/repo"
 mkdir -p "$work/repo/$label"
 cd "$work/repo"
+git remote add origin "$repo"
 commit_push() {
   git add "$label"
   git diff --cached --quiet && return 0
   git -c user.name="${GIT_AUTHOR_NAME:-export}" -c user.email="${GIT_AUTHOR_EMAIL:-export@localhost}" \
     commit -q -m "research export: $label ($1)"
-  git push -q origin HEAD:research-export
+  git push -q -f origin "HEAD:refs/heads/$branch"
 }
 # Push in batches of about 1.2 GB: GitHub refuses a single push over 2 GB.
 batch=0; n=0
@@ -143,4 +158,4 @@ for f in "$out"/*; do
   if [ "$batch" -gt 1288490188 ]; then commit_push "part $n"; batch=0; fi
 done
 commit_push "done"
-echo "pushed $label to research-export"
+echo "pushed $label to branch $branch"
