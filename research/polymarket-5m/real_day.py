@@ -267,20 +267,22 @@ def implied_vol_section(panel):
 
 
 def strategy_section(panel, fee_rate):
-    head = ("| 策略 | 剩余 | 笔数 | 胜率 | 平均成本 | 净 EV/份 | ROI | t 值 |\n"
-            "|---|---:|---:|---:|---:|---:|---:|---:|")
+    head = ("| 策略 | 剩余 | 笔数 | 胜率 | 平均成本 | 净 EV/份 | ROI | t 值 | 精确 p |\n"
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     lines = [head]
 
     def row(name, tau, win, ask):
         n = len(ask)
         if n < 2:
-            lines.append(f"| {name} | {tau}s | {n} | – | – | – | – | – |")
+            lines.append(f"| {name} | {tau}s | {n} | – | – | – | – | – | – |")
             return
-        pnl = win - ask - bo.taker_fee(ask, fee_rate)
+        cost = ask + bo.taker_fee(ask, fee_rate)
+        pnl = win - cost
         sd = pnl.std(ddof=1)
         t = pnl.mean() / (sd / math.sqrt(n)) if sd > 0 else float("nan")
+        p = bo.fair_price_pvalue(pnl, cost)
         lines.append(f"| {name} | {tau}s | {n} | {win.mean()*100:.1f}% | {ask.mean():.3f} | "
-                     f"{pnl.mean()*100:+.2f}¢ | {pnl.mean()/ask.mean()*100:+.2f}% | {t:+.1f} |")
+                     f"{pnl.mean()*100:+.2f}¢ | {pnl.mean()/ask.mean()*100:+.2f}% | {t:+.1f} | {p:.3f} |")
 
     for tau in TAUS:
         s = panel[(panel["tau"] == tau)]
@@ -435,6 +437,8 @@ Chainlink 是多家交易所聚合后的价格，本身被平滑过，加上断�
 ## 4. 吃单策略（按当时 ask 成交，付 taker 费，每笔 1 份，持有到结算）
 
 {strategy_section(panel, fee_rate)}
+
+精确 p：零假设是“每笔真实胜率 = 买价 + 手续费”（扣费后定价公平），模拟总盈亏有多大概率靠运气达到。胜率接近 100% 的小样本 t 值会严重夸大，以 p 为准；这张表有约 20 行，单行 p < 0.05 也可能是运气（多重检验见 `strategy_zoo.py`）。
 
 触发“买强势方 0.80–0.97”时，当时盘口（最近一次全深度快照，按 `recv_ms`）在强势方卖一上挂了多少量：
 

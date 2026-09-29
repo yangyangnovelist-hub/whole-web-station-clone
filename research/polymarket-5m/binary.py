@@ -100,6 +100,25 @@ def quote_book(mid):
     return bid, ask
 
 
+def fair_price_pvalue(pnl, cost, sims=20000, seed=0):
+    """One-sided p-value for "these trades beat fair prices".
+
+    Null: each trade wins with probability equal to its all-in cost (price +
+    fee), i.e. the market was fairly priced after fees. Simulates the total
+    P&L under that null. Unlike a t-test this stays honest when every trade in
+    the sample happened to win.
+    """
+    pnl, cost = np.asarray(pnl, float), np.asarray(cost, float)
+    if pnl.size == 0:
+        return 1.0
+    rng = np.random.default_rng(seed)
+    total = np.zeros(sims)
+    for start in range(0, pnl.size, 256):
+        c = cost[start:start + 256]
+        total += ((rng.random((sims, c.size)) < c) - c).sum(axis=1)
+    return float((total >= pnl.sum() - 1e-12).mean())
+
+
 def kelly_fraction(q, price, rate=CRYPTO_FEE_RATE):
     """Bankroll fraction for buying at `price` (taker) when the true win prob is q."""
     cost = np.asarray(price) + taker_fee(price, rate)
