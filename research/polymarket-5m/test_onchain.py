@@ -141,3 +141,15 @@ def test_fetch_markets_reads_gamma_events(tmp_path):
     mk = pd.read_csv(oc.paths(tmp_path)["markets"], dtype={"up_token": str})
     assert set(mk["coin"]) == {"btc", "eth"} and not mk["up_won"].any()
     assert mk["up_token"].iloc[0].endswith("-u")
+
+
+def test_robust_delay_ignores_a_single_empty_block_second():
+    tail = pd.Series([0.28, 0.21, 0.03, 0.15, 0.11, 0.02, 0.07, 0.04, 0.01] + [0.01] * 12)
+    assert oc.robust_delay(tail) == 7
+    assert oc.robust_delay(pd.Series([0.5] * 20)) is None
+
+
+def test_report_keeps_a_pass_that_survives_the_robust_delay(root, tmp_path):
+    oc.run(root, tmp_path / "r.md", reps=200)
+    text = (tmp_path / "r.md").read_text()
+    assert "可信度检查" in text and "稳健 D 下仍然通过" in text

@@ -211,6 +211,30 @@ def settlement_delay(fills, markets, span=40, base=(30, 10)):
     return counts, rate, tail, (int(below.index[0]) if len(below) else None)
 
 
+def robust_delay(tail, level=0.05, ahead=10):
+    """First k from which the ratio stays below `level` for `ahead` seconds.
+
+    Polygon mines a block about every two seconds, so single seconds after the
+    close can be nearly empty while later ones are not; the first dip alone
+    understates the delay."""
+    for k in tail.index:
+        if tail.loc[k:k + ahead - 1].max() < level:
+            return int(k)
+    return None
+
+
+def cadence(fills, markets, at=150, span=20, base=(20, 10)):
+    """The same ratio around a second inside the window, where trading goes on:
+    how much per-second counts swing from block timing alone."""
+    ref = {**dict(zip(markets["up_token"], markets["start"] + at)),
+           **dict(zip(markets["down_token"], markets["start"] + at))}
+    rel = fills["timestamp"].to_numpy() - fills["token_asset_id"].astype(object).map(ref).to_numpy(float)
+    rel = rel[np.isfinite(rel) & (rel >= -span) & (rel <= span)].astype(int)
+    counts = pd.Series(rel).value_counts().reindex(range(-span, span + 1), fill_value=0)
+    rate = float(counts.loc[-base[0]:-base[1] - 1].mean())
+    return counts.loc[0:] / rate if rate > 0 else counts.loc[0:] * np.nan
+
+
 def triggers(spot, markets, lag=SIGNAL_LAG):
     """First #101 jump per market: (slug, t, side), known at market second t."""
     vols = rd.vol_forecasts(spot)
@@ -372,6 +396,7 @@ def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None):
           "|---:|---:|---:|---:|---:|---:|"]
     for d in SWEEP:
         L.append(f"| {d} | {fmt(stats(price(main_, tape, d, d + WINDOW), reps))} |")
+    L += robustness(main_, tape, markets, fills, tail, D, passed, reps)
     if len(later):
         L += ["", f"## 之后的日子（{later['day'].min()} 起，事后检查，D = {D}）", ""] + HEAD + [
               f"| 全部 | {fmt(stats(price(later, tape, D, D + WINDOW), reps))} |"]
@@ -383,6 +408,40 @@ def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None):
         prim.drop(columns=["up_token", "down_token", "token"]).to_csv(csv_out, index=False)
     print("\n".join(L))
     return passed
+
+
+def robustness(main_, tape, markets, fills, tail, D, passed, reps):
+    """Checks added after the first run showed a pass at D = 2 that vanished at D = 4.
+    They do not change the preregistered verdict above; they say whether to believe it."""
+    ks = list(range(0, 13)) + [15, 20]
+    mid = cadence(fills, markets)
+    Dr = robust_delay(tail)
+    L = ["", "## 可信度检查（第一次运行之后加的，不改变上面按事先规则的判定）", "",
+         "每秒成交数相对收盘前的比例（收盘后），以及窗口中段第 150 秒前后同样算法的比例（那里交易照常，"
+         "起伏只来自出块节奏）：", "",
+         "| 秒 | " + " | ".join(str(k) for k in ks) + " |", "|---|" + "---:|" * len(ks),
+         "| 收盘后 | " + " | ".join(f"{tail.get(k, np.nan):.3f}" for k in ks) + " |",
+         "| 窗口中段 | " + " | ".join(f"{mid.get(k, np.nan):.2f}" for k in ks) + " |", ""]
+    if Dr is None:
+        L.append("收盘后的比例没有连续 10 秒低于 5%，上链延迟的尾巴看不清。")
+        rob = None
+    else:
+        rob = stats(price(main_, tape, Dr, Dr + WINDOW), reps)
+        L += [f"要求比例**连续 10 秒**低于 5%，D = {Dr} 秒（事先规则只看第一次低于 5% 的那一秒，得到 {D}）。"
+              f"按这个 D，主规则：", ""] + HEAD + [f"| D = {Dr} | {fmt(rob)} |"]
+    L += ["", "按区块时间 1 秒一格看主规则（限价同上，窗口 [t+k, t+k+1)）：", "",
+          "| k | 笔数 | 胜率 | 平均价 | EV/份 | 精确 p |", "|---:|---:|---:|---:|---:|---:|"]
+    for k in range(0, 11):
+        L.append(f"| {k} | {fmt(stats(price(main_, tape, k, k + 1), reps))} |")
+    ok = rob is not None and rob["n"] and rob["ev"] > 0 and rob["p"] < 0.05
+    if passed and not ok:
+        L += ["", "**可信度结论：不采信。** 事先规则判为通过，但它取的 D 太短：上链延迟有一截超过 2 秒，"
+              "区块时间在 t+2 之后的成交里混有触发之前就撮合了的，那些才是赚钱的部分。D 取到让延迟尾巴"
+              "基本排除的长度后，优势消失。这说明过期报价存在，但只存在于触发后一两秒内，"
+              "信号延后 2 秒的做法拿不到；要确认需要带撮合时间的成交记录。"]
+    elif passed:
+        L += ["", "**可信度结论：稳健 D 下仍然通过。**"]
+    return L
 
 
 def main(argv=None):

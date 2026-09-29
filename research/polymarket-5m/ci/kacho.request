@@ -1,6 +1,6 @@
 # Changing this file re-runs .github/workflows/polymarket-kacho.yml on this branch.
 # mode: btc (default) | stage2 | stage3 | diag101 | survey (list HF datasets; "inspect:" lines look inside some)
 #       | onchain (onchain.py: #101's stale-quote test on September on-chain fills; "later:" fetches days after 09-26 too)
-requested: 2026-09-29 test the stale-quote effect on September 2026 on-chain fills (design fixed in onchain.py)
+requested: 2026-09-29 rerun with the robustness checks (block cadence, robust D, 1-second offsets)
 mode: onchain
 later: 2026-09-28
