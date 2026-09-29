@@ -44,3 +44,14 @@ def test_add_ledger_pools_paper_trades(tmp_path):
     assert fw.add_ledger(tmp_path / "l1.csv", store) == 1
     assert fw.add_ledger(tmp_path / "l2.csv", store) == 2
     assert "| 30s | 1 |" in (store / "paper_report.md").read_text(encoding="utf-8")
+
+
+def test_report_tests_the_onchain_rules_on_later_markets_only(tmp_path, monkeypatch):
+    bundle = make_bundle(tmp_path / "bundle")
+    store = tmp_path / "forward"
+    trades([(103, S0, True), (104, S0 + 300, False)]).to_csv(tmp_path / "a.csv", index=False)
+    fw.add(tmp_path / "a.csv", bundle, store)
+    assert "九月链上规律的前向检验" not in fw.report(store, reps=100)  # recorded before the rules existed
+    monkeypatch.setattr(fw, "ONCHAIN_ADDED", 0)
+    text = fw.report(store, reps=100)
+    assert "九月链上规律的前向检验" in text and "| 103 |" in text and "| 104 |" in text

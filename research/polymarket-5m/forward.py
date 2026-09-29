@@ -22,6 +22,7 @@ import real_day as rd
 import strategy_zoo as sz
 
 HERE = Path(__file__).parent
+ONCHAIN_ADDED = 1_790_704_800  # 2026-09-29 18:00 UTC: the first recording run that evaluates #103-#106
 STORE = HERE / "forward"
 TRADE_COLS = ["id", "slug", "start", "side", "price", "fee", "won", "pnl", "t", "kind"]
 
@@ -75,12 +76,22 @@ def report(store=STORE, reps=20000):
     shells = [SimpleNamespace(start=int(s)) for s in markets["start"]]
     text = sz.report(res, shells, reps, confirm=True) + "\n"
     extra = pd.read_csv(tpath) if tpath.exists() else pd.DataFrame(columns=TRADE_COLS)
-    extra = extra[extra["id"] == 101].assign(strategy=0)
     extra["won"] = extra["won"].astype(str).str.lower().isin(["true", "1"])
-    res101 = sz.summarize(extra, [sz.STALE[101]], markets["start"].tolist(), reps, [101])
+    one = extra[extra["id"] == 101].assign(strategy=0)
+    res101 = sz.summarize(one, [sz.STALE[101]], markets["start"].tolist(), reps, [101])
     text += "\n---\n\n" + sz.report(res101, shells, reps, intro=(
         "# #101 的前向检验：{span}\n\n#101（盘口未动的价格跳变）在 kacho 第三阶段通过后才加入前向检验，单独检验："
         "原始 p < 0.05 且 EV > 0 才算在现行市场里复现。只用加入之后录制的数据。\n\n数据：纸面交易录制，{n_mk} 个 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
+    ids = sorted(sz.ONCHAIN)
+    later = markets[markets["start"] >= ONCHAIN_ADDED]
+    if len(later):
+        fam = extra[extra["id"].isin(ids)].assign(strategy=lambda d: d["id"].map(ids.index))
+        res = sz.summarize(fam, [sz.ONCHAIN[i] for i in ids], later["start"].tolist(), reps, ids)
+        text += "\n---\n\n" + sz.report(res, [SimpleNamespace(start=int(s)) for s in later["start"]], reps, intro=(
+            "# 九月链上规律的前向检验：{span}\n\n#103–#106 来自 `makers.py` 在九月链上成交里看到的规律"
+            "（那些是别人主动成交的平均结果），这里检验能直接执行的版本，只用加入之后录制的数据。"
+            "4 条一起按 Bonferroni 校正：原始 p < {alpha:.4f} 且 EV > 0 才算通过。挂单只在之后有成交价更低时才算成交。"
+            "\n\n数据：纸面交易录制，{n_mk} 个 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
     return text
 
 

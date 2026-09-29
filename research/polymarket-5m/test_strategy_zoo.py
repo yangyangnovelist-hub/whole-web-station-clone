@@ -102,3 +102,10 @@ def test_split_holdout_selects_on_one_half_and_tests_on_the_other():
     assert ho[ho["id"] == 1]["passed"].all()
     early = ho[(ho["id"] == 3) & (ho["direction"] == "前半选 → 后半验")]
     assert len(early) == 1 and not early["passed"].iloc[0] and early["ev_test"].iloc[0] < 0
+
+
+def test_maker_bid_respects_its_price_band(markets):
+    m0 = markets[0]
+    assert sz.maker_bid(240, "favourite", 0.60, 0.80)(m0) is None  # the 0.50 bid is outside the band
+    assert sz.maker_bid(240, "favourite", 0.45, 0.55)(m0)["price"] == 0.50
+    assert set(sz.EXTRA) == {101, 102, 103, 104, 105, 106}

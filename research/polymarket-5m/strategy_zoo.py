@@ -279,8 +279,8 @@ def previous_outcome(mode, t=5):
     return f
 
 
-def maker_bid(tau, which):
-    """Join the best bid on one side; filled only if a later print trades through it."""
+def maker_bid(tau, which, lo=PRICE_BAND[0], hi=PRICE_BAND[1]):
+    """Join the best bid on one side when it is in [lo, hi]; filled only if a later print trades through it."""
     def f(m):
         t = bo.WINDOW_S - tau
         r = m.at(t)
@@ -289,7 +289,7 @@ def maker_bid(tau, which):
         fav = "Up" if r["mid"] >= 0.5 else "Down"
         side = fav if which == "favourite" else ("Down" if fav == "Up" else "Up")
         bid = r["bid_up"] if side == "Up" else 1 - r["ask_up"]
-        if not in_band(bid):
+        if not in_band(bid, lo, hi):
             return None
         token = m.up_token if side == "Up" else m.down_token
         g = m.prints(token, (m.start + t) * 1000, m.end * 1000)
@@ -416,6 +416,17 @@ def registry():
 # (102) should be mispriced. Kept outside registry() so ids 1-100 never shift.
 STALE = {101: Strategy("盘口未动的价格跳变 10s z>2 τ=240..60", "K 盘口停滞", stale_move()),
          102: Strategy("盘口与价格都停 20s 买强势方 τ=120..20 [0.60,0.95]", "K 盘口停滞", stale_theta())}
+
+# Added 2026-09-29 from makers.py: on September on-chain fills, resting buyers of the
+# favourite at 0.6-0.8 with 60-30 s left, and of the longshot below 0.1 with 120-60 s left,
+# earned money in both halves of the month, and so did aggressors buying the favourite at
+# 0.6-0.8 with 120-30 s left. Those are averages over trades someone chose to make, so
+# these executable versions are tested only on data recorded after this date.
+ONCHAIN = {103: Strategy("强势方 τ=90 [0.60,0.80]", "L 九月链上", late_favourite(90, 0.60, 0.80)),
+           104: Strategy("强势方 τ=45 [0.60,0.80]", "L 九月链上", late_favourite(45, 0.60, 0.80)),
+           105: Strategy("挂单买强势方 τ=45 买一 [0.60,0.80]", "L 九月链上", maker_bid(45, "favourite", 0.60, 0.80)),
+           106: Strategy("挂单买弱势方 τ=90 买一 [0.02,0.10]", "L 九月链上", maker_bid(90, "longshot", 0.02, 0.10))}
+EXTRA = {**STALE, **ONCHAIN}
 
 
 # ----------------------------------------------------------------- evaluation
@@ -611,7 +622,7 @@ def main(argv=None):
     ap.add_argument("--reps", type=int, default=20000, help="模拟次数（精确 p 值）")
     ap.add_argument("--confirm", action="store_true", help="只检验预注册的候选（用新录制的数据）")
     ap.add_argument("--trades-out", help="逐笔交易另存为 CSV（id 列是注册表编号），供 forward.py 累积")
-    ap.add_argument("--extra", type=int, nargs="*", default=[], help="额外检验 STALE 里的规则，如 101")
+    ap.add_argument("--extra", type=int, nargs="*", default=[], help="额外检验 STALE / ONCHAIN 里的规则，如 101 103")
     args = ap.parse_args(argv)
     markets = build_markets(args.root)
     strategies, ids = registry(), None
@@ -626,7 +637,7 @@ def main(argv=None):
         strategies = [strategies[i - 1] for i in ids]
     if args.extra:
         ids = ids or list(range(1, len(strategies) + 1))
-        strategies = strategies + [STALE[i] for i in args.extra]
+        strategies = strategies + [EXTRA[i] for i in args.extra]
         ids = ids + list(args.extra)
     res, trades = evaluate(markets, strategies, reps=args.reps, ids=ids)
     holdout = None if args.confirm else split_holdout(trades, markets, len(strategies), reps=args.reps)
