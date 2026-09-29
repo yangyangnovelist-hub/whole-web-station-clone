@@ -167,15 +167,17 @@ def outcome_labels(markets, outcomes=None):
     return {}
 
 
-def build_markets(root, outcomes=None, spot=None, limit=None, coin="btc", signal_lag=1):
+def build_markets(root, outcomes=None, spot=None, limit=None, coin="btc", signal_lag=1, detail=False):
     """KachoMarkets for one coin. The Binance close stamped s is known from s+1;
-    `signal_lag` > 1 withholds it longer, so the book has had time to react."""
+    `signal_lag` > 1 withholds it longer, so the book has had time to react.
+    `detail` also keeps top-of-book sizes and whether a tick really arrived that
+    second (`present`), for telling a still market from a stalled recorder."""
     pt = paths(root, coin)
     mk = pd.read_parquet(pt["markets"])
     labels = outcome_labels(mk, outcomes)
     cid2slug = dict(zip(mk["condition_id"], mk["slug"]))
-    cols = ["t", "condition_id", "bu", "au", "bd", "ad", "du", "dd"]
-    ticks = pd.read_parquet(pt["ticks"], columns=cols)
+    book_cols = ["bu", "au", "bd", "ad", "du", "dd"] + (["su", "sau", "sd", "sad"] if detail else [])
+    ticks = pd.read_parquet(pt["ticks"], columns=["t", "condition_id"] + book_cols)
     ticks = ticks[ticks["condition_id"].isin(cid2slug)]
     vols = rd.vol_forecasts(spot) if spot is not None and len(spot) else None
     main_vol = rd.MAIN_VOL
@@ -188,12 +190,16 @@ def build_markets(root, outcomes=None, spot=None, limit=None, coin="btc", signal
         start = slug_start(slug)
         g = g.assign(sec=g["t"].astype("int64") - start + 1)  # usable one second after its stamp
         g = g[(g["sec"] >= -STALE_S) & (g["sec"] < bo.WINDOW_S)].drop_duplicates("sec", keep="last")
-        f = g.set_index("sec")[["bu", "au", "bd", "ad", "du", "dd"]].astype(float) \
-            .reindex(range(-STALE_S, bo.WINDOW_S)).ffill(limit=STALE_S).loc[0:]
+        raw = g.set_index("sec")[book_cols].astype(float).reindex(range(-STALE_S, bo.WINDOW_S))
+        f = raw.ffill(limit=STALE_S).loc[0:]
         bid_up = np.fmax(f["bu"].to_numpy(), 1 - f["ad"].to_numpy()).round(4)
         ask_up = np.fmin(f["au"].to_numpy(), 1 - f["bd"].to_numpy()).round(4)
         rows = pd.DataFrame({"t": grid, "bid_up": bid_up, "ask_up": ask_up, "mid": (bid_up + ask_up) / 2,
                              "ask_down": (1 - bid_up).round(4), "du": f["du"].to_numpy(), "dd": f["dd"].to_numpy()})
+        if detail:
+            for c in ("su", "sau", "sd", "sad"):
+                rows[c] = f[c].to_numpy()
+            rows["present"] = raw["bu"].notna().loc[0:].to_numpy()
         if vols is not None:
             info = start + grid - signal_lag
             v = vols.reindex(info)
@@ -350,17 +356,111 @@ def stage3(root, out, coins=STAGE3_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
     return pooled_test(root, out, dict(sz.STALE), coins, STAGE3_INTRO, reps, lags)
 
 
+DIAG_INTRO = """# #101 是真的还是录制假象？
+
+#101 挑的是“参考价格已经大幅变动、Up 报价却 12 秒以上一动不动”的时刻。这也正是录制程序卡住时的样子：
+如果 kacho 的录制断了，它每秒写下的是冻结的旧报价，看起来像盘口没动，其实真实市场早变了，这些“便宜价”并不存在。
+
+区分方法（跑之前写死）：真实市场里，即使最优价不变，挂单量和 5¢ 内深度也会不停变化；录制卡住时它们一起冻结。
+只看“这段时间内每秒都有真实记录、并且挂单量或深度有变化”（录制确实是活的）的交易，
+这部分每份仍为正且 p < 0.05，#101 才算可信。信号延后 {lag} 秒，和第三阶段相同。"""
+
+
+def diagnose_101(root, out, coins=STAGE3_COINS, lag=STAGE2_LAG, reps=20000):
+    """Split #101's trades by whether the recorder was demonstrably live while the
+    quote sat still, and describe what the book did next."""
+    rule = sz.STALE[101]
+    lookback = 10
+    rows = []
+    for coin in coins:
+        pt = paths(root, coin)
+        if not (pt["markets"].exists() and pt["ticks"].exists()):
+            continue
+        outcomes, spot = load_inputs(root, coin)
+        if spot is None:
+            continue
+        for m in build_markets(root, outcomes, spot, coin=coin, signal_lag=lag, detail=True):
+            tr = rule.fn(m)
+            if tr is None:
+                continue
+            t = tr["t"]
+            r = m.rows
+            w = r.loc[max(0, t - lag - lookback):t]
+            sizes = w[["su", "sau", "sd", "sad"]].to_numpy(float)
+            depth = w[["du", "dd"]].to_numpy(float)
+            moved = lambda a: bool(len(a) > 1 and (np.nan_to_num(np.diff(a, axis=0), nan=1.0) != 0).any())
+            after = r.loc[t + 1:]
+            diff = after[(after["bid_up"] != r.at[t, "bid_up"]) | (after["ask_up"] != r.at[t, "ask_up"])]
+            nxt = int(diff.index[0]) if len(diff) else None
+            toward = None
+            if nxt is not None:
+                dmid = r.at[nxt, "mid"] - r.at[t, "mid"]
+                toward = bool((dmid > 0) == (tr["side"] == "Up")) if dmid != 0 else None
+            won = (tr["side"] == "Up") == m.up_won
+            rows.append({"coin": coin, "slug": m.slug, "start": m.start, "abs": m.start + t, "t": t,
+                         "side": tr["side"], "price": tr["price"], "fee": tr["fee"], "won": won,
+                         "pnl": float(won) - tr["price"] - tr["fee"],
+                         "all_present": bool(w["present"].all()), "sizes_moved": moved(sizes),
+                         "depth_moved": moved(depth), "next_change_s": None if nxt is None else nxt - t,
+                         "moved_toward": toward,
+                         "ask_size": float(r.at[t, "sau"] if tr["side"] == "Up" else r.at[t, "sad"])})
+    d = pd.DataFrame(rows)
+    lines = [DIAG_INTRO.format(lag=lag), ""]
+    if d.empty:
+        text = "\n".join(lines + ["#101 没有成交。"]) + "\n"
+        Path(out).write_text(text, encoding="utf-8")
+        return text
+    d["live"] = d["all_present"] & (d["sizes_moved"] | d["depth_moved"])
+    d = d.sort_values("abs")
+    d["cluster"] = d["abs"].map(lambda a: int(((d["abs"] - a).abs() <= 5).sum()))
+
+    def row(name, g):
+        if len(g) < 2:
+            return f"| {name} | {len(g)} | – | – | – | – |"
+        cost = (g["price"] + g["fee"]).to_numpy()
+        p = bo.fair_price_pvalue(g["pnl"].to_numpy(), cost, sims=reps)
+        return (f"| {name} | {len(g)} | {g['won'].mean() * 100:.0f}% | {g['price'].mean():.3f} | "
+                f"{g['pnl'].mean() * 100:+.2f}¢ | {p:.4f} |")
+
+    lines += ["| 子集 | 笔数 | 胜率 | 平均价 | EV/份 | p |", "|---|---:|---:|---:|---:|---:|",
+              row("全部", d),
+              row("**录制确实是活的**（每秒有记录，且挂单量或深度有变化）", d[d["live"]]),
+              row("每秒有记录，但挂单量和深度都冻结", d[d["all_present"] & ~d["live"]]),
+              row("窗口内有缺秒", d[~d["all_present"]]),
+              row("同一时刻（±5 秒）只有这一笔", d[d["cluster"] == 1]),
+              row("同一时刻有多个币种同时触发", d[d["cluster"] > 1])]
+    for coin, g in d.groupby("coin"):
+        lines.append(row(f"{coin.upper()}（录制活着）", g[g["live"]]))
+    nc = d["next_change_s"].dropna()
+    tw = d["moved_toward"].dropna()
+    lines += ["", f"- 触发后报价多久才变：中位 {nc.median():.0f} 秒，75% 分位 {nc.quantile(.75):.0f} 秒（{len(nc)} 笔有后续变化）。",
+              f"- 报价变化的方向和我们买的方向一致：{tw.mean() * 100:.0f}%（{len(tw)} 笔）。真实的“盘口没跟上”应该明显高于 50%。",
+              f"- 触发时这一边卖一上的挂单量：中位 {d['ask_size'].median():.0f} 份，25% 分位 {d['ask_size'].quantile(.25):.0f} 份。"]
+    live = d[d["live"]]
+    ok = False
+    if len(live) >= 10:
+        p = bo.fair_price_pvalue(live["pnl"].to_numpy(), (live["price"] + live["fee"]).to_numpy(), sims=reps)
+        ok = live["pnl"].mean() > 0 and p < 0.05
+    lines += ["", "**判定：" + ("可信。录制确实活着的那部分仍显著为正。" if ok else
+                               "不可信或证据不足。录制确实活着的那部分不显著为正，优势很可能来自录制冻结。") + "**"]
+    text = "\n".join(lines) + "\n"
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(text, encoding="utf-8")
+    d.to_csv(Path(out).with_suffix(".csv"), index=False)
+    return text
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2", "stage3"):
+    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2", "stage3", "diag101"):
         p = sub.add_parser(name)
         p.add_argument("root", help="放 <coin>_markets.parquet 和 <coin>_ticks.parquet 的目录")
         if name.startswith("fetch"):
             p.add_argument("--coin", default="btc")
         else:
             p.add_argument("--out", default={"run": "real/kacho-btc.md", "stage2": "real/kacho-stage2.md",
-                                             "stage3": "real/kacho-stage3.md"}[name])
+                                             "stage3": "real/kacho-stage3.md", "diag101": "real/kacho-diag101.md"}[name])
             p.add_argument("--reps", type=int, default=20000)
         if name == "run":
             p.add_argument("--limit", type=int, help="只用前 N 个市场（调试用）")
@@ -373,6 +473,8 @@ def main(argv=None):
         print(stage2(args.root, args.out, reps=args.reps))
     elif args.cmd == "stage3":
         print(stage3(args.root, args.out, reps=args.reps))
+    elif args.cmd == "diag101":
+        print(diagnose_101(args.root, args.out, reps=args.reps))
     else:
         print(run(args.root, args.out, args.reps, args.limit))
 

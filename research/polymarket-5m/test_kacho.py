@@ -112,3 +112,15 @@ def test_stale_rules_fire_only_on_a_still_book(tmp_path):
         assert 180 <= trade["t"] <= 280 and 0.60 <= trade["price"] <= 0.95
     text = kc.stage3(tmp_path, tmp_path / "s3.md", coins=("sol",), reps=200)
     assert "第三阶段" in text and "| 101 |" in text and "| 102 |" in text
+
+
+def test_diag101_separates_live_from_frozen_recordings(tmp_path):
+    write_coin(tmp_path, "btc", seed=5)
+    m = kc.build_markets(tmp_path, spot=pd.read_parquet(tmp_path / "btc_binance_1s.parquet"), detail=True)[0]
+    assert {"su", "sau", "sd", "sad", "present"} <= set(m.rows.columns) and m.rows["present"].all()
+    text = kc.diagnose_101(tmp_path, tmp_path / "d.md", coins=("btc",), reps=200)
+    assert "判定" in text
+    # The synthetic book never changes size, so any #101 trade here counts as a frozen recording.
+    d = pd.read_csv(tmp_path / "d.csv") if (tmp_path / "d.csv").exists() else pd.DataFrame()
+    if len(d):
+        assert not d["live"].any() and d["all_present"].all()
