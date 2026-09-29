@@ -97,3 +97,23 @@ def test_replay_on_synthetic_bundle(tmp_path):
     # The synthetic book quotes the winner at 0.97 in the last 100s, with 150 shares at the ask.
     assert len(ledger) > 0
     assert ledger["won"].all() and (ledger["ask"] == 0.98).all() and (ledger["shares"] == 100).all()
+
+
+def test_book_messages_with_buys_and_sells():
+    # Older market-channel payloads name the sides buys/sells; they must not wipe the ladder.
+    lad = {}
+    pt.apply_clob_message(lad, {**BOOK_UP, "bids": None, "asks": None}, 1)
+    old = {k: v for k, v in BOOK_UP.items() if k not in ("bids", "asks")}
+    pt.apply_clob_message(lad, {**old, "buys": BOOK_UP["bids"], "sells": BOOK_UP["asks"]}, 2)
+    assert (lad["UP"].bid, lad["UP"].ask) == (0.88, 0.90)
+
+
+def test_fetch_market_asks_for_closed_markets_first():
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return [GAMMA] if "closed=true" in url else []
+
+    assert pt.fetch_market(fetch, GAMMA["slug"]) == GAMMA and len(asked) == 1
+    assert pt.fetch_market(lambda url: [], GAMMA["slug"]) is None

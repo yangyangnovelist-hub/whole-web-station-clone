@@ -32,6 +32,8 @@ import pandas as pd
 import binary as bo
 
 GAMMA = "https://gamma-api.polymarket.com/markets?slug={slug}"
+# /markets leaves closed markets out unless asked, so resolution lookups ask twice.
+GAMMA_CLOSED = GAMMA + "&closed=true"
 CLOB_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 RTDS_WS = "wss://ws-live-data.polymarket.com"
 SLUG = "btc-updown-5m-{start}"
@@ -68,6 +70,15 @@ class Ladder:
         return (self.asks if side == "ask" else self.bids).get(price, NAN)
 
 
+def fetch_market(fetch, slug):
+    """Latest Gamma record for one slug, closed or open, or None."""
+    for url in (GAMMA_CLOSED, GAMMA):
+        found = fetch(url.format(slug=slug))
+        if found:
+            return found[0]
+    return None
+
+
 def _levels(rows):
     out = {}
     for r in rows or []:
@@ -84,9 +95,11 @@ def apply_clob_message(ladders, msg, recv_ms):
             apply_clob_message(ladders, m, recv_ms)
         return
     et = msg.get("event_type")
-    if et == "book":
+    if et == "book":  # the market channel has used both bids/asks and buys/sells
         lad = ladders.setdefault(msg["asset_id"], Ladder())
-        lad.bids, lad.asks, lad.recv_ms = _levels(msg.get("bids")), _levels(msg.get("asks")), recv_ms
+        lad.bids = _levels(msg.get("bids") if "bids" in msg else msg.get("buys"))
+        lad.asks = _levels(msg.get("asks") if "asks" in msg else msg.get("sells"))
+        lad.recv_ms = recv_ms
     elif et == "price_change":
         for pc in msg.get("price_changes", []):
             lad = ladders.setdefault(pc["asset_id"], Ladder())
@@ -272,15 +285,16 @@ class LiveTrader:
         return record
 
     def resolve_pending(self):
-        still = []
+        still, now = [], time.time()
         for order in self.pending:
-            if time.time() < order["end"] + 30:
+            if now < max(order["end"] + 30, order.get("retry_at", 0)):
                 still.append(order)
                 continue
+            order["retry_at"] = now + 20
             try:
-                m = self.fetch(GAMMA.format(slug=order["slug"]))[0]
-                up_won = parse_gamma_market(m)["up_won"]
-            except Exception as e:  # network hiccup: try again next round
+                m = fetch_market(self.fetch, order["slug"])
+                up_won = parse_gamma_market(m)["up_won"] if m else None
+            except Exception as e:  # network hiccup: try again later
                 self.rec.write("errors", {"at": now_ms(), "where": "resolve", "err": repr(e)})
                 still.append(order)
                 continue
@@ -300,8 +314,8 @@ class LiveTrader:
             if now < mk["end"] + 60 or now < mk.get("retry_at", 0):
                 continue
             try:
-                m = self.fetch(GAMMA.format(slug=slug))[0]
-                resolved = parse_gamma_market(m)["up_won"] is not None
+                m = fetch_market(self.fetch, slug)
+                resolved = m is not None and parse_gamma_market(m)["up_won"] is not None
             except Exception as e:
                 self.rec.write("errors", {"at": now_ms(), "where": "outcome", "slug": slug, "err": repr(e)})
                 resolved = False

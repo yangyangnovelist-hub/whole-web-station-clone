@@ -40,7 +40,11 @@ def recorded(tmp_path_factory):
     spot = dict(zip(secs, price))
     twap = {s: np.mean([spot[x] for x in range(s - 59, s + 1) if x in spot]) for s in (S0, S0 + 300, S0 + 600)}
     won = {start: bool(twap[start + 300] >= twap[start]) for start in (S0, S0 + 300)}
-    trader = pt.LiveTrader(out, P, fetch=lambda url: [gamma(int(url.rsplit("-", 1)[1]), won[int(url.rsplit("-", 1)[1])])])
+    def fetch(url):
+        start = int(url.split("btc-updown-5m-")[1].split("&")[0])
+        return [gamma(start, won[start])]
+
+    trader = pt.LiveTrader(out, P, fetch=fetch)
     for s, v in zip(secs, price):
         trader.on_rtds(json.dumps({"topic": "crypto_prices_chainlink", "type": "update",
                                    "payload": {"symbol": "btc/usd", "timestamp": int(s) * 1000, "value": v}}),
@@ -121,6 +125,26 @@ def test_fetch_outcomes_backfills_markets_a_run_missed(tmp_path):
         return [gamma(S0, up_won=False)]
 
     assert rc.fetch_outcomes(tmp_path, fetch=fetch) == 0
-    assert asked == [pt.GAMMA.format(slug=f"btc-updown-5m-{S0}")]
+    assert asked == [pt.GAMMA_CLOSED.format(slug=f"btc-updown-5m-{S0}")]
     latest = [json.loads(line) for line in next(tmp_path.glob("raw/*/markets.jsonl")).read_text().splitlines()]
     assert latest[-1]["slug"] == f"btc-updown-5m-{S0}" and latest[-1]["closed"]
+
+
+def test_diagnose_prints_decision_time_books(recorded, capsys):
+    out, _, _ = recorded
+    rc.diagnose(out)
+    text = capsys.readouterr().out
+    assert "event types:" in text and "example book:" in text and "tau=30:" in text
+    assert f"btc-updown-5m-{S0}" in text
+
+
+def test_zoo_handles_a_recording_without_resolved_markets(tmp_path):
+    rec = pt.Recorder(tmp_path)
+    rec.write("markets", gamma(S0))
+    rec.write("rtds", {"recv_ms": S0 * 1000, "msg": {"topic": "crypto_prices_chainlink", "payload": {
+        "symbol": "btc/usd", "timestamp": S0 * 1000, "value": 1.0}}})
+    rec.write("clob", {"recv_ms": S0 * 1000, "msg": book(f"up{S0}", 0.4, 0.6)})
+    rc.build(tmp_path, tmp_path / "bundle")
+    assert sz.build_markets(tmp_path / "bundle") == []
+    sz.main([str(tmp_path / "bundle"), "--confirm", "--trades-out", str(tmp_path / "t.csv")])
+    assert pd.read_csv(tmp_path / "t.csv").empty

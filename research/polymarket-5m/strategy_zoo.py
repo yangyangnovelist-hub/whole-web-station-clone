@@ -121,6 +121,8 @@ def build_markets(root):
     quotes = rd.load_quotes(root, tokens)
     vols = rd.vol_forecasts(spot)
     panel = rd.build_panel(markets, spot, quotes, vols)
+    if panel.empty:
+        return []
     books, trades = load_books(root, tokens), load_trades(root, tokens)
     outcome = dict(zip(markets["start"], markets["up_won"]))
     meta = markets.set_index("slug")
@@ -540,6 +542,12 @@ def main(argv=None):
     args = ap.parse_args(argv)
     markets = build_markets(args.root)
     strategies, ids = registry(), None
+    if not markets:
+        print("no resolved market with a strike and quotes; nothing to test")
+        if args.trades_out:
+            pd.DataFrame(columns=["id", "slug", "start", "side", "price", "fee", "won", "pnl", "t", "kind"]) \
+                .to_csv(args.trades_out, index=False)
+        return
     if args.confirm:
         ids = list(PREREGISTERED)
         strategies = [strategies[i - 1] for i in ids]

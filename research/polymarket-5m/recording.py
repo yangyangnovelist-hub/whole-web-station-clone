@@ -108,16 +108,60 @@ def fetch_outcomes(src, fetch=pt.fetch_json, now=None):
         try:
             if pt.parse_gamma_market(m)["up_won"] is not None or pt.parse_gamma_market(m)["end"] > now - 30:
                 continue
-            fresh = fetch(pt.GAMMA.format(slug=slug))
+            fresh = pt.fetch_market(fetch, slug)
         except Exception as e:  # keep going; the market simply stays unresolved
             rec.write("errors", {"at": pt.now_ms(), "where": "fetch_outcomes", "slug": slug, "err": repr(e)})
             missing += 1
             continue
-        if fresh and pt.parse_gamma_market(fresh[0])["up_won"] is not None:
-            rec.write("markets", fresh[0])
+        if fresh and pt.parse_gamma_market(fresh)["up_won"] is not None:
+            rec.write("markets", fresh)
         else:
             missing += 1
     return missing
+
+
+def diagnose(src, taus=(60, 30), sample_chars=700):
+    """Print what the recorder actually received: event types, one raw example of
+    each, and the replayed top of book at each decision time. For runs whose raw
+    files cannot be downloaded, the job log is the only window into them."""
+    counts, examples, first_seen = {}, {}, {}
+    ladders, tops = {}, {}
+    markets = {}
+    for m in iter_jsonl(raw_files(src, "markets")):
+        try:
+            mk = pt.parse_gamma_market(m)
+            markets[mk["slug"]] = mk
+        except (ValueError, KeyError, TypeError):
+            continue
+    checks = sorted((mk["end"] - tau, mk["slug"], tau) for mk in markets.values() for tau in taus)
+    ci = 0
+    for rec in iter_jsonl(raw_files(src, "clob")):
+        ms, msg = int(rec["recv_ms"]), rec.get("msg")
+        while ci < len(checks) and checks[ci][0] * 1000 <= ms:
+            _, slug, tau = checks[ci]
+            mk = markets[slug]
+            tops[(slug, tau)] = {side: (ladders[t].bid, ladders[t].ask, len(ladders[t].bids), len(ladders[t].asks))
+                                 if t in ladders else None
+                                 for side, t in (("up", mk["up_token"]), ("down", mk["down_token"]))}
+            ci += 1
+        for m in msg if isinstance(msg, list) else [msg]:
+            et = m.get("event_type", "?") if isinstance(m, dict) else type(m).__name__
+            counts[et] = counts.get(et, 0) + 1
+            examples.setdefault(et, json.dumps(m)[:sample_chars])
+            if isinstance(m, dict) and m.get("asset_id"):
+                first_seen.setdefault(m["asset_id"], (ms, et))
+        pt.apply_clob_message(ladders, msg, ms)
+    print("event types:", json.dumps(counts))
+    for et, ex in examples.items():
+        print(f"example {et}: {ex}")
+    for slug, mk in sorted(markets.items()):
+        seen = {side: first_seen.get(tok) for side, tok in (("up", mk["up_token"]), ("down", mk["down_token"]))}
+        print(f"{slug} first message per token: {seen} resolved={mk['up_won'] is not None}")
+        for tau in taus:
+            print(f"  tau={tau}: {tops.get((slug, tau))}")
+    rtds = list(iter_jsonl(raw_files(src, "rtds")))[:3]
+    for r in rtds:
+        print("rtds example:", json.dumps(r)[:sample_chars])
 
 
 def _top(x):
@@ -216,7 +260,11 @@ def main(argv=None):
     ap.add_argument("src", help="paper_trader.py live 的 --out 目录")
     ap.add_argument("--out", help="输出目录（默认 <src>/bundle）")
     ap.add_argument("--fetch-outcomes", action="store_true", help="先向 Gamma 补取尚未结算市场的结果")
+    ap.add_argument("--diagnose", action="store_true", help="只打印收到的消息类型、样例和决策时点的盘口，不转换")
     args = ap.parse_args(argv)
+    if args.diagnose:
+        diagnose(args.src)
+        return
     if args.fetch_outcomes:
         print(f"unresolved after fetch: {fetch_outcomes(args.src)}")
     counts = build(args.src, args.out or Path(args.src) / "bundle")

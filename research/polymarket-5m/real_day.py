@@ -165,6 +165,8 @@ def build_panel(markets, spot, quotes, vols):
         for name in VOL_MODELS:
             frame[name] = vols[name].reindex(info_sec).to_numpy()
         rows.append(frame)
+    if not rows:  # e.g. a short recording where no market has both a strike and a close
+        return pd.DataFrame()
     panel = pd.concat(rows, ignore_index=True)
     panel["mid"] = (panel["bid_up"] + panel["ask_up"]) / 2
     panel["ask_down"] = 1 - panel["bid_up"]
