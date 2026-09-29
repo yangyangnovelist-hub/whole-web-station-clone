@@ -9,16 +9,14 @@ S0 = 1_774_310_400  # 2026-03-24, inside the kacho period
 N = 40
 
 
-@pytest.fixture(scope="module")
-def root(tmp_path_factory):
+def write_coin(root, coin, seed=7):
     """A kacho-shaped dataset: N markets, the winner quoted at 0.90/0.91 after t=200."""
-    root = tmp_path_factory.mktemp("kacho")
-    rng = np.random.default_rng(7)
+    rng = np.random.default_rng(seed)
     won = rng.random(N) < 0.5
     markets, ticks = [], []
     for i in range(N):
         start = S0 + 300 * i
-        slug, cid = f"btc-updown-5m-{start}", f"0x{i:04x}"
+        slug, cid = f"{coin}-updown-5m-{start}", f"0x{coin}{i:04x}"
         markets.append({"slug": slug, "condition_id": cid, "outcome": "Up" if won[i] else "Down"})
         for t in range(-5, 300):
             up = (0.90 if won[i] else 0.09) if t > 200 else 0.49
@@ -28,12 +26,18 @@ def root(tmp_path_factory):
             ticks.append({"t": start + t, "condition_id": cid, "bu": bu, "au": au, "bd": round(1 - au, 2),
                           "ad": round(1 - bu, 2), "su": 10.0, "sau": 10.0, "sd": 10.0, "sad": 10.0,
                           "du": 100.0, "dd": 50.0})
-    pd.DataFrame(markets).to_parquet(root / "btc_markets.parquet", index=False)
-    pd.DataFrame(ticks).to_parquet(root / "btc_ticks.parquet", index=False)
+    pd.DataFrame(markets).to_parquet(root / f"{coin}_markets.parquet", index=False)
+    pd.DataFrame(ticks).to_parquet(root / f"{coin}_ticks.parquet", index=False)
     secs = np.arange(S0 - 3600, S0 + 300 * N + 300)
     price = 70_000 * np.exp(np.cumsum(rng.normal(0, 1e-4, len(secs))))
-    pd.DataFrame({"sec": secs, "value": price}).to_parquet(root / "binance_1s.parquet", index=False)
-    return root, dict(zip((m["slug"] for m in markets), won))
+    pd.DataFrame({"sec": secs, "value": price}).to_parquet(root / f"{coin}_binance_1s.parquet", index=False)
+    return dict(zip((m["slug"] for m in markets), won))
+
+
+@pytest.fixture(scope="module")
+def root(tmp_path_factory):
+    root = tmp_path_factory.mktemp("kacho")
+    return root, write_coin(root, "btc")
 
 
 def test_quotes_are_used_one_second_after_their_stamp(root):
@@ -54,7 +58,7 @@ def test_outcomes_prefer_gamma_over_dataset(root):
 
 def test_candidates_trade_on_kacho(root):
     path, won = root
-    spot = pd.read_parquet(path / "binance_1s.parquet")
+    spot = pd.read_parquet(path / "btc_binance_1s.parquet")
     markets = kc.build_markets(path, spot=spot)
     fav = [sz.late_favourite(30, 0.85, 0.99)(m) for m in markets]
     assert all(f is not None and (f["side"] == "Up") == won[m.slug] for m, f in zip(markets, fav))
@@ -74,3 +78,21 @@ def test_run_writes_report(root, tmp_path):
     res = pd.read_csv(tmp_path / "kacho.csv")
     assert res["id"].tolist() == list(sz.PREREGISTERED)
     assert res.loc[res["id"] == 11, "n"].item() == N  # [0.85, 0.99] at 30s catches every winner at 0.91
+
+
+def test_signal_lag_withholds_the_price(root):
+    path, _ = root
+    spot = pd.read_parquet(path / "btc_binance_1s.parquet")
+    m1 = kc.build_markets(path, spot=spot, limit=1)[0]
+    m2 = kc.build_markets(path, spot=spot, limit=1, signal_lag=2)[0]
+    assert m1.at(60)["t_info"] == 59 and m2.at(60)["t_info"] == 58
+    assert m2.at(60)["log_spot"] == m1.at(59)["log_spot"]
+
+
+def test_stage2_pools_other_coins(tmp_path):
+    write_coin(tmp_path, "eth", seed=11)
+    text = kc.stage2(tmp_path, tmp_path / "s2.md", coins=("eth", "sol"), reps=200)
+    assert "主检验：信号延后 2 秒" in text and "缺数据、未参与：sol" in text
+    assert "| 62 |" in text and "| 54 |" in text and "结论：" in text
+    per_coin = pd.read_csv(tmp_path / "s2.csv")
+    assert set(per_coin["coin"]) == {"eth"} and set(per_coin["lag"]) == {1, 2}

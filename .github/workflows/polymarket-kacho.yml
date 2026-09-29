@@ -2,7 +2,9 @@ name: polymarket-kacho
 
 # Runs research/polymarket-5m/kacho.py on a GitHub runner, which can reach
 # Hugging Face, Gamma and Binance, and commits the report to this branch.
-# One run per change to ci/kacho.request. Nothing here trades or uses a key.
+# One run per change to ci/kacho.request; a line "mode: stage2" there runs the
+# stage-2 test on the other coins instead of the BTC check. Nothing here trades
+# or uses a key.
 on:
   push:
     branches: [claude/polymarket-options-strategy-1lc7i4]
@@ -34,7 +36,28 @@ jobs:
           cache-dependency-path: research/polymarket-5m/requirements.txt
       - run: pip install -r requirements.txt
 
+      - name: Mode
+        id: mode
+        run: |
+          if grep -q "^mode: stage2" ci/kacho.request; then echo "mode=stage2"; else echo "mode=btc"; fi >> "$GITHUB_OUTPUT"
+
+      - name: "Stage 2: download, resolve and test ETH/SOL/XRP/DOGE"
+        if: steps.mode.outputs.mode == 'stage2'
+        run: |
+          mkdir -p "$RUNNER_TEMP/kacho"
+          for c in eth sol xrp doge; do
+            for k in markets ticks; do
+              curl -fSL --retry 5 -o "$RUNNER_TEMP/kacho/${c}_$k.parquet" \
+                "https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/${c}_$k.parquet" || true
+            done
+            python kacho.py fetch-outcomes "$RUNNER_TEMP/kacho" --coin "$c" || true
+            python kacho.py fetch-binance "$RUNNER_TEMP/kacho" --coin "$c" || true
+          done
+          ls -la "$RUNNER_TEMP/kacho"
+          python kacho.py stage2 "$RUNNER_TEMP/kacho" --out real/kacho-stage2.md
+
       - name: Download the kacho.io BTC files (CC0)
+        if: steps.mode.outputs.mode == 'btc'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
           for k in markets ticks; do
@@ -51,22 +74,25 @@ jobs:
           PY
 
       - name: Official outcomes from Gamma
+        if: steps.mode.outputs.mode == 'btc'
         continue-on-error: true
         run: python kacho.py fetch-outcomes "$RUNNER_TEMP/kacho"
 
       - name: Binance 1s closes (price source for the momentum rules)
+        if: steps.mode.outputs.mode == 'btc'
         continue-on-error: true
         run: python kacho.py fetch-binance "$RUNNER_TEMP/kacho"
 
       - name: Test the preregistered candidates
+        if: steps.mode.outputs.mode == 'btc'
         run: python kacho.py run "$RUNNER_TEMP/kacho" --out real/kacho-btc.md
 
       - name: Commit the report
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-btc*
-          git commit -q -m "research: kacho.io check of the preregistered candidates" \
+          git add real/kacho-*
+          git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
             -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0

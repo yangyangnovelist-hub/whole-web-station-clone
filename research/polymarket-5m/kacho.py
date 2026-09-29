@@ -3,6 +3,7 @@
     python kacho.py fetch-outcomes data/kacho          # official outcomes from Gamma
     python kacho.py fetch-binance data/kacho           # Binance 1s closes for the same days
     python kacho.py run data/kacho --out real/kacho-btc.md
+    python kacho.py stage2 data/kacho --out real/kacho-stage2.md   # after fetching eth/sol/xrp/doge
 
 kacho.io recorded per-second top of book for every Polymarket BTC 5m market
 from 2026-03-24 to 2026-05-18 (CC0, huggingface.co/datasets/kachoio/
@@ -43,8 +44,24 @@ import real_day as rd
 import strategy_zoo as sz
 
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
-BINANCE = "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1s/BTCUSDT-1s-{d}.zip"
+BINANCE = "https://data.binance.vision/data/spot/daily/klines/{sym}/1s/{sym}-1s-{d}.zip"
 STALE_S = 5
+
+# Stage 2, fixed on 2026-09-29 after the BTC run and before any other coin was
+# loaded: the best preregistered candidate on BTC (#62) and the best of all 100
+# on BTC (#54), both Binance-momentum rules, tested on the other four coins
+# pooled. The signal is lagged 2s, so the quote used is never older than the
+# price move that triggers it (kacho stamps quotes per second). Pass: pooled
+# p < 0.05 / 2 and EV > 0 at that lag.
+STAGE2 = (62, 54)
+STAGE2_COINS = ("eth", "sol", "xrp", "doge")
+STAGE2_LAG = 2
+
+
+def paths(root, coin="btc"):
+    root = Path(root)
+    return {"markets": root / f"{coin}_markets.parquet", "ticks": root / f"{coin}_ticks.parquet",
+            "outcomes": root / f"{coin}_outcomes.csv", "binance": root / f"{coin}_binance_1s.parquet"}
 
 
 def _get(url, timeout=60, tries=5):
@@ -65,10 +82,11 @@ def slug_start(slug):
 
 # ------------------------------------------------------------------- fetching
 
-def fetch_outcomes(root, batch=100):
+def fetch_outcomes(root, coin="btc", batch=100):
     """Official outcome per slug from Gamma events (the dataset's own label is
     inferred from the last tick and is missing or wrong for some markets)."""
-    slugs = pd.read_parquet(Path(root) / "btc_markets.parquet", columns=["slug"])["slug"].dropna().tolist()
+    pt = paths(root, coin)
+    slugs = pd.read_parquet(pt["markets"], columns=["slug"])["slug"].dropna().tolist()
 
     def one(chunk):
         q = "&".join(f"slug={s}" for s in chunk) + f"&limit={len(chunk)}"
@@ -88,20 +106,21 @@ def fetch_outcomes(root, batch=100):
     with ThreadPoolExecutor(4) as ex:
         rows = [r for part in ex.map(one, [slugs[i:i + batch] for i in range(0, len(slugs), batch)]) for r in part]
     out = pd.DataFrame(rows, columns=["slug", "up_won"]).drop_duplicates("slug")
-    out.to_csv(Path(root) / "outcomes.csv", index=False)
+    out.to_csv(pt["outcomes"], index=False)
     return len(out), len(slugs)
 
 
-def fetch_binance(root):
-    """Binance BTCUSDT 1s closes for every day the markets cover, as sec,value."""
-    starts = pd.read_parquet(Path(root) / "btc_markets.parquet", columns=["slug"])["slug"].dropna().map(slug_start)
+def fetch_binance(root, coin="btc"):
+    """Binance <COIN>USDT 1s closes for every day the markets cover, as sec,value."""
+    pt, sym = paths(root, coin), f"{coin.upper()}USDT"
+    starts = pd.read_parquet(pt["markets"], columns=["slug"])["slug"].dropna().map(slug_start)
     d0 = datetime.fromtimestamp(starts.min() - 3600, timezone.utc).date()
     d1 = datetime.fromtimestamp(starts.max() + 600, timezone.utc).date()
     days = [d0 + timedelta(days=i) for i in range((d1 - d0).days + 1)]
 
     def one(d):
         try:
-            blob = _get(BINANCE.format(d=d.isoformat()), timeout=120)
+            blob = _get(BINANCE.format(sym=sym, d=d.isoformat()), timeout=120)
         except Exception:
             return None
         with zipfile.ZipFile(io.BytesIO(blob)) as z:
@@ -113,7 +132,7 @@ def fetch_binance(root):
     with ThreadPoolExecutor(8) as ex:
         parts = [p for p in ex.map(one, days) if p is not None]
     spot = pd.concat(parts).drop_duplicates("sec").sort_values("sec")
-    spot.to_parquet(Path(root) / "binance_1s.parquet", index=False)
+    spot.to_parquet(pt["binance"], index=False)
     return len(parts), len(days)
 
 
@@ -146,13 +165,15 @@ def outcome_labels(markets, outcomes=None):
     return {}
 
 
-def build_markets(root, outcomes=None, spot=None, limit=None):
-    root = Path(root)
-    mk = pd.read_parquet(root / "btc_markets.parquet")
+def build_markets(root, outcomes=None, spot=None, limit=None, coin="btc", signal_lag=1):
+    """KachoMarkets for one coin. The Binance close stamped s is known from s+1;
+    `signal_lag` > 1 withholds it longer, so the book has had time to react."""
+    pt = paths(root, coin)
+    mk = pd.read_parquet(pt["markets"])
     labels = outcome_labels(mk, outcomes)
     cid2slug = dict(zip(mk["condition_id"], mk["slug"]))
     cols = ["t", "condition_id", "bu", "au", "bd", "ad", "du", "dd"]
-    ticks = pd.read_parquet(root / "btc_ticks.parquet", columns=cols)
+    ticks = pd.read_parquet(pt["ticks"], columns=cols)
     ticks = ticks[ticks["condition_id"].isin(cid2slug)]
     vols = rd.vol_forecasts(spot) if spot is not None and len(spot) else None
     main_vol = rd.MAIN_VOL
@@ -172,16 +193,16 @@ def build_markets(root, outcomes=None, spot=None, limit=None):
         rows = pd.DataFrame({"t": grid, "bid_up": bid_up, "ask_up": ask_up, "mid": (bid_up + ask_up) / 2,
                              "ask_down": (1 - bid_up).round(4), "du": f["du"].to_numpy(), "dd": f["dd"].to_numpy()})
         if vols is not None:
-            info = start + grid - 1  # the 1s close stamped s is known from s+1
+            info = start + grid - signal_lag
             v = vols.reindex(info)
-            rows = rows.assign(t_info=grid - 1, log_spot=v["log_spot"].to_numpy(),
+            rows = rows.assign(t_info=grid - signal_lag, log_spot=v["log_spot"].to_numpy(),
                                history_s=v["history_s"].to_numpy(), **{main_vol: v[main_vol].to_numpy()})
             rows["spot_ok"] = np.isfinite(rows["log_spot"])
         else:
             rows = rows.assign(t_info=0, log_spot=np.nan, history_s=0, spot_ok=False, **{main_vol: np.nan})
         rows[f"p[{main_vol}]"] = np.nan
         out.append(KachoMarket(slug, start, start + bo.WINDOW_S, bool(labels[slug]),
-                               labels.get(f"btc-updown-5m-{start - bo.WINDOW_S}"), "up", "down",
+                               labels.get(f"{slug.rsplit('-', 1)[0]}-{start - bo.WINDOW_S}"), "up", "down",
                                rows.set_index("t"), vols["log_spot"] if vols is not None else pd.Series(dtype=float),
                                {}, {}))
         if limit and len(out) >= limit:
@@ -202,10 +223,15 @@ INTRO = """# 预注册候选在 kacho.io 数据上的检验：{span}
 数据：kacho.io，{n_mk} 个 BTC 5 分钟市场，每秒最优报价。"""
 
 
+def load_inputs(root, coin):
+    pt = paths(root, coin)
+    outcomes = pd.read_csv(pt["outcomes"]) if pt["outcomes"].exists() else None
+    spot = pd.read_parquet(pt["binance"]) if pt["binance"].exists() else None
+    return outcomes, spot
+
+
 def run(root, out, reps=20000, limit=None):
-    root = Path(root)
-    outcomes = pd.read_csv(root / "outcomes.csv") if (root / "outcomes.csv").exists() else None
-    spot = pd.read_parquet(root / "binance_1s.parquet") if (root / "binance_1s.parquet").exists() else None
+    outcomes, spot = load_inputs(root, "btc")
     markets = build_markets(root, outcomes, spot, limit)
     reg = sz.registry()
     ids = list(sz.PREREGISTERED)
@@ -225,21 +251,99 @@ def run(root, out, reps=20000, limit=None):
     return text
 
 
+STAGE2_INTRO = """# 第二阶段：动量规则在其他币种上的检验
+
+规则在跑之前写死（kacho.STAGE2，2026-09-29）：只检验在 BTC 上表现最好的两条币安动量规则
+#62「剩 240 秒、10 秒涨跌超过 2σ 就跟」和 #54「剩 60 秒、10 秒涨跌超过 2σ 就跟」，
+数据换成 kacho.io 的 {coins}（这些币种的数据从没用来挑选任何策略），合并检验。
+价格信号额外延后到 {lag} 秒，保证用到的盘口报价不会比触发它的价格变动更旧，避免“拿旧报价对新价格”的假优势。
+通过标准：合并后 p < 0.05 / 2 = 0.025，且 EV > 0。"""
+
+
+def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
+    reg = sz.registry()
+    ids = list(STAGE2)
+    strategies = [reg[i - 1] for i in ids]
+    pooled = {lag: [] for lag in lags}
+    starts = {lag: [] for lag in lags}
+    per_coin, missing = [], []
+    for coin in coins:
+        pt = paths(root, coin)
+        if not (pt["markets"].exists() and pt["ticks"].exists()):
+            missing.append(coin)
+            continue
+        outcomes, spot = load_inputs(root, coin)
+        if spot is None:
+            missing.append(f"{coin}（无币安价格）")
+            continue
+        for lag in lags:
+            markets = build_markets(root, outcomes, spot, coin=coin, signal_lag=lag)
+            trades, _ = sz.run_all(markets, strategies)
+            ms = [m.start for m in markets]
+            pooled[lag].append(trades)
+            starts[lag] += ms
+            res = sz.summarize(trades, strategies, ms or [0], reps, ids)
+            per_coin += [{"coin": coin, "lag": lag, "markets": len(markets), **r} for r in res.to_dict("records")]
+            print(f"{coin} lag={lag}: {len(markets)} markets, {len(trades)} trades", flush=True)
+            del markets
+    lines = [STAGE2_INTRO.format(coins="、".join(c.upper() for c in coins), lag=STAGE2_LAG)]
+    if missing:
+        lines += ["", f"缺数据、未参与：{'、'.join(missing)}。"]
+    verdict = None
+    for lag in lags:
+        trades = pd.concat(pooled[lag], ignore_index=True) if pooled[lag] else pd.DataFrame(columns=["strategy"])
+        res = sz.summarize(trades, strategies, starts[lag] or [0], reps, ids)
+        head = "主检验" if lag == STAGE2_LAG else "参考（信号只延后 1 秒，和 BTC 那次相同）"
+        lines += ["", f"## {head}：信号延后 {lag} 秒，{len(set(starts[lag]))} 个市场", "",
+                  "| # | 策略 | 笔数 | 胜率 | 平均价 | EV/份 | ROI | 原始 p | 校正 p | 前半 EV | 后半 EV | 通过 |",
+                  "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:-:|"]
+        for r in res.itertuples():
+            ok = lag == STAGE2_LAG and r.n >= 10 and r.p < 0.05 / len(ids) and r.ev > 0
+            lines.append(f"| {r.id} | {r.name} | {r.n} | {sz.fmt(r.win * 100 if r.n else np.nan, '.0f')}% | "
+                         f"{sz.fmt(r.price, '.3f')} | {sz.fmt(r.ev * 100 if r.n else np.nan, '+.2f')}¢ | "
+                         f"{sz.fmt(r.roi * 100 if r.n else np.nan, '+.1f')}% | {r.p:.4f} | {r.p_fwer:.4f} | "
+                         f"{sz.fmt(r.ev1 * 100 if np.isfinite(r.ev1) else np.nan, '+.2f')}¢ | "
+                         f"{sz.fmt(r.ev2 * 100 if np.isfinite(r.ev2) else np.nan, '+.2f')}¢ | {'✓' if ok else ''} |")
+        if lag == STAGE2_LAG:
+            verdict = res.assign(passed=(res["n"] >= 10) & (res["p"] < 0.05 / len(ids)) & (res["ev"] > 0))
+    pc = pd.DataFrame(per_coin)
+    if not pc.empty:
+        lines += ["", "## 分币种", "", "| 币种 | 信号延后 | # | 市场 | 笔数 | EV/份 | 原始 p |", "|---|---:|---:|---:|---:|---:|---:|"]
+        for r in pc.itertuples():
+            lines.append(f"| {r.coin.upper()} | {r.lag}s | {r.id} | {r.markets} | {r.n} | "
+                         f"{sz.fmt(r.ev * 100 if r.n else np.nan, '+.2f')}¢ | {r.p:.3f} |")
+    if verdict is not None:
+        n_pass = int(verdict["passed"].sum())
+        lines += ["", f"**结论：{n_pass} / {len(ids)} 条规则通过。**" + (
+            "通过只说明在这段历史数据上有统计优势；成交按显示的卖一价计算，真实下单可能更差，必须先小仓位实盘验证。"
+            if n_pass else "没有规则在独立币种上复现 BTC 上的优势。")]
+    text = "\n".join(lines) + "\n"
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(text, encoding="utf-8")
+    pc.to_csv(Path(out).with_suffix(".csv"), index=False)
+    return text
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("fetch-outcomes", "fetch-binance", "run"):
+    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2"):
         p = sub.add_parser(name)
-        p.add_argument("root", help="放 btc_markets.parquet 和 btc_ticks.parquet 的目录")
-        if name == "run":
-            p.add_argument("--out", default="real/kacho-btc.md")
+        p.add_argument("root", help="放 <coin>_markets.parquet 和 <coin>_ticks.parquet 的目录")
+        if name.startswith("fetch"):
+            p.add_argument("--coin", default="btc")
+        else:
+            p.add_argument("--out", default="real/kacho-btc.md" if name == "run" else "real/kacho-stage2.md")
             p.add_argument("--reps", type=int, default=20000)
+        if name == "run":
             p.add_argument("--limit", type=int, help="只用前 N 个市场（调试用）")
     args = ap.parse_args(argv)
     if args.cmd == "fetch-outcomes":
-        print("outcomes: %d of %d slugs" % fetch_outcomes(args.root))
+        print("%s outcomes: %d of %d slugs" % (args.coin, *fetch_outcomes(args.root, args.coin)))
     elif args.cmd == "fetch-binance":
-        print("binance days: %d of %d" % fetch_binance(args.root))
+        print("%s binance days: %d of %d" % (args.coin, *fetch_binance(args.root, args.coin)))
+    elif args.cmd == "stage2":
+        print(stage2(args.root, args.out, reps=args.reps))
     else:
         print(run(args.root, args.out, args.reps, args.limit))
 
