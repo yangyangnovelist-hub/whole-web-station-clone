@@ -1,0 +1,86 @@
+import json
+
+import numpy as np
+import pytest
+
+import binary as bo
+import strategy_zoo as sz
+from test_real_day import S0, make_bundle, write_gz
+
+
+@pytest.fixture(scope="module")
+def markets(tmp_path_factory):
+    root = make_bundle(tmp_path_factory.mktemp("zoo") / "polymarket-data-samples")
+    # Market 0 quotes Up 0.50/0.51 until t=200. A taker sells Up at 0.40 at t=100
+    # (through the 0.50 bid) and at exactly 0.50 at t=150 (not through it).
+    prints = [("up0", (S0 + 100) * 1000, "SELL", 0.40), ("up0", (S0 + 150) * 1000, "SELL", 0.50)]
+    write_gz(root / "data/polymarket/daily/last_trade_price/BTC-5m/BTC-5m-last_trade_price-2026-09-08.jsonl.gz",
+             "\n".join(json.dumps({"asset_id": tok, "recv_ms": ms, "payload": {"side": side, "size": "10",
+                                                                                "price": f"{px:.2f}"}})
+                       for tok, ms, side, px in prints))
+    return sz.build_markets(root)
+
+
+def test_registry_has_100_distinct_strategies():
+    reg = sz.registry()
+    assert len(reg) == 100
+    assert len({s.name for s in reg}) == 100
+    assert len({s.family for s in reg}) == 10
+
+
+def test_fair_price_pvalue_is_honest_on_all_win_samples():
+    # 27 straight wins at an all-in cost of 0.919: luck does that 0.919**27 ~ 10% of the time.
+    assert bo.fair_price_pvalue(np.full(27, 1 - 0.919), np.full(27, 0.919)) == pytest.approx(0.919**27, abs=0.01)
+    # Trades drawn from the null itself should not look significant on average.
+    rng = np.random.default_rng(1)
+    cost = rng.uniform(0.1, 0.9, 400)
+    ps = [bo.fair_price_pvalue((rng.random(400) < cost) - cost, cost, sims=2000, seed=k) for k in range(20)]
+    assert 0.3 < np.mean(ps) < 0.7
+    assert bo.fair_price_pvalue([], []) == 1.0
+
+
+def test_benjamini_hochberg():
+    passed = sz.benjamini_hochberg([0.001, 0.02, 0.04, 0.5], q=0.10)
+    assert passed.tolist() == [True, True, True, False]
+    assert not sz.benjamini_hochberg([0.2, 0.5, 0.9]).any()
+
+
+def test_late_favourite_buys_the_quoted_winner(markets):
+    trade = sz.late_favourite(30, 0.85, 0.99)
+    fills = [trade(m) for m in markets]
+    assert all(f is not None for f in fills)
+    for m, f in zip(markets, fills):
+        assert (f["side"] == "Up") == m.up_won and f["t"] == bo.WINDOW_S - 30
+        assert f["fee"] == pytest.approx(bo.taker_fee(f["price"]))
+    # Nothing is inside the band before the synthetic book moves at t=200.
+    assert all(sz.late_favourite(180, 0.85, 0.99)(m) is None for m in markets)
+
+
+def test_maker_fills_only_when_a_print_trades_through(markets):
+    m0 = markets[0]
+    assert m0.at(60)["bid_up"] == 0.50 and m0.at(60)["mid"] >= 0.5  # Up is the (tied) favourite
+    fill = sz.maker_bid(240, "favourite")(m0)  # rests at t=60, the 0.40 print goes through
+    assert fill == {"side": "Up", "price": 0.50, "fee": 0.0, "t": 60, "kind": "maker"}
+    assert sz.maker_bid(160, "favourite")(m0) is None  # rests at t=140, only the 0.50 print follows
+    assert sz.maker_bid(240, "favourite")(markets[1]) is None  # no prints at all
+
+
+def test_evaluate_and_report(markets, tmp_path):
+    res, trades = sz.evaluate(markets, sz.registry(), reps=200)
+    assert len(res) == 100 and set(trades["strategy"]) <= set(range(100))
+    assert (trades.groupby(["strategy", "slug"]).size() == 1).all()  # at most one trade per market
+    won = trades["won"].astype(float)
+    assert np.allclose(trades["pnl"], won - trades["price"] - trades["fee"])
+    # Two markets are far too few to test: every p is 1.
+    assert (res["p"] == 1.0).all() and not res["bh"].any()
+    text = sz.report(res, markets, 200)
+    assert "## 全部 100 个" in text and "可检验的：0" in text
+
+
+def test_preregistered_candidates_are_pinned():
+    # The forward test is only honest if these never change meaning after forward data arrives.
+    reg = sz.registry()
+    assert {i: reg[i - 1].name for i in sz.PREREGISTERED} == {
+        61: "Chainlink 动量 τ=240 回看10s z>1", 10: "强势方 τ=30 [0.80,0.97]", 9: "强势方 τ=30 [0.70,0.97]",
+        11: "强势方 τ=30 [0.85,0.99]", 65: "mid 30s 变动>0.10 跟随 τ=60", 62: "Chainlink 动量 τ=240 回看10s z>2",
+        80: "盘口失衡>0.6 τ=120"}

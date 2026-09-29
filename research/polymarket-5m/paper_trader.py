@@ -11,7 +11,8 @@ its best ask is within [lo, hi], taking at most the size shown at that ask
 values run side by side as independent paper books.
 
 Live mode also writes every raw message it receives (order book, Chainlink
-prices, market metadata) to disk, so the recording doubles as a dataset.
+prices, market metadata and every market's outcome) to disk, so the recording
+doubles as a dataset: recording.py turns it into a bundle strategy_zoo.py reads.
 """
 from __future__ import annotations
 
@@ -291,6 +292,26 @@ class LiveTrader:
             self._append_ledger(done)
         self.pending = still
 
+    def record_outcomes(self):
+        """Save the resolved Gamma record of every market seen, traded or not, so the
+        recording is a complete dataset (recording.py), then forget the market."""
+        now = time.time()
+        for slug, mk in list(self.markets.items()):
+            if now < mk["end"] + 60 or now < mk.get("retry_at", 0):
+                continue
+            try:
+                m = self.fetch(GAMMA.format(slug=slug))[0]
+                resolved = parse_gamma_market(m)["up_won"] is not None
+            except Exception as e:
+                self.rec.write("errors", {"at": now_ms(), "where": "outcome", "slug": slug, "err": repr(e)})
+                resolved = False
+            if resolved:
+                self.rec.write("markets", m)
+            if resolved or now > mk["end"] + 3600:
+                del self.markets[slug]
+            else:
+                mk["retry_at"] = now + 30
+
     def _append_ledger(self, row):
         path = self.out / "ledger.csv"
         cols = ["slug", "end", "tau", "side", "ask", "shares", "fee", "cost", "won", "pnl", "mid_up", "decided_ms"]
@@ -317,8 +338,7 @@ class LiveTrader:
                         await self.subscribe(self.markets[slug])
                 except Exception as e:
                     self.rec.write("errors", {"at": now_ms(), "where": "discover", "slug": slug, "err": repr(e)})
-            for slug in [k for k, v in self.markets.items() if v["end"] < time.time() - 600]:
-                del self.markets[slug]
+            self.record_outcomes()
             await asyncio.sleep(10)
 
     async def subscribe(self, mk):
