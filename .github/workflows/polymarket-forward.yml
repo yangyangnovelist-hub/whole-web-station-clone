@@ -1,0 +1,97 @@
+name: polymarket-forward
+
+# Forward test on live data: records Polymarket BTC 5m books and Chainlink
+# prices for a few hours on a GitHub runner (paper_trader.py live, which never
+# places orders and uses no key), tests the preregistered candidates on what it
+# recorded, pools the result into research/polymarket-5m/forward/ and
+# dispatches the next run. It stops by itself after `until` in ci/forward.json;
+# set "enabled": false there to stop it sooner.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/forward.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: polymarket-forward
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Read ci/forward.json
+        id: cfg
+        run: |
+          python - >> "$GITHUB_OUTPUT" <<'PY'
+          import datetime, json
+          c = json.load(open("ci/forward.json"))
+          on = c.get("enabled", True) and datetime.date.today().isoformat() <= c.get("until", "2000-01-01")
+          print(f"enabled={'true' if on else 'false'}")
+          print(f"hours={float(c.get('hours', 5.4))}")
+          PY
+
+      - name: Record and paper-trade (no orders)
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          python paper_trader.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} || true
+          for f in "$RUNNER_TEMP"/paper/raw/*/*.jsonl; do echo "$(wc -l < "$f") $f"; done
+          tail -n 5 "$RUNNER_TEMP"/paper/raw/*/errors.jsonl 2>/dev/null || true
+
+      - name: Resolve, convert and test
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        run: |
+          sleep 90
+          python recording.py "$RUNNER_TEMP/paper" --fetch-outcomes
+          python strategy_zoo.py "$RUNNER_TEMP/paper/bundle" --confirm --reps 2000 \
+            --out "$RUNNER_TEMP/run.md" --trades-out "$RUNNER_TEMP/new_trades.csv"
+          python forward.py add "$RUNNER_TEMP/new_trades.csv" --markets "$RUNNER_TEMP/paper/bundle"
+          python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"
+          python forward.py report
+
+      - name: Keep the raw recording
+        if: steps.cfg.outputs.enabled == 'true'
+        run: tar czf "$RUNNER_TEMP/raw.tgz" -C "$RUNNER_TEMP/paper" raw
+      - uses: actions/upload-artifact@v4
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          name: recording-${{ github.run_id }}
+          path: ${{ runner.temp }}/raw.tgz
+          retention-days: 30
+
+      - name: Commit pooled results
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add forward/
+          git commit -q -m "research: forward-test results from recording run ${{ github.run_id }}" \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
+
+      - name: Start the next run
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run polymarket-forward.yml --ref "${{ github.ref_name }}"

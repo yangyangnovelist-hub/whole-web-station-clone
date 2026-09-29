@@ -1,0 +1,74 @@
+name: polymarket-kacho
+
+# Runs research/polymarket-5m/kacho.py on a GitHub runner, which can reach
+# Hugging Face, Gamma and Binance, and commits the report to this branch.
+# One run per change to ci/kacho.request. Nothing here trades or uses a key.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/kacho.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: polymarket-kacho
+  cancel-in-progress: false
+
+jobs:
+  kacho:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Download the kacho.io BTC files (CC0)
+        run: |
+          mkdir -p "$RUNNER_TEMP/kacho"
+          for k in markets ticks; do
+            curl -fSL --retry 5 -o "$RUNNER_TEMP/kacho/btc_$k.parquet" \
+              "https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/btc_$k.parquet"
+          done
+          ls -la "$RUNNER_TEMP/kacho"
+          python - "$RUNNER_TEMP/kacho" <<'PY'
+          import sys, pyarrow.parquet as pq, pandas as pd
+          for name in ("btc_markets", "btc_ticks"):
+              f = pq.ParquetFile(f"{sys.argv[1]}/{name}.parquet")
+              print(name, f.metadata.num_rows, "rows", f.schema_arrow)
+          print(pd.read_parquet(f"{sys.argv[1]}/btc_markets.parquet").head(3).T)
+          PY
+
+      - name: Official outcomes from Gamma
+        continue-on-error: true
+        run: python kacho.py fetch-outcomes "$RUNNER_TEMP/kacho"
+
+      - name: Binance 1s closes (price source for the momentum rules)
+        continue-on-error: true
+        run: python kacho.py fetch-binance "$RUNNER_TEMP/kacho"
+
+      - name: Test the preregistered candidates
+        run: python kacho.py run "$RUNNER_TEMP/kacho" --out real/kacho-btc.md
+
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add real/kacho-btc*
+          git commit -q -m "research: kacho.io check of the preregistered candidates" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
