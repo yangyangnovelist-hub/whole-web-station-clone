@@ -116,13 +116,16 @@ def test_run_fails_when_the_book_had_already_moved(root, tmp_path):
 
 def test_filter_fills_keeps_only_listed_tokens(tmp_path):
     t = pa.table({c: pa.array(v, type=pa.large_string()) if isinstance(v[0], str) else v for c, v in {
-        "id": ["a", "b", "c"], "order_hash": ["x", "y", "z"], "timestamp": [1, 2, 3],
-        "token_asset_id": ["u1", "zz", "d1"], "price": [0.4, 0.5, 0.6], "token_amount": [1.0, 2.0, 3.0],
-        "taker_direction": ["BUY", "SELL", "BUY"]}.items()})
+        "id": ["a", "b", "c", "d"], "order_hash": ["x", "y", "z", "w"], "timestamp": [1, 2, 3, 4],
+        "token_asset_id": ["u1", "zz", "d1", "u1"], "price": [0.4, 0.5, 0.6, 0.4],
+        "token_amount": [1.0, 2.0, 3.0, 1.0], "maker_direction": ["BUY", "SELL", "SELL", "SELL"],
+        "taker_direction": ["SELL", "BUY", "BUY", "BUY"], "fee_usdc": [0.0, 0.0, 0.0, 0.017],
+        "taker": ["0xlp", "0xex", "0xex", "0xex"]}.items()})
     pq.write_table(t, tmp_path / "day.parquet", row_group_size=2)
-    assert oc.filter_fills(tmp_path / "day.parquet", {"u1", "d1"}, tmp_path / "kept.parquet") == (3, 2)
+    assert oc.filter_fills(tmp_path / "day.parquet", {"u1", "d1"}, tmp_path / "kept.parquet") == (4, 3)
     kept = pd.read_parquet(tmp_path / "kept.parquet")
-    assert kept["token_asset_id"].tolist() == ["u1", "d1"] and list(kept.columns) == oc.FILL_COLS
+    assert kept["token_asset_id"].tolist() == ["u1", "d1", "u1"] and list(kept.columns) == oc.FILL_COLS
+    assert kept["agg"].tolist() == [False, True, True]  # the exchange is the most common taker
 
 
 def test_fetch_markets_reads_gamma_events(tmp_path):

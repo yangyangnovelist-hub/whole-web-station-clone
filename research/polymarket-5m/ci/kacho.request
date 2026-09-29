@@ -2,7 +2,7 @@
 # mode: btc (default) | stage2 | stage3 | diag101 | survey (list HF datasets; "inspect:" lines look inside some)
 #       | onchain (onchain.py: #101's stale-quote test on September on-chain fills; "later:" fetches days after 09-26 too;
 #         "calibrate: outcometick" also measures the settlement delay from the 09-08 trade prints)
-requested: 2026-09-29 verdict with the settlement delay measured from the 09-08 prints
-mode: onchain
+#       | makers (makers.py: resting orders vs aggressors by price and time left, select 09-01..13, test 09-14..25)
+requested: 2026-09-29 maker/aggressor study on September on-chain fills (design fixed in makers.py)
+mode: makers
 later: 2026-09-28
-calibrate: outcometick

@@ -65,7 +65,13 @@ COINS = ("btc", "eth", "sol", "xrp", "doge")
 FIRST, LAST = date(2026, 9, 1), date(2026, 9, 26)
 HALF = date(2026, 9, 14)  # second half starts here
 FILLS = "https://huggingface.co/datasets/TimeSeventeen/Polymarket-v2/resolve/main/OrderFilled/{d}.parquet"
-FILL_COLS = ["timestamp", "token_asset_id", "price", "token_amount", "taker_direction"]
+RAW_COLS = ["timestamp", "token_asset_id", "price", "token_amount", "maker_direction", "taker_direction", "fee_usdc",
+            "taker"]
+# Kept per fill. `agg` marks the exchange's own event for the aggressor's order (its taker field
+# is the exchange contract, the most common taker of the day); the other rows are one per resting
+# order filled, with maker_direction the resting order's side.
+FILL_COLS = ["timestamp", "token_asset_id", "price", "token_amount", "maker_direction", "taker_direction",
+             "fee_usdc", "agg"]
 LOOKBACK, Z, TAUS, SIGNAL_LAG = 10, 2.0, (240, 60), 2
 WINDOW = 5
 QUIET_S = 12
@@ -124,13 +130,20 @@ def filter_fills(src, tokens, dst):
     import pyarrow.parquet as pq
     pf = pq.ParquetFile(src)
     keep = pa.array(sorted(tokens), type=pa.string())
+    cols = [c for c in RAW_COLS if c in pf.schema_arrow.names]
     parts = []
     for i in range(pf.metadata.num_row_groups):
-        t = pf.read_row_group(i, columns=FILL_COLS)
+        t = pf.read_row_group(i, columns=cols)
         t = t.cast(pa.schema([(f.name, pa.string() if pa.types.is_large_string(f.type) else f.type)
                               for f in t.schema]))
         parts.append(t.filter(pc.is_in(t["token_asset_id"], value_set=keep)))
     table = pa.concat_tables(parts)
+    if "taker" in table.column_names:
+        counts = pc.value_counts(table["taker"]).to_pylist()
+        exchange = max(counts, key=lambda c: c["counts"])["values"] if counts else None
+        table = table.append_column("agg", pc.equal(table["taker"], pa.scalar(exchange, pa.string())))
+        table = table.drop(["taker"])
+        print(f"  exchange (most common taker): {exchange}", flush=True)
     pq.write_table(table, dst, compression="zstd")
     return pf.metadata.num_rows, table.num_rows
 
@@ -175,10 +188,10 @@ def fetch_binance(root, coins=COINS, d0=FIRST, d1=LAST):
         print(f"{coin}: {len(spot):,} Binance seconds", flush=True)
 
 
-def load_fills(root):
+def load_fills(root, extra=()):
     """All kept fills; tokens as a categorical, since a month of five coins runs to tens of millions of rows."""
     files = sorted(paths(root)["fills"].glob("*.parquet"))
-    cols = ["timestamp", "token_asset_id", "price", "token_amount"]
+    cols = ["timestamp", "token_asset_id", "price", "token_amount", *extra]
     if not files:
         return pd.DataFrame(columns=cols)
     parts = []
@@ -188,6 +201,9 @@ def load_fills(root):
     f = pd.concat(parts, ignore_index=True)
     f["timestamp"] = f["timestamp"].astype("int64")
     f["token_asset_id"] = f["token_asset_id"].astype("category")
+    for c in extra:
+        if f[c].dtype == object:
+            f[c] = f[c].astype("category")
     return f
 
 
@@ -327,12 +343,12 @@ def fmt(s):
 HEAD = ["| 样本 | 笔数 | 胜率 | 平均价 | EV/份 | 精确 p |", "|---|---:|---:|---:|---:|---:|"]
 
 
-def load(root):
+def load(root, extra=()):
     pth = paths(root)
     markets = pd.read_csv(pth["markets"], dtype={"up_token": str, "down_token": str})
     markets = markets[markets["up_won"].notna()].copy()
     markets["up_won"] = markets["up_won"].astype(str).str.lower().isin(("true", "1", "1.0"))
-    return markets, load_fills(root)
+    return markets, load_fills(root, extra)
 
 
 def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None, delay_json=None):
