@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "hours": 4.8,
+  "hours": 0.35,
   "until": "2026-10-27",
   "note": "Changing this file starts a recording run (.github/workflows/polymarket-forward.yml); each run dispatches the next until `until`. Set enabled to false to stop. `coins` are recorded and tested; paper orders are BTC only.",
   "coins": [
