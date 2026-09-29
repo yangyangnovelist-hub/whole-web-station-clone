@@ -55,3 +55,12 @@ def test_report_tests_the_onchain_rules_on_later_markets_only(tmp_path, monkeypa
     monkeypatch.setattr(fw, "ONCHAIN_ADDED", 0)
     text = fw.report(store, reps=100)
     assert "九月链上规律的前向检验" in text and "| 103 |" in text and "| 104 |" in text
+
+
+def test_report_can_replay_the_onchain_rules_on_older_markets(tmp_path):
+    bundle = make_bundle(tmp_path / "bundle")
+    store = tmp_path / "forward"
+    trades([(107, S0, True), (108, S0 + 300, False)]).to_csv(tmp_path / "a.csv", index=False)
+    fw.add(tmp_path / "a.csv", bundle, store)
+    text = fw.report(store, reps=100, onchain_since=0)
+    assert "这里是重放" in text and "| 107 |" in text and "| 108 |" in text

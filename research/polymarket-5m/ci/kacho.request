@@ -4,6 +4,7 @@
 #         "calibrate: outcometick" also measures the settlement delay from the 09-08 trade prints)
 #       | makers (makers.py: resting orders vs aggressors by price and time left, select 09-01..13, test 09-14..25)
 #       | rules (rules.py: 116 executable rules on the on-chain tape, split-half holdout, candidates for --final)
-requested: 2026-09-29 rerun with resting-bid rules 117-172 (filled only on a trade-through)
-mode: rules
+#       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
+requested: 2026-09-29 replay the 09-28/29 forward recordings through #103-#108 (not used to design them)
+mode: replay
 later: 2026-09-28

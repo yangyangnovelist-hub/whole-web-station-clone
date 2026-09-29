@@ -60,7 +60,7 @@ def add_ledger(ledger_csv, store=STORE):
     return len(ledger)
 
 
-def report(store=STORE, reps=20000):
+def report(store=STORE, reps=20000, onchain_since=None):
     store = Path(store)
     tpath, mpath = store / "trades.csv", store / "markets.csv"
     if not mpath.exists():
@@ -83,14 +83,17 @@ def report(store=STORE, reps=20000):
         "# #101 的前向检验：{span}\n\n#101（盘口未动的价格跳变）在 kacho 第三阶段通过后才加入前向检验，单独检验："
         "原始 p < 0.05 且 EV > 0 才算在现行市场里复现。只用加入之后录制的数据。\n\n数据：纸面交易录制，{n_mk} 个 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
     ids = sorted(sz.ONCHAIN)
-    later = markets[markets["start"] >= ONCHAIN_ADDED]
+    since = ONCHAIN_ADDED if onchain_since is None else onchain_since
+    later = markets[markets["start"] >= since]
     if len(later):
         fam = extra[extra["id"].isin(ids)].assign(strategy=lambda d: d["id"].map(ids.index))
         res = sz.summarize(fam, [sz.ONCHAIN[i] for i in ids], later["start"].tolist(), reps, ids)
         text += "\n---\n\n" + sz.report(res, [SimpleNamespace(start=int(s)) for s in later["start"]], reps, intro=(
             "# 九月链上规律的前向检验：{span}\n\n#103–#108 来自 `makers.py` 在九月链上成交里看到的规律"
-            "（那些是别人主动成交的平均结果），这里检验能直接执行的版本，只用加入之后录制的数据。"
-            "6 条一起按 Bonferroni 校正：原始 p < {alpha:.4f} 且 EV > 0 才算通过。#105/#106 的挂单只在之后有更低的成交价时才算成交；#107/#108 按排队顺序，以挂单价卖出的量超过挂单时排在前面的量才算成交。"
+            "（那些是别人主动成交的平均结果），这里检验能直接执行的版本，"
+            + ("只用加入之后录制的数据。" if since >= ONCHAIN_ADDED else
+               "这里是重放：数据在规则定下之前录的，但它们（9 月 28–29 日）没有参与规则的设计（设计只用了 9 月 1–25 日的链上成交）。")
+            + "6 条一起按 Bonferroni 校正：原始 p < {alpha:.4f} 且 EV > 0 才算通过。#105/#106 的挂单只在之后有更低的成交价时才算成交；#107/#108 按排队顺序，以挂单价卖出的量超过挂单时排在前面的量才算成交。"
             "\n\n数据：纸面交易录制，{n_mk} 个 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
     return text
 
@@ -109,6 +112,7 @@ def main(argv=None):
     r.add_argument("--store", default=str(STORE))
     r.add_argument("--out", default=str(STORE / "confirm.md"))
     r.add_argument("--reps", type=int, default=20000)
+    r.add_argument("--onchain-since", type=int, help="#103-#108 on markets from this unix second (default: when they were added)")
     args = ap.parse_args(argv)
     if args.cmd == "add-ledger":
         print(f"paper ledger: {add_ledger(args.ledger, args.store)} trades")
@@ -116,7 +120,7 @@ def main(argv=None):
         n_trades, n_markets = add(args.trades, args.markets, args.store)
         print(f"store: {n_trades} trades, {n_markets} markets")
     else:
-        text = report(args.store, args.reps)
+        text = report(args.store, args.reps, args.onchain_since)
         Path(args.out).write_text(text, encoding="utf-8")
         print(text)
 

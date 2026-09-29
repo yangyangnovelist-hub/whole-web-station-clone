@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: polymarket-kacho
@@ -45,6 +46,7 @@ jobs:
             stage3) echo "mode=stage3"; echo "coins=btc eth sol xrp doge" ;;
             diag101) echo "mode=diag101"; echo "coins=btc eth sol xrp doge" ;;
             survey) echo "mode=survey" ;;
+            replay) echo "mode=replay" ;;
             onchain|makers|rules) echo "mode=$mode"; echo "later=$(sed -n 's/^later: *//p' ci/kacho.request | head -1)" ;;
             *) echo "mode=btc" ;;
           esac >> "$GITHUB_OUTPUT"
@@ -59,6 +61,36 @@ jobs:
           else
             python hf_survey.py --out real/hf-survey.md
           fi
+
+      - name: "Replay: every archived forward recording through the current rules"
+        if: steps.mode.outputs.mode == 'replay'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; store="$RUNNER_TEMP/replay-store"; mkdir -p "$rec"
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-forward.yml/runs?per_page=100&status=completed" \
+                --jq '.workflow_runs[].id')
+          for id in $ids; do
+            gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null && echo "downloaded recording-$id" || true
+          done
+          for d in "$rec"/*; do
+            [ -f "$d/raw.tgz" ] || continue
+            x="$d/x"; mkdir -p "$x"
+            tar xzf "$d/raw.tgz" -C "$x" 2>/dev/null || { echo "$d: bad archive"; continue; }
+            if ! ls -d "$x"/bundle-* >/dev/null 2>&1 && [ -d "$x/raw" ]; then
+              python -c "import recording as r, sys; print('unresolved:', r.fetch_outcomes(sys.argv[1]))" "$x" || true
+              python recording.py "$x" --coin btc --out "$x/bundle-btc" || true
+            fi
+            for b in "$x"/bundle-*; do
+              [ -d "$b" ] || continue
+              t="$d/trades-$(basename "$b").csv"
+              python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 --reps 2000 \
+                --out "$d/zoo-$(basename "$b").md" --trades-out "$t" || { echo "$b: zoo failed"; continue; }
+              python forward.py add "$t" --markets "$b" --store "$store" || true
+            done
+          done
+          python forward.py report --store "$store" --onchain-since 0 --out real/forward-replay.md
 
       - name: Keep the filtered September fills between runs
         if: steps.mode.outputs.mode == 'onchain' || steps.mode.outputs.mode == 'makers' || steps.mode.outputs.mode == 'rules'
@@ -93,7 +125,7 @@ jobs:
             --delay-json real/onchain-delay.json
 
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
-        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules'
+        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules' && steps.mode.outputs.mode != 'replay'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
           for c in ${{ steps.mode.outputs.coins }}; do
@@ -142,7 +174,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* 2>/dev/null || true
+          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
