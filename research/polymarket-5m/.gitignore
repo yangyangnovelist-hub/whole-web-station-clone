@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+data/
+logs/
+gate.json
+STOP
+.tmp/
