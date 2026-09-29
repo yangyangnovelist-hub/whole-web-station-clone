@@ -18,6 +18,8 @@ Bonferroni across all strategies and checks each on both halves of the day.
 
 --confirm re-tests only PREREGISTERED, the candidates picked from the sample
 day, on new data (recording.py turns paper_trader recordings into a bundle).
+Without --confirm the report also runs split_holdout: pick on one half of the
+markets, test on the other half.
 Correcting for 7 instead of 100 is what makes a real edge provable in weeks.
 """
 from __future__ import annotations
@@ -404,11 +406,58 @@ def evaluate(markets, strategies, reps=2000, ids=None):
     return res, trades
 
 
+def split_holdout(trades, markets, n_strategies, k=5, reps=20000):
+    """Out-of-sample check inside one sample, fixed before looking: pick the k
+    lowest-p strategies (>= 10 trades) on one half of the markets, test only those
+    on the other half, both directions. Passing needs p < 0.05 / (2k) and EV > 0."""
+    half = np.median([m.start for m in markets])
+    halves = {"前半": trades[trades["start"] <= half], "后半": trades[trades["start"] > half]} \
+        if not trades.empty else {"前半": trades, "后半": trades}
+
+    def stats(g):
+        if len(g) < 10:
+            return np.nan, len(g), np.nan
+        cost = (g["price"] + g["fee"]).to_numpy()
+        return bo.fair_price_pvalue(g["pnl"].to_numpy(), cost, sims=reps), len(g), g["pnl"].mean()
+
+    rows = []
+    for sel, test in (("前半", "后半"), ("后半", "前半")):
+        cand = []
+        for j in range(n_strategies):
+            p, n, ev = stats(halves[sel][halves[sel]["strategy"] == j] if len(halves[sel]) else halves[sel])
+            if n >= 10:
+                cand.append((p, j, n, ev))
+        for p, j, n, ev in sorted(cand)[:k]:
+            tp, tn, tev = stats(halves[test][halves[test]["strategy"] == j])
+            rows.append({"direction": f"{sel}选 → {test}验", "id": j + 1, "n_sel": n, "ev_sel": ev, "p_sel": p,
+                         "n_test": tn, "ev_test": tev, "p_test": tp,
+                         "passed": bool(np.isfinite(tp) and tp < 0.05 / (2 * k) and tev > 0)})
+    cols = ["direction", "id", "n_sel", "ev_sel", "p_sel", "n_test", "ev_test", "p_test", "passed"]
+    return pd.DataFrame(rows, columns=cols)
+
+
+def holdout_md(ho, res, k=5):
+    names = dict(zip(res["id"], res["name"]))
+    lines = ["", "## 样本外检验：一半选、另一半验", "",
+             f"规则事先定好：在一半市场上按精确 p 选出最好的 {k} 个，只在另一半上检验这 {k} 个，两个方向各做一次；"
+             f"通过标准是检验半的 p < {0.05 / (2 * k):.3f} 且 EV > 0。这比“两半都为正”严格：选出来的策略必须在没参与挑选的数据上复现。", ""]
+    if ho.empty:
+        return lines + ["（每半可检验的策略不足，跳过）"]
+    lines += ["| 方向 | # | 策略 | 选择半 笔数 | 选择半 EV | 选择半 p | 检验半 笔数 | 检验半 EV | 检验半 p | 通过 |",
+              "|---|---:|---|---:|---:|---:|---:|---:|---:|:-:|"]
+    for r in ho.itertuples():
+        lines.append(f"| {r.direction} | {r.id} | {names.get(r.id, '')} | {r.n_sel} | {r.ev_sel*100:+.2f}¢ | {r.p_sel:.3f} | "
+                     f"{r.n_test} | {fmt(r.ev_test * 100 if np.isfinite(r.ev_test) else np.nan, '+.2f')}¢ | "
+                     f"{fmt(r.p_test, '.3f')} | {'✓' if r.passed else ''} |")
+    lines += ["", f"通过：{int(ho['passed'].sum())} / {len(ho)}；检验半 EV 为正：{int((ho['ev_test'] > 0).sum())} / {len(ho)}。"]
+    return lines
+
+
 def fmt(v, spec, default="–"):
     return default if v is None or (isinstance(v, float) and not np.isfinite(v)) else format(v, spec)
 
 
-def report(res, markets, reps, confirm=False):
+def report(res, markets, reps, confirm=False, holdout=None):
     n_mk, k = len(markets), len(res)
     tested = res[res["n"] >= 10]
     lucky = 0.05 * len(tested)
@@ -455,6 +504,8 @@ def report(res, markets, reps, confirm=False):
     for _, r in res.sort_values(["p", "t"], ascending=[True, False], na_position="last").iterrows():
         lines.append(f"| {int(r['id'])} " + row_md(r, r["family"])[:-1] +
                      f" {'✓' if r['bh'] else ''} | {'✓' if r['both_halves'] else ''} |")
+    if holdout is not None:
+        lines += holdout_md(holdout, res)
     lines += ["", "## 需要多少笔才能证明", "",
               "以“收盘前 30 秒买 0.80–0.97 的强势方”为例：全部成本约 0.92。如果它一直不输，"
               f"原始 p < 0.05 需要连赢约 {math.ceil(math.log(0.05) / math.log(0.92))} 笔；"
@@ -485,7 +536,8 @@ def main(argv=None):
         ids = list(PREREGISTERED)
         strategies = [strategies[i - 1] for i in ids]
     res, trades = evaluate(markets, strategies, reps=args.reps, ids=ids)
-    text = report(res, markets, args.reps, confirm=args.confirm)
+    holdout = None if args.confirm else split_holdout(trades, markets, len(strategies), reps=args.reps)
+    text = report(res, markets, args.reps, confirm=args.confirm, holdout=holdout)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text + "\n", encoding="utf-8")

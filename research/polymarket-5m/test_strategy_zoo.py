@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import binary as bo
@@ -84,3 +85,20 @@ def test_preregistered_candidates_are_pinned():
         61: "Chainlink 动量 τ=240 回看10s z>1", 10: "强势方 τ=30 [0.80,0.97]", 9: "强势方 τ=30 [0.70,0.97]",
         11: "强势方 τ=30 [0.85,0.99]", 65: "mid 30s 变动>0.10 跟随 τ=60", 62: "Chainlink 动量 τ=240 回看10s z>2",
         80: "盘口失衡>0.6 τ=120"}
+
+
+def test_split_holdout_selects_on_one_half_and_tests_on_the_other():
+    rng = np.random.default_rng(0)
+    rows, starts = [], [S0 + 300 * i for i in range(40)]
+    for i, start in enumerate(starts):
+        # Strategy 0 always wins at 0.50; strategy 1 is a fair coin at 0.50; strategy 2 wins only early.
+        for j, won in ((0, True), (1, bool(rng.random() < 0.5)), (2, i < 20)):
+            fee = float(bo.taker_fee(0.5))
+            rows.append({"strategy": j, "start": start, "won": won, "price": 0.5, "fee": fee,
+                         "pnl": float(won) - 0.5 - fee})
+    markets = [sz.Market(str(s), s, s + 300, True, None, "u", "d", None, None, {}, {}) for s in starts]
+    ho = sz.split_holdout(pd.DataFrame(rows), markets, 3, k=2, reps=2000)
+    assert len(ho) == 4 and set(ho["direction"]) == {"前半选 → 后半验", "后半选 → 前半验"}
+    assert ho[ho["id"] == 1]["passed"].all()
+    early = ho[(ho["id"] == 3) & (ho["direction"] == "前半选 → 后半验")]
+    assert len(early) == 1 and not early["passed"].iloc[0] and early["ev_test"].iloc[0] < 0
