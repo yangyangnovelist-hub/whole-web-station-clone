@@ -13,3 +13,4 @@ time,iteration,hypothesis,params,split,fill,events,trades,win_rate,avg_cost,pnl_
 2026-09-29T09:29:33Z,1,H1_fav_band,"{""cat"": ""other"", ""hi"": 0.8, ""lo"": 0.7, ""timing"": ""before""}",discovery,next,112,96,0.6771,0.7475,-0.07045,-0.09424,0.95296,,,
 2026-09-29T09:31:15Z,1,H1_fav_band,"{""cat"": ""sports"", ""hi"": 0.9, ""lo"": 0.8, ""timing"": ""any""}",discovery,next,11124,7386,0.8060,0.8191,-0.01308,-0.01597,0.99848,,,
 2026-09-29T09:31:26Z,1,H1_fav_band,"{""cat"": ""other"", ""hi"": 0.9, ""lo"": 0.8, ""timing"": ""any""}",discovery,next,136,120,0.9250,0.8541,0.07085,0.08295,0.01402,,,
+2026-09-29T09:32:00Z,1,H1_fav_band,"{""cat"": ""sports"", ""hi"": 0.9, ""lo"": 0.8, ""timing"": ""gameday""}",discovery,next,10100,6956,0.8105,0.8210,-0.01046,-0.01274,0.98978,,,
