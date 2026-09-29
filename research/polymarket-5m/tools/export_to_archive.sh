@@ -46,13 +46,20 @@ from pathlib import Path
 src, out, since, until = Path(sys.argv[1]).expanduser(), Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 to_ts = lambda d: datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() if d else None
 lo, hi = to_ts(since) or 0.0, to_ts(until) or 9e18
-TABLES = {  # table: time column used for since/until (None: whole table)
+TABLES = {  # known market-data tables: time column used for since/until (None: whole table)
     "poly_probability_observations_v1": "source_ts", "market_registry": None, "market_outcomes": None,
     "chainlink_twap60_samples": "source_ts", "coinbase_perp_mid_samples_v1": "event_ts",
     "binance_agg_trades_v1": "trade_ts", "binance_trades": "trade_ts",
 }
+# Older engine versions named their tables differently: any other table whose name says it holds
+# market data is exported too, and nothing that holds the strategy's own state.
+MARKET = re.compile(r"poly|book|quote|tick|price|chainlink|coinbase|binance|twap|spot|feed|observation", re.I)
+PRIVATE = re.compile(r"order|fill|position|proposal|forensic|audit|equity|settle|calib|meta|revalid|redeem|"
+                     r"receivable|caps|trace|blocker|decision|signal|strategy|wallet|key|secret|config|sqlite_", re.I)
+TIME_COLS = ("source_ts", "event_ts", "trade_ts", "ts", "timestamp", "recv_ts", "receive_ts")
 secret = re.compile(r"key|secret|wallet|passw|mnemonic|\.env|\.pem", re.I)
 kept = []
+inventory = []  # every table of every database, names and row counts only
 
 def export_db(db, name):
     """Market-data tables of one SQLite file; `name` keeps files from equally named databases apart."""
@@ -62,9 +69,19 @@ def export_db(db, name):
     except sqlite3.DatabaseError as e:
         kept.append(f"{name}: unreadable ({e})")
         return
-    for table, tcol in TABLES.items():
-        if table not in have:
-            continue
+    counts = {}
+    for t in sorted(have):
+        try:
+            counts[t] = con.execute(f'select count(*) from "{t}"').fetchone()[0]
+        except sqlite3.DatabaseError as e:
+            counts[t] = f"unreadable ({e})"
+    inventory.append(f"{name}: " + ", ".join(f"{t} ({c})" for t, c in counts.items()))
+    chosen = {t: tc for t, tc in TABLES.items() if t in have}
+    for t in sorted(have - set(chosen)):
+        if MARKET.search(t) and not PRIVATE.search(t):
+            cols = [r[1] for r in con.execute(f'pragma table_info("{t}")')]
+            chosen[t] = next((c for c in TIME_COLS if c in cols), None)
+    for table, tcol in chosen.items():
         path = out / f"{name}.{table}.csv.gz"
         n = 0
         try:
@@ -127,7 +144,8 @@ else:
                 shutil.copy2(f, dst)
             kept.append(f"{dst.name}: {f.stat().st_size / 1e6:.0f} MB raw")
 (out / "EXPORT.md").write_text(f"# {out.name}\n\nsource: {src.name}\nsince: {since or '-'}\nuntil: {until or '-'}\n\n"
-                               + "\n".join(f"- {k}" for k in kept) + "\n")
+                               + "\n".join(f"- {k}" for k in kept) + "\n\n## All tables (names and row counts only)\n\n"
+                               + "\n".join(f"- {k}" for k in inventory) + "\n")
 print("\n".join(kept) or "nothing to export")
 PY
 
