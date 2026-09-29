@@ -124,3 +124,9 @@ def test_diag101_separates_live_from_frozen_recordings(tmp_path):
     d = pd.read_csv(tmp_path / "d.csv") if (tmp_path / "d.csv").exists() else pd.DataFrame()
     if len(d):
         assert not d["live"].any() and d["all_present"].all()
+
+
+def test_stage4_runs_the_onchain_taker_rules(tmp_path):
+    write_coin(tmp_path, "xrp", seed=5)
+    text = kc.stage4(tmp_path, tmp_path / "s4.md", coins=("xrp",), reps=200)
+    assert "第四阶段" in text and "| 103 |" in text and "| 104 |" in text and "结论：" in text

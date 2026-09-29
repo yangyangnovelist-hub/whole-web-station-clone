@@ -44,6 +44,7 @@ jobs:
           case "$mode" in
             stage2) echo "mode=stage2"; echo "coins=eth sol xrp doge" ;;
             stage3) echo "mode=stage3"; echo "coins=btc eth sol xrp doge" ;;
+            stage4) echo "mode=stage4"; echo "coins=btc eth sol xrp doge" ;;
             diag101) echo "mode=diag101"; echo "coins=btc eth sol xrp doge" ;;
             survey) echo "mode=survey" ;;
             replay) echo "mode=replay" ;;

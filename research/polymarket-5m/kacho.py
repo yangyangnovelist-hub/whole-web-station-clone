@@ -362,6 +362,20 @@ def stage3(root, out, coins=STAGE3_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
     return pooled_test(root, out, dict(sz.STALE), coins, STAGE3_INTRO, reps, lags)
 
 
+STAGE4 = (103, 104)
+STAGE4_INTRO = """# 第四阶段：九月链上规律的吃单版本放到 3–5 月（kacho.STAGE4）
+
+#103（剩 90 秒）和 #104（剩 45 秒）：强势方卖一在 0.60–0.80 时吃单买入。它们来自 9 月 1–25 日链上成交里
+“吃单方买 0.6–0.8 的强势方赚钱”的格子（`makers.py`），在 2026-09-29 写死。kacho.io 的 {coins}（2026-03 至 05）
+没有参与设计，所以这是独立检验；但那是单点结算时期，不是现在的 60 秒 TWAP。
+挂单版本（#105–#108）需要成交记录，kacho 数据没有，不在这里检验。
+通过标准：合并后 p < 0.05 / 2 = 0.025，且 EV > 0。"""
+
+
+def stage4(root, out, coins=STAGE3_COINS, reps=20000):
+    return pooled_test(root, out, {i: sz.ONCHAIN[i] for i in STAGE4}, coins, STAGE4_INTRO, reps, lags=(1,))
+
+
 DIAG_INTRO = """# #101 是真的还是录制假象？
 
 #101 挑的是“参考价格已经大幅变动、Up 报价却 12 秒以上一动不动”的时刻。这也正是录制程序卡住时的样子：
@@ -459,14 +473,15 @@ def diagnose_101(root, out, coins=STAGE3_COINS, lag=STAGE2_LAG, reps=20000):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2", "stage3", "diag101"):
+    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2", "stage3", "stage4", "diag101"):
         p = sub.add_parser(name)
         p.add_argument("root", help="放 <coin>_markets.parquet 和 <coin>_ticks.parquet 的目录")
         if name.startswith("fetch"):
             p.add_argument("--coin", default="btc")
         else:
             p.add_argument("--out", default={"run": "real/kacho-btc.md", "stage2": "real/kacho-stage2.md",
-                                             "stage3": "real/kacho-stage3.md", "diag101": "real/kacho-diag101.md"}[name])
+                                             "stage3": "real/kacho-stage3.md", "stage4": "real/kacho-stage4.md",
+                                             "diag101": "real/kacho-diag101.md"}[name])
             p.add_argument("--reps", type=int, default=20000)
         if name == "run":
             p.add_argument("--limit", type=int, help="只用前 N 个市场（调试用）")
@@ -479,6 +494,8 @@ def main(argv=None):
         print(stage2(args.root, args.out, reps=args.reps))
     elif args.cmd == "stage3":
         print(stage3(args.root, args.out, reps=args.reps))
+    elif args.cmd == "stage4":
+        print(stage4(args.root, args.out, reps=args.reps))
     elif args.cmd == "diag101":
         print(diagnose_101(args.root, args.out, reps=args.reps))
     else:
