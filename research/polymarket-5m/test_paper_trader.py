@@ -1,3 +1,4 @@
+import gzip
 import json
 
 import numpy as np
@@ -73,7 +74,9 @@ def test_parse_gamma_market():
 
 def test_live_trader_offline(tmp_path, monkeypatch):
     trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: [GAMMA])
+    trader.token_coin.update({"UP": "btc", "DOWN": "btc"})
     trader.on_clob(json.dumps([BOOK_UP, BOOK_DOWN]), 1)
+    trader.on_clob(json.dumps({"event_type": "new_market", "market": "0xother"}), 1)  # not recorded
     trader.on_clob(json.dumps(PRICE_CHANGE), 2)
     trader.on_clob("PONG", 3)
     trader.on_rtds(json.dumps({"topic": "crypto_prices_chainlink", "type": "update",
@@ -87,8 +90,11 @@ def test_live_trader_offline(tmp_path, monkeypatch):
     ledger = pd.read_csv(tmp_path / "ledger.csv")
     assert len(ledger) == 1 and not ledger["won"].iloc[0]
     assert "已结算 1 笔" in pt.write_report(tmp_path)
-    raw = list(tmp_path.glob("raw/*/*.jsonl"))
-    assert {p.stem for p in raw} >= {"clob", "rtds", "decisions", "markets"}
+    trader.rec.close()
+    raw = list(tmp_path.glob("raw/*/*.jsonl.gz"))
+    assert {p.name.split(".")[0] for p in raw} >= {"clob-btc", "rtds", "decisions", "markets"}
+    clob = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/clob-btc.jsonl.gz")), "rt")]
+    assert all(ev.get("event_type") != "new_market" for rec in clob for ev in rec["msg"])
 
 
 def test_replay_on_synthetic_bundle(tmp_path):

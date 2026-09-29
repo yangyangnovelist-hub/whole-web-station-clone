@@ -116,7 +116,7 @@ class Market:
 
 def build_markets(root):
     markets = rd.load_markets(root)
-    spot = rd.load_chainlink(rd._one(root, "BTCUSD-prices-*.csv.gz"))
+    spot = rd.load_chainlink(rd._one(root, "*USD-prices-*.csv.gz"))
     tokens = set(markets["up_token"]) | set(markets["down_token"])
     quotes = rd.load_quotes(root, tokens)
     vols = rd.vol_forecasts(spot)
@@ -549,7 +549,7 @@ def report(res, markets, reps, confirm=False, holdout=None, intro=None):
                  f"只检验 {k} 个在 2026-09-08 样本上事先选定的候选（strategy_zoo.PREREGISTERED），数据全部是选定之后录制的。"
                  f"判定标准：Bonferroni 校正后 p < 0.05（即原始 p < {0.05 / k:.4f}）。达标的才算“确定能赚钱”；"
                  "还没达标只说明样本不够或没有优势，不能提前下结论。", "",
-                 f"数据：纸面交易录制，{n_mk} 个 BTC 5 分钟市场，60 秒 TWAP 结算。"]
+                 f"数据：纸面交易录制，{n_mk} 个 5 分钟市场（BTC，以及录制的其他币种），60 秒 TWAP 结算。"]
     else:
         lines = [f"# {k} 个策略：{span} 单日检验", "",
                  f"数据：outcometick 样例，{n_mk} 个 BTC 5 分钟市场，60 秒 TWAP 结算。"]

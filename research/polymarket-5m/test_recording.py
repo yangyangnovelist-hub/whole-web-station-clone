@@ -55,6 +55,7 @@ def recorded(tmp_path_factory):
         mk = gamma(start)
         trader.rec.write("markets", mk)
         trader.markets[mk["slug"]] = pt.parse_gamma_market(mk)
+        trader.token_coin.update({f"up{start}": "btc", f"dn{start}": "btc"})
         up, dn = f"up{start}", f"dn{start}"
         for t in range(300):
             p = (0.97 if won[start] else 0.03) if t > 200 else 0.5
@@ -68,6 +69,7 @@ def recorded(tmp_path_factory):
         trader.on_clob(json.dumps({"event_type": "last_trade_price", "asset_id": up, "price": "0.40", "side": "SELL",
                                    "size": "10", "timestamp": str((start + 70) * 1000)}), (start + 70) * 1000)
     trader.record_outcomes()
+    trader.rec.close()
     return out, spot, won
 
 
@@ -77,8 +79,9 @@ def test_record_outcomes_keeps_unresolved_markets(tmp_path):
     trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: [gamma(start)])
     trader.markets[f"btc-updown-5m-{start}"] = pt.parse_gamma_market(gamma(start))
     trader.record_outcomes()
+    trader.rec.close()
     assert trader.markets[f"btc-updown-5m-{start}"]["retry_at"] > now
-    assert not list(tmp_path.glob("raw/*/markets.jsonl"))
+    assert not list(tmp_path.glob("raw/*/markets.jsonl*"))
 
 
 def test_bundle_round_trip(recorded, tmp_path):
@@ -118,6 +121,7 @@ def test_fetch_outcomes_backfills_markets_a_run_missed(tmp_path):
     rec = pt.Recorder(tmp_path)
     rec.write("markets", gamma(S0))  # recorded while open, run stopped before it resolved
     rec.write("markets", gamma(S0 + 300, up_won=True))  # already resolved: no fetch needed
+    rec.close()
     asked = []
 
     def fetch(url):
@@ -126,7 +130,7 @@ def test_fetch_outcomes_backfills_markets_a_run_missed(tmp_path):
 
     assert rc.fetch_outcomes(tmp_path, fetch=fetch) == 0
     assert asked == [pt.GAMMA_CLOSED.format(slug=f"btc-updown-5m-{S0}")]
-    latest = [json.loads(line) for line in next(tmp_path.glob("raw/*/markets.jsonl")).read_text().splitlines()]
+    latest = list(rc.iter_jsonl(rc.raw_files(tmp_path, "markets")))
     assert latest[-1]["slug"] == f"btc-updown-5m-{S0}" and latest[-1]["closed"]
 
 
@@ -143,8 +147,31 @@ def test_zoo_handles_a_recording_without_resolved_markets(tmp_path):
     rec.write("markets", gamma(S0))
     rec.write("rtds", {"recv_ms": S0 * 1000, "msg": {"topic": "crypto_prices_chainlink", "payload": {
         "symbol": "btc/usd", "timestamp": S0 * 1000, "value": 1.0}}})
-    rec.write("clob", {"recv_ms": S0 * 1000, "msg": book(f"up{S0}", 0.4, 0.6)})
+    rec.write("clob", {"recv_ms": S0 * 1000, "msg": book(f"up{S0}", 0.4, 0.6)})  # the old single-file name
+    rec.close()
     rc.build(tmp_path, tmp_path / "bundle")
     assert sz.build_markets(tmp_path / "bundle") == []
     sz.main([str(tmp_path / "bundle"), "--confirm", "--trades-out", str(tmp_path / "t.csv")])
     assert pd.read_csv(tmp_path / "t.csv").empty
+
+
+def test_two_coins_record_and_build_separately(tmp_path):
+    trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: [], coins=("btc", "eth"))
+    btc, eth = gamma(S0), {**gamma(S0), "slug": f"eth-updown-5m-{S0}", "clobTokenIds": "[\"ue\", \"de\"]"}
+    for m, coin in ((btc, "btc"), (eth, "eth")):
+        trader.rec.write("markets", m)
+        mk = pt.parse_gamma_market(m)
+        trader.markets[mk["slug"]] = mk
+        trader.token_coin.update({mk["up_token"]: coin, mk["down_token"]: coin})
+    for s in range(S0 - 120, S0 + 10):
+        for sym, v in (("btc/usd", 80_000.0), ("eth/usd", 3_000.0)):
+            trader.on_rtds(json.dumps({"topic": "crypto_prices_chainlink", "type": "update",
+                                       "payload": {"symbol": sym, "timestamp": s * 1000, "value": v}}), s * 1000 + 500)
+    trader.on_clob(json.dumps([book(f"up{S0}", 0.4, 0.6), book("ue", 0.3, 0.7)]), S0 * 1000)
+    trader.rec.close()
+    assert {p.name for p in tmp_path.glob("raw/*/clob-*.jsonl.gz")} == {"clob-btc.jsonl.gz", "clob-eth.jsonl.gz"}
+    c_btc = rc.build(tmp_path, tmp_path / "b-btc", "btc")
+    c_eth = rc.build(tmp_path, tmp_path / "b-eth", "eth")
+    assert c_btc["markets"] == c_eth["markets"] == 1 and c_btc["book"] == c_eth["book"] == 1
+    assert next((tmp_path / "b-eth").rglob("ETHUSD-prices-*.csv.gz"))
+    assert rd.load_markets(tmp_path / "b-eth")["strike"].iloc[0] == pytest.approx(3_000.0)

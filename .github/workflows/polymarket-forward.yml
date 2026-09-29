@@ -47,35 +47,47 @@ jobs:
           on = c.get("enabled", True) and datetime.date.today().isoformat() <= c.get("until", "2000-01-01")
           print(f"enabled={'true' if on else 'false'}")
           print(f"hours={float(c.get('hours', 5.4))}")
+          coins = c.get("coins", ["btc"])
+          print(f"coins={' '.join(coins)}")
+          print(f"coins_csv={','.join(coins)}")
           PY
 
       - name: Record and paper-trade (no orders)
         if: steps.cfg.outputs.enabled == 'true'
         run: |
-          python paper_trader.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} || true
-          for f in "$RUNNER_TEMP"/paper/raw/*/*.jsonl; do echo "$(wc -l < "$f") $f"; done
-          tail -n 5 "$RUNNER_TEMP"/paper/raw/*/errors.jsonl 2>/dev/null || true
+          python paper_trader.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} \
+            --coins "${{ steps.cfg.outputs.coins_csv }}" || true
+          ls -la "$RUNNER_TEMP"/paper/raw/*/ && du -sh "$RUNNER_TEMP/paper/raw" && df -h "$RUNNER_TEMP" | tail -1
+          zcat "$RUNNER_TEMP"/paper/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
 
       - name: Diagnose the recording
         if: steps.cfg.outputs.enabled == 'true'
         continue-on-error: true
-        run: python recording.py "$RUNNER_TEMP/paper" --diagnose
+        run: for c in ${{ steps.cfg.outputs.coins }}; do python recording.py "$RUNNER_TEMP/paper" --diagnose --coin "$c"; done
 
       - name: Resolve, convert and test
         if: steps.cfg.outputs.enabled == 'true'
         continue-on-error: true
         run: |
           sleep 90
-          python recording.py "$RUNNER_TEMP/paper" --fetch-outcomes
-          python strategy_zoo.py "$RUNNER_TEMP/paper/bundle" --confirm --extra 101 --reps 2000 \
-            --out "$RUNNER_TEMP/run.md" --trades-out "$RUNNER_TEMP/new_trades.csv"
-          python forward.py add "$RUNNER_TEMP/new_trades.csv" --markets "$RUNNER_TEMP/paper/bundle"
+          python -c "import recording as r, sys; print('unresolved:', r.fetch_outcomes(sys.argv[1]))" "$RUNNER_TEMP/paper"
+          for c in ${{ steps.cfg.outputs.coins }}; do
+            b="$RUNNER_TEMP/paper/bundle-$c"
+            echo "== $c"
+            python recording.py "$RUNNER_TEMP/paper" --coin "$c" --out "$b" || continue
+            python strategy_zoo.py "$b" --confirm --extra 101 --reps 2000 \
+              --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv" || continue
+            python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
+          done
           python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"
           python forward.py report
 
-      - name: Keep the raw recording
+      - name: Keep the converted bundles (the raw messages run to gigabytes)
         if: steps.cfg.outputs.enabled == 'true'
-        run: tar czf "$RUNNER_TEMP/raw.tgz" -C "$RUNNER_TEMP/paper" raw
+        run: |
+          cd "$RUNNER_TEMP/paper"
+          tar czf "$RUNNER_TEMP/raw.tgz" bundle-* raw/*/markets.jsonl* raw/*/decisions.jsonl* raw/*/errors.jsonl* 2>/dev/null || true
+          ls -la "$RUNNER_TEMP/raw.tgz"
       - uses: actions/upload-artifact@v4
         if: steps.cfg.outputs.enabled == 'true'
         with:

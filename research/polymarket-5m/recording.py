@@ -1,15 +1,17 @@
 """Turn paper_trader recordings into an outcometick-style bundle.
 
     python recording.py paper_data --out paper_data/bundle
+    python recording.py paper_data --coin eth           # -> paper_data/bundle-eth
     python recording.py paper_data --fetch-outcomes     # after a run stops: resolve what it missed
     python strategy_zoo.py paper_data/bundle --confirm --out paper/confirm.md
 
 `paper_trader.py live` saves every websocket message it receives under
-raw/<day>/{clob,rtds,markets}.jsonl. This rebuilds the files real_day.py and
-strategy_zoo.py read, so every strategy can be re-tested on data recorded
-after it was chosen:
+raw/<day>/ as gzipped JSONL: clob-<coin>, rtds, markets (older runs wrote a
+single uncompressed clob.jsonl for BTC; both are read). This rebuilds, for one
+coin at a time, the files real_day.py and strategy_zoo.py read, so every
+strategy can be re-tested on data recorded after it was chosen:
 
-- Chainlink BTC/USD from RTDS, one row per feed second;
+- Chainlink <COIN>/USD from RTDS, one row per feed second;
 - top of book and full-depth snapshots (one per token per second, the state
   after the last message received in that second), by replaying the CLOB
   messages through paper_trader.apply_clob_message;
@@ -40,16 +42,27 @@ from real_day import FIXED_POINT
 
 def iter_jsonl(paths):
     for path in paths:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:  # a killed recorder can leave half a line
-                    continue
+        opener = gzip.open if str(path).endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as f:
+            try:
+                for line in f:
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:  # a killed recorder can leave half a line
+                        continue
+            except (EOFError, OSError):  # ... or a gzip stream without its trailer
+                continue
 
 
 def raw_files(src, name):
-    return sorted(Path(src).glob(f"raw/*/{name}.jsonl"))
+    files = list(Path(src).glob(f"raw/*/{name}.jsonl")) + list(Path(src).glob(f"raw/*/{name}.jsonl.gz"))
+    return sorted(files, key=lambda p: (p.parent.name, p.name))
+
+
+def clob_files(src, coin="btc"):
+    """Per-coin CLOB recordings; runs before the per-coin split wrote BTC to clob.jsonl."""
+    return sorted(raw_files(src, f"clob-{coin}") + (raw_files(src, "clob") if coin == "btc" else []),
+                  key=lambda p: (p.parent.name, p.name))
 
 
 def chainlink_ticks(records, symbol="btc/usd"):
@@ -69,11 +82,11 @@ def chainlink_ticks(records, symbol="btc/usd"):
             yield (ts * 1000 if ts < 10**11 else ts), float(pnt["value"]), int(rec["recv_ms"])
 
 
-def market_rows(records, spot_by_sec):
-    """Latest Gamma snapshot per slug, in the outcometick markets layout."""
+def market_rows(records, spot_by_sec, coin="btc"):
+    """Latest Gamma snapshot per slug of one coin, in the outcometick markets layout."""
     latest = {}
     for m in records:
-        if isinstance(m, dict) and str(m.get("slug", "")).startswith("btc-updown-5m-"):
+        if isinstance(m, dict) and str(m.get("slug", "")).startswith(f"{coin}-updown-5m-"):
             latest[m["slug"]] = m
     rows = []
     for slug, m in sorted(latest.items()):
@@ -101,7 +114,7 @@ def fetch_outcomes(src, fetch=pt.fetch_json, now=None):
     src, now = Path(src), now or time.time()
     latest = {}
     for m in iter_jsonl(raw_files(src, "markets")):
-        if isinstance(m, dict) and str(m.get("slug", "")).startswith("btc-updown-5m-"):
+        if isinstance(m, dict) and "-updown-5m-" in str(m.get("slug", "")):
             latest[m["slug"]] = m
     rec, missing = pt.Recorder(src), 0
     for slug, m in sorted(latest.items()):
@@ -117,10 +130,11 @@ def fetch_outcomes(src, fetch=pt.fetch_json, now=None):
             rec.write("markets", fresh)
         else:
             missing += 1
+    rec.close()
     return missing
 
 
-def diagnose(src, taus=(60, 30), sample_chars=700):
+def diagnose(src, taus=(60, 30), sample_chars=700, coin="btc", max_markets=12):
     """Print what the recorder actually received: event types, one raw example of
     each, and the replayed top of book at each decision time. For runs whose raw
     files cannot be downloaded, the job log is the only window into them."""
@@ -130,12 +144,13 @@ def diagnose(src, taus=(60, 30), sample_chars=700):
     for m in iter_jsonl(raw_files(src, "markets")):
         try:
             mk = pt.parse_gamma_market(m)
-            markets[mk["slug"]] = mk
         except (ValueError, KeyError, TypeError):
             continue
+        if mk["slug"].startswith(f"{coin}-"):
+            markets[mk["slug"]] = mk
     checks = sorted((mk["end"] - tau, mk["slug"], tau) for mk in markets.values() for tau in taus)
     ci = 0
-    for rec in iter_jsonl(raw_files(src, "clob")):
+    for rec in iter_jsonl(clob_files(src, coin)):
         ms, msg = int(rec["recv_ms"]), rec.get("msg")
         while ci < len(checks) and checks[ci][0] * 1000 <= ms:
             _, slug, tau = checks[ci]
@@ -154,7 +169,8 @@ def diagnose(src, taus=(60, 30), sample_chars=700):
     print("event types:", json.dumps(counts))
     for et, ex in examples.items():
         print(f"example {et}: {ex}")
-    for slug, mk in sorted(markets.items()):
+    print(f"{coin}: {len(markets)} markets recorded; showing {min(max_markets, len(markets))}")
+    for slug, mk in sorted(markets.items())[:max_markets]:
         seen = {side: first_seen.get(tok) for side, tok in (("up", mk["up_token"]), ("down", mk["down_token"]))}
         print(f"{slug} first message per token: {seen} resolved={mk['up_won'] is not None}")
         for tau in taus:
@@ -205,20 +221,20 @@ def book_events(records):
     yield from (("book", row) for row in pending.values())
 
 
-def build(src, out):
-    """Write the bundle under `out`; returns counts per file for the log."""
+def build(src, out, coin="btc"):
+    """Write one coin's bundle under `out`; returns counts per file for the log."""
     src, out = Path(src), Path(out)
-    days = sorted({p.parent.name for p in (src / "raw").glob("*/*.jsonl")})
+    days = sorted({p.parent.name for p in (src / "raw").glob("*/*.jsonl*")})
     if not days:
         raise SystemExit(f"no recordings under {src}/raw")
     label = days[0] if len(days) == 1 else f"{days[0]}_{days[-1]}"
-    poly = out / "data/polymarket/daily"
+    poly, c = out / "data/polymarket/daily", coin.upper()
     paths = {
-        "prices": out / f"data/chainlink/daily/prices/BTCUSD/BTCUSD-prices-{label}.csv.gz",
-        "markets": poly / f"markets/BTC-5m/BTC-5m-markets-{label}.jsonl.gz",
-        "bba": poly / f"best_bid_ask/BTC-5m/BTC-5m-best_bid_ask-{label}.jsonl.gz",
-        "book": poly / f"book/BTC-5m/BTC-5m-book-{label}.jsonl.gz",
-        "trade": poly / f"last_trade_price/BTC-5m/BTC-5m-last_trade_price-{label}.jsonl.gz",
+        "prices": out / f"data/chainlink/daily/prices/{c}USD/{c}USD-prices-{label}.csv.gz",
+        "markets": poly / f"markets/{c}-5m/{c}-5m-markets-{label}.jsonl.gz",
+        "bba": poly / f"best_bid_ask/{c}-5m/{c}-5m-best_bid_ask-{label}.jsonl.gz",
+        "book": poly / f"book/{c}-5m/{c}-5m-book-{label}.jsonl.gz",
+        "trade": poly / f"last_trade_price/{c}-5m/{c}-5m-last_trade_price-{label}.jsonl.gz",
     }
     for path in paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +242,7 @@ def build(src, out):
             old.unlink()
 
     spot = {}
-    for feed_ms, value, recv_ms in chainlink_ticks(iter_jsonl(raw_files(src, "rtds"))):
+    for feed_ms, value, recv_ms in chainlink_ticks(iter_jsonl(raw_files(src, "rtds")), f"{coin}/usd"):
         spot.setdefault(feed_ms // 1000, (feed_ms, value, recv_ms))  # first report of each second
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -237,7 +253,7 @@ def build(src, out):
     with gzip.open(paths["prices"], "wt") as f:
         f.write(buf.getvalue())
 
-    markets = market_rows(iter_jsonl(raw_files(src, "markets")), {s: v[1] for s, v in spot.items()})
+    markets = market_rows(iter_jsonl(raw_files(src, "markets")), {s: v[1] for s, v in spot.items()}, coin)
     with gzip.open(paths["markets"], "wt") as f:
         f.writelines(json.dumps(m) + "\n" for m in markets)
 
@@ -246,7 +262,7 @@ def build(src, out):
               "with_strike": sum(m["strike_value"] is not None for m in markets)}
     files = {k: gzip.open(paths[k], "wt") for k in ("bba", "book", "trade")}
     try:
-        for kind, row in book_events(iter_jsonl(raw_files(src, "clob"))):
+        for kind, row in book_events(iter_jsonl(clob_files(src, coin))):
             files[kind].write(json.dumps(row, separators=(",", ":")) + "\n")
             counts[kind] = counts.get(kind, 0) + 1
     finally:
@@ -258,16 +274,18 @@ def build(src, out):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", help="paper_trader.py live 的 --out 目录")
-    ap.add_argument("--out", help="输出目录（默认 <src>/bundle）")
+    ap.add_argument("--out", help="输出目录（默认 BTC 为 <src>/bundle，其他币种为 <src>/bundle-<coin>）")
+    ap.add_argument("--coin", default="btc")
     ap.add_argument("--fetch-outcomes", action="store_true", help="先向 Gamma 补取尚未结算市场的结果")
     ap.add_argument("--diagnose", action="store_true", help="只打印收到的消息类型、样例和决策时点的盘口，不转换")
     args = ap.parse_args(argv)
     if args.diagnose:
-        diagnose(args.src)
+        diagnose(args.src, coin=args.coin)
         return
     if args.fetch_outcomes:
         print(f"unresolved after fetch: {fetch_outcomes(args.src)}")
-    counts = build(args.src, args.out or Path(args.src) / "bundle")
+    default = Path(args.src) / ("bundle" if args.coin == "btc" else f"bundle-{args.coin}")
+    counts = build(args.src, args.out or default, args.coin)
     print(" ".join(f"{k}={v}" for k, v in counts.items()))
 
 

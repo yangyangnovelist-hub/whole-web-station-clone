@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import gzip
 import json
 import math
 import time
@@ -36,7 +37,8 @@ GAMMA = "https://gamma-api.polymarket.com/markets?slug={slug}"
 GAMMA_CLOSED = GAMMA + "&closed=true"
 CLOB_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 RTDS_WS = "wss://ws-live-data.polymarket.com"
-SLUG = "btc-updown-5m-{start}"
+SLUG = "{coin}-updown-5m-{start}"
+COINS = ("btc", "eth", "sol", "xrp", "doge")  # the coins with 5m Up/Down series
 NAN = float("nan")
 
 
@@ -230,22 +232,49 @@ def parse_gamma_market(m):
 
 
 class Recorder:
-    """Append-only JSONL files, one directory per UTC day."""
+    """Append-only gzipped JSONL files, one directory per UTC day.
 
-    def __init__(self, out):
-        self.out = Path(out)
+    Five coins of order-book traffic run to gigabytes a day, so files stay
+    open and are flushed (a sync point readable after a crash) at most once
+    a second rather than per line. Call close() before reading them back.
+    """
+
+    def __init__(self, out, flush_every=1.0):
+        self.out, self.flush_every = Path(out), flush_every
+        self.files, self.last_flush = {}, 0.0
 
     def write(self, name, obj):
         day = time.strftime("%Y-%m-%d", time.gmtime())
-        path = self.out / "raw" / day / f"{name}.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        f = self.files.get((day, name))
+        if f is None:
+            for key in [k for k in self.files if k[1] == name]:  # a new day closes yesterday's file
+                self.files.pop(key).close()
+            path = self.out / "raw" / day / f"{name}.jsonl.gz"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            f = self.files[(day, name)] = gzip.open(path, "at", compresslevel=3, encoding="utf-8")
+        f.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        now = time.monotonic()
+        if now - self.last_flush >= self.flush_every:
+            self.flush()
+            self.last_flush = now
+
+    def flush(self):
+        for f in self.files.values():
+            f.flush()
+
+    def close(self):
+        for f in self.files.values():
+            f.close()
+        self.files.clear()
 
 
 class LiveTrader:
-    def __init__(self, out, params, fetch=fetch_json):
+    """Records every coin in `coins`; paper-trades only the markets of `trade_coins`."""
+
+    def __init__(self, out, params, fetch=fetch_json, coins=("btc",), trade_coins=("btc",)):
         self.out, self.params, self.fetch = Path(out), params, fetch
+        self.coins, self.trade_coins = tuple(coins), tuple(trade_coins)
+        self.token_coin = {}       # token -> coin, to file CLOB traffic per coin
         self.rec = Recorder(out)
         self.ladders = {}
         self.markets = {}          # slug -> parsed market
@@ -260,7 +289,17 @@ class LiveTrader:
         if text in ("PONG", "pong"):
             return
         msg = json.loads(text)
-        self.rec.write("clob", {"recv_ms": recv_ms, "msg": msg})
+        by_coin = {}
+        for ev in msg if isinstance(msg, list) else [msg]:
+            if not isinstance(ev, dict) or ev.get("event_type") == "new_market":
+                continue  # new_market announces every market on the venue; none of ours
+            token = ev.get("asset_id") or next((pc.get("asset_id") for pc in ev.get("price_changes") or []), None)
+            if token is None:
+                token = next(iter(ev.get("assets_ids") or []), None)
+            by_coin.setdefault(self.token_coin.get(token, "other"), []).append(ev)
+        for coin, events in by_coin.items():
+            if coin != "other":
+                self.rec.write(f"clob-{coin}", {"recv_ms": recv_ms, "msg": events})
         apply_clob_message(self.ladders, msg, recv_ms)
 
     def on_rtds(self, text, recv_ms):
@@ -340,20 +379,27 @@ class LiveTrader:
     async def discover(self):
         while True:
             start = int(time.time()) // bo.WINDOW_S * bo.WINDOW_S
-            for s in (start, start + bo.WINDOW_S):
-                slug = SLUG.format(start=s)
-                if slug in self.markets:
-                    continue
-                try:
-                    found = self.fetch(GAMMA.format(slug=slug))
-                    if found:
-                        self.markets[slug] = parse_gamma_market(found[0])
-                        self.rec.write("markets", found[0])
-                        await self.subscribe(self.markets[slug])
-                except Exception as e:
-                    self.rec.write("errors", {"at": now_ms(), "where": "discover", "slug": slug, "err": repr(e)})
+            for coin in self.coins:
+                for s in (start, start + bo.WINDOW_S):
+                    slug = SLUG.format(coin=coin, start=s)
+                    if slug in self.markets:
+                        continue
+                    try:
+                        found = self.fetch(GAMMA.format(slug=slug))
+                        if found:
+                            await self.add_market(found[0], coin)
+                    except Exception as e:
+                        self.rec.write("errors", {"at": now_ms(), "where": "discover", "slug": slug,
+                                                  "err": repr(e)})
             self.record_outcomes()
             await asyncio.sleep(10)
+
+    async def add_market(self, gamma_market, coin):
+        mk = parse_gamma_market(gamma_market)
+        self.markets[mk["slug"]] = mk
+        self.token_coin[mk["up_token"]] = self.token_coin[mk["down_token"]] = coin
+        self.rec.write("markets", gamma_market)
+        await self.subscribe(mk)
 
     async def subscribe(self, mk):
         tokens = [mk["up_token"], mk["down_token"]]
@@ -408,6 +454,8 @@ class LiveTrader:
         while True:
             now = time.time()
             for mk in list(self.markets.values()):
+                if not mk["slug"].startswith(tuple(f"{c}-" for c in self.trade_coins)):
+                    continue
                 for tau in self.params.taus:
                     key = (mk["slug"], tau)
                     if key not in self.decided and mk["end"] - tau <= now < mk["end"] - tau + 2:
@@ -437,6 +485,7 @@ class LiveTrader:
         finally:
             for t in tasks:
                 t.cancel()
+            self.rec.close()
             write_report(self.out)
 
 
@@ -462,6 +511,7 @@ def main(argv=None):
         if name == "live":
             p.add_argument("--out", default="paper_data")
             p.add_argument("--hours", type=float, default=24 * 14)
+            p.add_argument("--coins", default="btc", help="逗号分隔，录制哪些币种，如 btc,eth,sol,xrp,doge；纸面单只下 BTC")
         else:
             p.add_argument("root", help="解压后的 polymarket-data-samples 目录")
     rp = sub.add_parser("report")
@@ -479,7 +529,7 @@ def main(argv=None):
         return
     print(f"纸面交易开始：τ={params.taus}，买价区间 [{params.lo}, {params.hi}]，每笔最多 {params.max_shares:.0f} 份。"
           f"只记录、不下单。输出目录 {args.out}", flush=True)
-    asyncio.run(LiveTrader(args.out, params).run(args.hours))
+    asyncio.run(LiveTrader(args.out, params, coins=tuple(args.coins.split(","))).run(args.hours))
 
 
 if __name__ == "__main__":
