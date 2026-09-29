@@ -12,11 +12,12 @@
 | `backtest_book.py` | 在真实逐秒盘口数据上回测吃单策略和报价校准（§9） |
 | `real_day.py` | 用真实一天的盘口 + Chainlink 价格给每个报价定价、反推隐含波动率（§10） |
 | `real/2026-09-08.md` | 2026-09-08 全天 BTC 5m 市场的真实数据报告 |
-| `test_*.py` | 26 个测试：蒙特卡洛验证定价公式；合成盘口验证两个回测工具 |
+| `paper_trader.py` | 纸面交易：实时记录行情并按候选规则模拟下单，只记账不下单（§11） |
+| `test_*.py` | 34 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具和纸面交易 |
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q          # 26 个测试
+python -m pytest -q          # 34 个测试
 python simulate.py           # 约 20 秒，重写 results.md
 ```
 
@@ -234,6 +235,25 @@ python real_day.py polymarket-data-samples --out real/2026-09-08.md
 - 只有一天、25 笔，而报告里有约 30 行策略，至少有一行碰巧好看并不奇怪；
 - 当时卖一上的挂单中位约 200 份（约 200 美元），就算信号是真的，一天毛利上限也只有几百美元，而且要和狙击机器人抢；
 - 必须在更多天的数据上复现（例如 outcometick 的付费归档从 2026-06 开始，TWAP 流从 2026-08-08 开始），再做纸面交易，才谈得上投入真钱。
+
+## 11. 纸面交易：`paper_trader.py`
+
+§10 的候选信号只有一天的数据，下一步是在实时行情里前向验证。`paper_trader.py` **只模拟、不下单，不需要任何密钥**：
+
+```bash
+pip install -r requirements.txt
+python paper_trader.py live --out paper_data              # 默认跑 14 天，Ctrl+C 可随时停
+python paper_trader.py report paper_data                  # 随时查看累计结果（也会每小时写 paper_data/report.md）
+python paper_trader.py replay polymarket-data-samples     # 同一规则在 2026-09-08 样例上的回放
+```
+
+- **规则**：收盘前 τ 秒（默认同时跑 60 秒和 30 秒两本独立账），如果强势方的最优卖价在 0.80–0.97 之间，就按卖一价、在卖一挂单量以内（每笔最多 100 份）模拟买入，扣 taker 费，持有到结算。如果对面最优买价折算出的价格更便宜，就按那个价格成交。
+- **数据来源**：Polymarket 官方公开接口，不经过 Hugging Face——Gamma 接口（市场和结算结果）、CLOB 盘口推送（`ws-subscriptions-clob.polymarket.com`）、RTDS 的 Chainlink 价格推送（`ws-live-data.polymarket.com`）。接口格式按官方 GitHub 文档编写。
+- **输出**：`ledger.csv` 是结算后的每笔纸面交易；`raw/<日期>/*.jsonl` 原样保存收到的所有盘口、价格和市场数据，也就是一份自采数据集；`errors.jsonl` 记录断线和重连。
+- **回放结果**（2026-09-08，每笔最多 100 份）：τ=30 秒共 29 笔、全部获胜、每份 +8.5¢、ROI +9.5%；τ=60 秒共 88 笔、胜率 93%、ROI +1.7%。回放与实时共用同一个决策函数，已有测试覆盖。
+- **限制**：写代码的这个环境连不上 Polymarket，所以实时联网部分只验证过断网时能记录错误、自动重连、不崩溃，还没有连上真实行情跑过。第一次运行时请先看 `raw/` 里有没有 `clob.jsonl` 和 `rtds.jsonl` 在增长。纸面成交偏乐观：真实下单时，卖一可能先被更快的机器人吃掉。
+
+**什么时候才考虑真钱**：τ=30 秒这本账累计至少 300 笔，扣费后 ROI 为正且 t 值 > 2，并且前后两半时间段都成立。达不到就说明这个信号不是真的，停止。
 
 ## 来源
 
