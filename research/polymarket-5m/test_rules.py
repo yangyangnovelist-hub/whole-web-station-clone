@@ -61,7 +61,7 @@ def test_quotes_come_from_aggressors_and_are_causal():
 
 def test_registry_is_fixed():
     r = ru.registry()
-    assert len(r) == 116 and len({x.name for x in r}) == 116 and [x.id for x in r] == list(range(1, 117))
+    assert len({x.name for x in r}) == len(r) and [x.id for x in r] == list(range(1, len(r) + 1))
 
 
 def test_a_planted_favourite_edge_is_found_and_judged(tmp_path):
@@ -77,3 +77,23 @@ def test_a_planted_favourite_edge_is_found_and_judged(tmp_path):
 def test_no_edge_passes_nothing(tmp_path):
     write(tmp_path, edge=False, days=range(1, 21))
     assert ru.run(tmp_path, tmp_path / "r.md", reps=2000)[1] == set()
+
+
+def test_maker_fills_only_when_a_later_trade_goes_through():
+    start = 1_000_000
+    t = np.array([start + 100, start + 100, start + 200, start + 250]) + ru.KNOWN_AFTER_BLOCK
+    is_up = np.array([True, False, True, True])
+    price = np.array([0.66, 0.36, 0.63, 0.60])   # ask 0.66, bid 0.64 (1 - 0.36); later trades 0.63 and 0.60
+    agg = np.array([True, True, False, False])
+    buy = np.array([True, True, True, True])
+    st = ru.build_state(start, "btc", True, np.nan, t, is_up, price, agg, buy, None, None)
+    got = ru.maker(195, "favourite", 0.60, 0.70)(st)  # rests at s=105 on the 0.64 bid
+    assert got == ("Up", pytest.approx(0.64), 105, "maker")
+    assert ru.maker(195, "favourite", 0.70, 0.80)(st) is None  # bid outside the band
+    st2 = ru.build_state(start, "btc", True, np.nan, t[:2], is_up[:2], price[:2], agg[:2], buy[:2], None, None)
+    assert ru.maker(195, "favourite", 0.60, 0.70)(st2) is None  # nothing traded below the bid afterwards
+
+
+def test_registry_keeps_ids_when_rules_are_added():
+    names = [r.name for r in ru.registry()]
+    assert len(names) == 172 and names[0].startswith("强势方 τ=240") and names[116].startswith("挂买单")

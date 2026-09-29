@@ -16,7 +16,7 @@ What a rule can see and pay, per market and second s of its window:
 - Binance 1s closes with a 2 s lag (4 s for the slower momentum variant),
   and real_day.MAIN_VOL as the per-second vol.
 
-Rules (116, fixed 2026-09-29 before any of them was run):
+Rules 1-116 were fixed 2026-09-29 before any of them was run:
 - A favourite at tau in {240,180,120,90,60,45,30,20,10} s with its ask in
   [0.50,0.60) ... [0.90,0.97): 45
 - B underdog at the same tau with its ask in [0.03,0.10) ... [0.40,0.50): 45
@@ -27,6 +27,11 @@ Rules (116, fixed 2026-09-29 before any of them was run):
 - E fade a Polymarket move of more than x (0.10, 0.20) over 30 s while
   Binance moved less than 0.5 sigma, at tau 180, 120, 60: 6
 - F previous market's winner, followed or reversed, bought 30 s in: 2
+Rules 117-172 were added after 1-116 had run and every taker rule lost:
+- G a resting bid at the current bid of the favourite (bid in [0.60,0.70) ...
+  [0.90,0.97)) or of the underdog ([0.02,0.10) ... [0.30,0.40)) at tau 240,
+  180, 120, 90, 60, 45, 30; filled only if a later trade of that side prints
+  below the bid (so the whole queue at that price was used up), no fee: 56
 
 Exploration on 2026-09-01..25 uses a split-half holdout, both ways: the ten
 rules with the smallest exact p (EV > 0, at least 100 trades) on one half are
@@ -90,6 +95,10 @@ class State:
     ask_up: np.ndarray        # executable Up ask: worse of last and next (NaN if neither)
     ask_down: np.ndarray
     mid: np.ndarray
+    last_bid_up: np.ndarray   # last Up bid / ask seen, at most 10 s old
+    last_ask_up: np.ndarray
+    fut_min_up: np.ndarray    # lowest / highest Up-equivalent trade after each second
+    fut_max_up: np.ndarray
     spot: Callable            # spot(sec) -> log price arrays
     vol: Callable
 
@@ -121,7 +130,11 @@ def build_state(start, coin, up_won, prev_up_won, t_block, is_up, price, agg, bu
     px, px_age, _, _ = _last_next(t, up_eq, GRID)
     px = np.where(px_age <= 30, px, np.nan)
     mid = np.where(np.isfinite(last_ask) & np.isfinite(last_bid), (last_ask + last_bid) / 2, px)
-    return State(start, coin, up_won, prev_up_won, px, ask_up, 1 - bid_up, mid, spot, vol)
+    after = np.searchsorted(t, GRID, "right")
+    suf_min = np.append(np.minimum.accumulate(up_eq[::-1])[::-1], np.inf)
+    suf_max = np.append(np.maximum.accumulate(up_eq[::-1])[::-1], -np.inf)
+    return State(start, coin, up_won, prev_up_won, px, ask_up, 1 - bid_up, mid, last_bid, last_ask,
+                 suf_min[after], suf_max[after], spot, vol)
 
 
 # --------------------------------------------------------------------- rules
@@ -226,6 +239,27 @@ def previous(mode):
     return f
 
 
+def maker(tau, which, lo, hi):
+    """Join the bid of one side; filled only if a later trade goes through it (conservative:
+    the whole queue at that price, us included, was used up). Makers pay no fee."""
+    def f(st):
+        s = bo.WINDOW_S - tau
+        fav = st.fav(s)
+        if fav is None:
+            return None
+        side = fav if which == "favourite" else ("Down" if fav == "Up" else "Up")
+        if side == "Up":
+            bid = st.last_bid_up[s]
+            filled = st.fut_min_up[s] < bid - 1e-9
+        else:
+            bid = 1 - st.last_ask_up[s]
+            filled = st.fut_max_up[s] > st.last_ask_up[s] + 1e-9
+        if not (np.isfinite(bid) and _in(float(bid), lo, hi) and filled):
+            return None
+        return side, float(bid), s, "maker"
+    return f
+
+
 TAUS = (240, 180, 120, 90, 60, 45, 30, 20, 10)
 FAV_BANDS = ((0.50, 0.60), (0.60, 0.70), (0.70, 0.80), (0.80, 0.90), (0.90, 0.97))
 DOG_BANDS = ((0.03, 0.10), (0.10, 0.20), (0.20, 0.30), (0.30, 0.40), (0.40, 0.50))
@@ -254,6 +288,14 @@ def registry():
             add(f"盘口 30s 变动>{x:.2f} 币安没动 反向 τ={tau}", "E 反向", fade(tau, x))
     for mode in ("follow", "reverse"):
         add(f"上一局结果{'延续' if mode == 'follow' else '反转'}", "F 上一局", previous(mode))
+    # Added 2026-09-29 after rules 1-116 had run (all taker rules lost): resting bids,
+    # filled only when a later trade goes through them. Ids 117-172.
+    for tau in (240, 180, 120, 90, 60, 45, 30):
+        for which, bands in (("favourite", ((0.60, 0.70), (0.70, 0.80), (0.80, 0.90), (0.90, 0.97))),
+                             ("underdog", ((0.02, 0.10), (0.10, 0.20), (0.20, 0.30), (0.30, 0.40)))):
+            for lo, hi in bands:
+                add(f"挂买单 {'强势方' if which == 'favourite' else '弱势方'} τ={tau} 买一∈[{lo:.2f},{hi:.2f})",
+                    "G 挂单（被穿价才算成交）", maker(tau, which, lo, hi))
     return rules
 
 
@@ -315,9 +357,9 @@ def evaluate(root, rules, d0, d1, progress=True):
         for r in rules:
             got = r.fn(st)
             if got:
-                sd, p, s = got
+                sd, p, s = got[:3]
                 won = st.up_won if sd == "Up" else not st.up_won
-                fee = float(bo.taker_fee(p))
+                fee = 0.0 if len(got) > 3 and got[3] == "maker" else float(bo.taker_fee(p))
                 out.append((r.id, mk.coin, int(mk.start), sd, p, fee, float(won), float(won) - p - fee, s))
         if progress and i % 5000 == 0:
             print(f"  {i:,}/{len(markets):,} markets", flush=True)

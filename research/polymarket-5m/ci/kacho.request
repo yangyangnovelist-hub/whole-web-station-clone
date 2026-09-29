@@ -4,6 +4,6 @@
 #         "calibrate: outcometick" also measures the settlement delay from the 09-08 trade prints)
 #       | makers (makers.py: resting orders vs aggressors by price and time left, select 09-01..13, test 09-14..25)
 #       | rules (rules.py: 116 executable rules on the on-chain tape, split-half holdout, candidates for --final)
-requested: 2026-09-29 batch-test 116 executable rules on the September on-chain tape
+requested: 2026-09-29 rerun with resting-bid rules 117-172 (filled only on a trade-through)
 mode: rules
 later: 2026-09-28
