@@ -162,6 +162,30 @@ def test_calibrate_matches_prints_to_later_fills():
     prints = pd.DataFrame({"asset_id": ["a", "a", "c"], "price": [0.5, 0.6, 0.5], "size": [5.0, 5.0, 1.0],
                            "ts_ms": [101_500, 101_900, 101_000]})
     d = oc.calibrate(prints, fills).set_index("ts_ms")
-    assert d.loc[101_500, "block_ts"] == 103 and d.loc[101_500, "same_size"]  # same size beats the earlier fill
+    assert d.loc[101_500, "block_ts"] == 103  # the size-7 fill at 100 is not the same trade
     assert d.loc[101_900, "delay"] == pytest.approx(2.1) and len(d) == 2
+
+
+def test_calibrate_pairs_a_burst_of_identical_fills_one_to_one():
+    fills = pd.DataFrame({"token_asset_id": ["a"] * 4, "timestamp": [100, 101, 102, 103],
+                          "price": [0.5] * 4, "token_amount": [5.0] * 4})
+    prints = pd.DataFrame({"asset_id": ["a"] * 3, "price": [0.5] * 3, "size": [5.0] * 3,
+                           "ts_ms": [100_200, 100_400, 101_100]})
+    d = oc.calibrate(prints, fills)
+    assert d["block_ts"].tolist() == [100, 101, 102]
     assert "延迟中位" in "\n".join(oc.calibration_md(d, len(prints)))
+
+
+def test_calibration_run_measures_the_delay_and_reprices_by_match_time(root, tmp_path):
+    import gzip
+    _, fills = oc.load(root)
+    src = tmp_path / "prints" / "BTC-5m"
+    src.mkdir(parents=True)
+    with gzip.open(src / "BTC-5m-last_trade_price-x.jsonl.gz", "wt") as fh:
+        for i, r in enumerate(fills.sort_values("timestamp").itertuples()):  # matched 1.5 s before its block
+            fh.write(json.dumps({"asset_id": r.token_asset_id, "event_ts_ms": r.timestamp * 1000 - 1500 + i % 97,
+                                 "payload": {"price": str(r.price), "size": str(r.token_amount)}}) + "\n")
+    d = oc.calibration_run(root, tmp_path / "prints", tmp_path / "delay.md", reps=200)
+    assert len(d) == len(fills) and d["delay"].median() == pytest.approx(1.5, abs=0.1)
+    text = (tmp_path / "delay.md").read_text()
+    assert "延迟中位 1.5 秒" in text and "按撮合时间" in text

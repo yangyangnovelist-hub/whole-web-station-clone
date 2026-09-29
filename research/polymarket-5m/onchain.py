@@ -2,6 +2,7 @@
 
     python onchain.py fetch data/onchain --from 2026-09-01 --to 2026-09-26   # Gamma, HF fills, Binance
     python onchain.py run data/onchain --out real/onchain-sept.md
+    python onchain.py calibrate data/onchain --prints <dir with last_trade_price files> --out real/onchain-delay.md
 
 Per-second books for September are not public, but every Polymarket trade is
 on chain: TimeSeventeen/Polymarket-v2 on Hugging Face (CC-BY-4.0) republishes
@@ -429,34 +430,42 @@ def prints_from_bundles(src):
 def calibrate(prints, fills, before=2, after=60):
     """Block time minus match time for each print found on chain.
 
-    A print is matched to the earliest unused fill of the same token at the same
-    price whose block time is within [-before, +after] seconds of it, preferring
-    one of the same size. Returns one row per matched print with its delay in
-    seconds (block timestamps are whole seconds, so -1 < delay < 0 is rounding)."""
-    tape = {tok: g.sort_values("timestamp") for tok, g in fills.groupby("token_asset_id", observed=True)}
-    used, out = set(), []
-    for r in prints.sort_values("ts_ms").itertuples():
-        g = tape.get(r.asset_id)
-        if g is None:
+    Prints and fills are paired one to one within each (token, price, size):
+    in time order, each print takes the first fill not yet taken whose block
+    time is at least `before` seconds before it, and the pair is kept if that
+    block time is at most `after` seconds after it. Pairing one to one keeps a
+    burst of identical fills from all landing on the earliest one, which would
+    make the delay look shorter than it is. Block timestamps are whole seconds,
+    so -1 < delay < 0 is rounding."""
+    def keys(df, tok, px, size):
+        return pd.DataFrame({"tok": df[tok].astype(str).to_numpy(),
+                             "pk": (df[px].to_numpy(float) * 10_000).round().astype("int64"),
+                             "sk": (df[size].to_numpy(float) * 100).round().astype("int64")})
+
+    f = keys(fills, "token_asset_id", "price", "token_amount").assign(ts=fills["timestamp"].to_numpy("int64"))
+    p = keys(prints, "asset_id", "price", "size").assign(ts_ms=prints["ts_ms"].to_numpy("int64"))
+    f_groups = {k: np.sort(g["ts"].to_numpy()) for k, g in f.groupby(["tok", "pk", "sk"], sort=False)}
+    out = []
+    for k, g in p.sort_values("ts_ms").groupby(["tok", "pk", "sk"], sort=False):
+        fts = f_groups.get(k)
+        if fts is None:
             continue
-        ts = r.ts_ms / 1000
-        c = g[(g["timestamp"] >= math.floor(ts) - before) & (g["timestamp"] <= ts + after)
-              & ((g["price"] - r.price).abs() < 5e-5)]
-        c = c[~c.index.isin(used)]
-        if c.empty:
-            continue
-        same = c[(c["token_amount"] - r.size).abs() <= 0.01 * max(r.size, 1e-9)]
-        pick = (same if len(same) else c).index[0]
-        used.add(pick)
-        out.append((r.asset_id, r.ts_ms, int(g.at[pick, "timestamp"]), len(same) > 0))
-    d = pd.DataFrame(out, columns=["asset_id", "ts_ms", "block_ts", "same_size"])
+        j = 0
+        for ts_ms in g["ts_ms"].to_numpy():
+            j = max(j, int(np.searchsorted(fts, ts_ms // 1000 - before, "left")))
+            if j >= len(fts):
+                break
+            if fts[j] <= ts_ms / 1000 + after:
+                out.append((k[0], ts_ms, int(fts[j])))
+                j += 1
+    d = pd.DataFrame(out, columns=["asset_id", "ts_ms", "block_ts"])
     d["delay"] = d["block_ts"] - d["ts_ms"] / 1000
-    return d
+    return d.sort_values("ts_ms").reset_index(drop=True)
 
 
 def calibration_md(d, n_prints):
     L = ["## 用带撮合时间的成交记录量出的上链延迟", "",
-         f"{len(d):,} / {n_prints:,} 条成交推送在链上找到了对应成交（同代币、同价格，优先同数量）。", ""]
+         f"{len(d):,} / {n_prints:,} 条成交推送在链上找到了对应成交（同代币、同价格、同数量，按先后一对一配对）。", ""]
     if d.empty:
         return L
     q = d["delay"].quantile([0.5, 0.9, 0.95, 0.99])
@@ -464,6 +473,43 @@ def calibration_md(d, n_prints):
           "| k 秒 | " + " | ".join(str(k) for k in range(11)) + " |", "|---|" + "---:|" * 11,
           "| 延迟 > k 的比例 | " + " | ".join(f"{(d['delay'] > k).mean():.3f}" for k in range(11)) + " |"]
     return L
+
+
+def calibration_run(root, prints_src, out, reps=20000):
+    """Delay from exchange-stamped prints, and the rule on those prints by match time."""
+    markets, fills = load(root)
+    prints = prints_from_bundles(prints_src)
+    if prints.empty:
+        raise SystemExit(f"no last_trade_price prints under {prints_src}")
+    lo, hi = prints["ts_ms"].min() // 1000 - 600, prints["ts_ms"].max() // 1000 + 600
+    fills = fills[(fills["timestamp"] >= lo) & (fills["timestamp"] <= hi)]
+    d = calibrate(prints, fills)
+    L = [f"# 上链延迟校准：{datetime.fromtimestamp(lo + 600, timezone.utc):%Y-%m-%d}", "",
+         "成交推送（last_trade_price）带交易所撮合时间，链上 OrderFilled 带区块时间。把两者对上，"
+         "就能直接量出链上时间比撮合晚多少，不用再从收盘后的成交去推。", ""] + calibration_md(d, len(prints))
+    tokens = set(prints["asset_id"])
+    mk = markets[markets["up_token"].isin(tokens) | markets["down_token"].isin(tokens)]
+    trig = []
+    for coin in sorted(mk["coin"].unique()):
+        f = Path(str(paths(root)["binance"]).format(coin=coin))
+        if f.exists():
+            trig.append(triggers(pd.read_parquet(f), mk[mk["coin"] == coin]))
+    if trig:
+        tr = prepare(pd.concat(trig, ignore_index=True), mk)
+        by_block = Tape(fills)
+        by_match = Tape(pd.DataFrame({"token_asset_id": prints["asset_id"], "timestamp": prints["ts_ms"] // 1000,
+                                      "price": prints["price"], "token_amount": prints["size"]}))
+        L += ["", f"## 同一套规则：按区块时间 vs 按撮合时间（{len(mk):,} 个市场，{len(tr):,} 次触发）", "",
+              "限价同主检验（跳变前价格 + 1 格）。按撮合时间的那一列没有上链延迟的问题。", "",
+              "| 窗口 | 按区块时间 | 按撮合时间 |", "|---|---|---|"]
+        for lo_, hi_ in ((0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (0, 5), (2, 7), (4, 9)):
+            a_, b_ = stats(price(tr, by_block, lo_, hi_), reps), stats(price(tr, by_match, lo_, hi_), reps)
+            L.append(f"| [t+{lo_}, t+{hi_}) | {fmt(a_)} | {fmt(b_)} |")
+        L += ["", "每格：笔数 | 胜率 | 平均价 | EV/份 | 精确 p。"]
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+    return d
 
 
 def robustness(main_, tape, markets, fills, tail, D, passed, reps):
@@ -491,10 +537,11 @@ def robustness(main_, tape, markets, fills, tail, D, passed, reps):
         L.append(f"| {k} | {fmt(stats(price(main_, tape, k, k + 1), reps))} |")
     ok = rob is not None and rob["n"] and rob["ev"] > 0 and rob["p"] < 0.05
     if passed and not ok:
-        L += ["", "**可信度结论：不采信。** 事先规则判为通过，但它取的 D 太短：上链延迟有一截超过 2 秒，"
-              "区块时间在 t+2 之后的成交里混有触发之前就撮合了的，那些才是赚钱的部分。D 取到让延迟尾巴"
-              "基本排除的长度后，优势消失。这说明过期报价存在，但只存在于触发后一两秒内，"
-              "信号延后 2 秒的做法拿不到；要确认需要带撮合时间的成交记录。"]
+        L += ["", "**可信度结论：待定。** 事先规则判为通过，但它取的 D 可能太短：收盘后仍有约 10% 的成交在 3–4 秒后"
+              "才出现，如果那是上链延迟，区块时间 t+2 之后的成交里就混有触发之前撮合的单子。按“连续 10 秒低于 5%”"
+              "取 D，优势消失。反过来，便宜成交的多出部分到 t+3 就几乎没了，比这条延迟尾巴消失得快得多，"
+              "说明收盘后的尾巴可能是收盘后仍在撮合，而不是延迟。两种解释要靠带撮合时间的成交记录来分（见 "
+              "`onchain.py calibrate`）。无论哪种，优势都只在触发后一两秒内，是拼速度的延迟套利。"]
     elif passed:
         L += ["", "**可信度结论：稳健 D 下仍然通过。**"]
     return L
@@ -502,7 +549,8 @@ def robustness(main_, tape, markets, fills, tail, D, passed, reps):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=("fetch", "run"))
+    ap.add_argument("cmd", choices=("fetch", "run", "calibrate"))
+    ap.add_argument("--prints", help="calibrate: directory with last_trade_price jsonl.gz files")
     ap.add_argument("root")
     ap.add_argument("--from", dest="d0", default=FIRST.isoformat())
     ap.add_argument("--to", dest="d1", default=LAST.isoformat())
@@ -520,6 +568,8 @@ def main(argv=None):
         print("markets:", fetch_markets(a.root, coins, d0, last), flush=True)
         fetch_binance(a.root, coins, d0, last)
         fetch_fills(a.root, d0, last, a.workdir)
+    elif a.cmd == "calibrate":
+        calibration_run(a.root, a.prints, a.out, a.reps)
     else:
         run(a.root, a.out, a.reps, d0, d1, a.csv)
 
