@@ -1,6 +1,7 @@
 """Turn paper_trader recordings into an outcometick-style bundle.
 
     python recording.py paper_data --out paper_data/bundle
+    python recording.py paper_data --fetch-outcomes     # after a run stops: resolve what it missed
     python strategy_zoo.py paper_data/bundle --confirm --out paper/confirm.md
 
 `paper_trader.py live` saves every websocket message it receives under
@@ -27,6 +28,7 @@ import csv
 import gzip
 import io
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -90,6 +92,32 @@ def market_rows(records, spot_by_sec):
                      "outcome_prices": [str(p) for p in prices], "strike_value": strike,
                      "raw": {**m, "outcomes": json.dumps(outcomes)}})
     return rows
+
+
+def fetch_outcomes(src, fetch=pt.fetch_json, now=None):
+    """Append resolved Gamma records for recorded markets that have none yet
+    (a run that stops right after a close never saw those markets resolve).
+    Returns the number still unresolved."""
+    src, now = Path(src), now or time.time()
+    latest = {}
+    for m in iter_jsonl(raw_files(src, "markets")):
+        if isinstance(m, dict) and str(m.get("slug", "")).startswith("btc-updown-5m-"):
+            latest[m["slug"]] = m
+    rec, missing = pt.Recorder(src), 0
+    for slug, m in sorted(latest.items()):
+        try:
+            if pt.parse_gamma_market(m)["up_won"] is not None or pt.parse_gamma_market(m)["end"] > now - 30:
+                continue
+            fresh = fetch(pt.GAMMA.format(slug=slug))
+        except Exception as e:  # keep going; the market simply stays unresolved
+            rec.write("errors", {"at": pt.now_ms(), "where": "fetch_outcomes", "slug": slug, "err": repr(e)})
+            missing += 1
+            continue
+        if fresh and pt.parse_gamma_market(fresh[0])["up_won"] is not None:
+            rec.write("markets", fresh[0])
+        else:
+            missing += 1
+    return missing
 
 
 def _top(x):
@@ -187,7 +215,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", help="paper_trader.py live 的 --out 目录")
     ap.add_argument("--out", help="输出目录（默认 <src>/bundle）")
+    ap.add_argument("--fetch-outcomes", action="store_true", help="先向 Gamma 补取尚未结算市场的结果")
     args = ap.parse_args(argv)
+    if args.fetch_outcomes:
+        print(f"unresolved after fetch: {fetch_outcomes(args.src)}")
     counts = build(args.src, args.out or Path(args.src) / "bundle")
     print(" ".join(f"{k}={v}" for k, v in counts.items()))
 

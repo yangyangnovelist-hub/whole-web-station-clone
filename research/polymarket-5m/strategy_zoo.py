@@ -377,9 +377,14 @@ def benjamini_hochberg(p, q=0.10):
 def evaluate(markets, strategies, reps=2000, ids=None):
     """One row per strategy. `ids` keeps registry numbering when testing a subset;
     Bonferroni (p_fwer) and BH correct for however many strategies are passed."""
-    ids = list(ids) if ids is not None else list(range(1, len(strategies) + 1))
     trades, _ = run_all(markets, strategies)
-    half = np.median([m.start for m in markets])
+    return summarize(trades, strategies, [m.start for m in markets], reps, ids), trades
+
+
+def summarize(trades, strategies, starts, reps=2000, ids=None):
+    """evaluate() on trades already made; `trades["strategy"]` indexes `strategies`."""
+    ids = list(ids) if ids is not None else list(range(1, len(strategies) + 1))
+    half = np.median(starts)
     rows = []
     for j, st in enumerate(strategies):
         g = trades[trades["strategy"] == j] if not trades.empty else trades
@@ -403,7 +408,7 @@ def evaluate(markets, strategies, reps=2000, ids=None):
     res["p_fwer"] = np.minimum(1.0, res["p"] * len(res))
     res["bh"] = benjamini_hochberg(res["p"].fillna(1.0).to_numpy())
     res["both_halves"] = (res["ev1"] > 0) & (res["ev2"] > 0) & (res["n1"] >= 5) & (res["n2"] >= 5)
-    return res, trades
+    return res
 
 
 def split_holdout(trades, markets, n_strategies, k=5, reps=20000):
@@ -457,22 +462,24 @@ def fmt(v, spec, default="–"):
     return default if v is None or (isinstance(v, float) and not np.isfinite(v)) else format(v, spec)
 
 
-def report(res, markets, reps, confirm=False, holdout=None):
+def report(res, markets, reps, confirm=False, holdout=None, intro=None):
     n_mk, k = len(markets), len(res)
     tested = res[res["n"] >= 10]
     lucky = 0.05 * len(tested)
     first, last = (pd.to_datetime(m.start, unit="s", utc=True) for m in (markets[0], markets[-1]))
     span = f"{first:%Y-%m-%d}" if first.date() == last.date() else f"{first:%Y-%m-%d} 至 {last:%Y-%m-%d}"
-    if confirm:
+    if intro:
+        lines = [intro.format(span=span, k=k, n_mk=n_mk, alpha=0.05 / k)]
+    elif confirm:
         lines = [f"# 预注册候选的前向检验：{span}", "",
                  f"只检验 {k} 个在 2026-09-08 样本上事先选定的候选（strategy_zoo.PREREGISTERED），数据全部是选定之后录制的。"
                  f"判定标准：Bonferroni 校正后 p < 0.05（即原始 p < {0.05 / k:.4f}）。达标的才算“确定能赚钱”；"
                  "还没达标只说明样本不够或没有优势，不能提前下结论。", "",
-                 f"数据：纸面交易录制，{n_mk} 个 BTC 5 分钟市场。"]
+                 f"数据：纸面交易录制，{n_mk} 个 BTC 5 分钟市场，60 秒 TWAP 结算。"]
     else:
         lines = [f"# {k} 个策略：{span} 单日检验", "",
-                 f"数据：outcometick 样例，{n_mk} 个 BTC 5 分钟市场。"]
-    lines += [f"60 秒 TWAP 结算。每个策略每个市场最多一笔，只用决策时点已收到的数据；"
+                 f"数据：outcometick 样例，{n_mk} 个 BTC 5 分钟市场，60 秒 TWAP 结算。"]
+    lines += [f"每个策略每个市场最多一笔，只用决策时点已收到的数据；"
              "吃单按当时卖一价成交并付 taker 费；挂单（maker）不付费，只有之后出现**更低价**的成交把价位击穿时才算成交（保守）。每笔 1 份，持有到结算。",
              "",
              f"p 值用精确模拟（{reps} 次）：零假设是“每笔的真实胜率 = 买价 + 手续费”，即市场扣费后定价公平，"
@@ -529,6 +536,7 @@ def main(argv=None):
     ap.add_argument("--out")
     ap.add_argument("--reps", type=int, default=20000, help="模拟次数（精确 p 值）")
     ap.add_argument("--confirm", action="store_true", help="只检验预注册的候选（用新录制的数据）")
+    ap.add_argument("--trades-out", help="逐笔交易另存为 CSV（id 列是注册表编号），供 forward.py 累积")
     args = ap.parse_args(argv)
     markets = build_markets(args.root)
     strategies, ids = registry(), None
@@ -538,6 +546,10 @@ def main(argv=None):
     res, trades = evaluate(markets, strategies, reps=args.reps, ids=ids)
     holdout = None if args.confirm else split_holdout(trades, markets, len(strategies), reps=args.reps)
     text = report(res, markets, args.reps, confirm=args.confirm, holdout=holdout)
+    if args.trades_out:
+        out_ids = ids or list(range(1, len(strategies) + 1))
+        trades.assign(id=[out_ids[j] for j in trades["strategy"]] if len(trades) else []) \
+            .drop(columns=["strategy"], errors="ignore").to_csv(args.trades_out, index=False)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text + "\n", encoding="utf-8")

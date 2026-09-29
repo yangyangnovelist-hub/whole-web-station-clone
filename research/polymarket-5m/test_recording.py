@@ -108,3 +108,19 @@ def test_zoo_runs_on_recording(recorded, tmp_path):
                          ids=sz.PREREGISTERED)
     assert res["id"].tolist() == list(sz.PREREGISTERED)
     assert "预注册候选的前向检验" in sz.report(res, markets, 100, confirm=True)
+
+
+def test_fetch_outcomes_backfills_markets_a_run_missed(tmp_path):
+    rec = pt.Recorder(tmp_path)
+    rec.write("markets", gamma(S0))  # recorded while open, run stopped before it resolved
+    rec.write("markets", gamma(S0 + 300, up_won=True))  # already resolved: no fetch needed
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return [gamma(S0, up_won=False)]
+
+    assert rc.fetch_outcomes(tmp_path, fetch=fetch) == 0
+    assert asked == [pt.GAMMA.format(slug=f"btc-updown-5m-{S0}")]
+    latest = [json.loads(line) for line in next(tmp_path.glob("raw/*/markets.jsonl")).read_text().splitlines()]
+    assert latest[-1]["slug"] == f"btc-updown-5m-{S0}" and latest[-1]["closed"]

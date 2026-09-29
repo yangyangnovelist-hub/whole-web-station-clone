@@ -16,11 +16,13 @@
 | `strategy_zoo.py` | 10 类共 100 个策略的统一回测，精确 p 值 + 多重检验校正（§12） |
 | `real/strategy-zoo-2026-09-08.md` | 100 个策略在 2026-09-08 上的结果（另有同名 `.csv`） |
 | `recording.py` | 把纸面交易录下的原始行情转成回测格式，用于预注册候选的前向检验（§13） |
-| `test_*.py` | 45 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具、100 个策略、录制转换和纸面交易 |
+| `forward.py` | 把多次录制的检验结果累积起来，对预注册候选做合并检验（§13） |
+| `kacho.py` | 在 kacho.io 公开数据集（约 1.57 万个 BTC 5m 市场）上检验预注册候选（§14） |
+| `test_*.py` | 53 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具、100 个策略、录制转换、累积检验、kacho 适配和纸面交易 |
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q          # 45 个测试
+python -m pytest -q          # 53 个测试
 python simulate.py           # 约 20 秒，重写 results.md
 ```
 
@@ -322,8 +324,17 @@ python strategy_zoo.py polymarket-data-samples --out real/strategy-zoo-2026-09-0
 
 ```bash
 python paper_trader.py live --out paper_data                 # 一直开着：录行情，也记纸面账
-python recording.py paper_data                               # 录到的原始数据 → paper_data/bundle
+python recording.py paper_data --fetch-outcomes              # 录到的原始数据 → paper_data/bundle（先补齐结算结果）
 python strategy_zoo.py paper_data/bundle --confirm --out paper/confirm.md
+```
+
+分几次录（比如每次几小时）时，用 `forward.py` 把每次的结果累积起来，不会重复计数：
+
+```bash
+python strategy_zoo.py paper_data/bundle --confirm --trades-out new.csv
+python forward.py add new.csv --markets paper_data/bundle     # 累积到 forward/trades.csv
+python forward.py add-ledger paper_data/ledger.csv            # 纸面账也累积
+python forward.py report                                      # forward/confirm.md：对全部已录市场的检验
 ```
 
 - `paper_trader.py live` 原样保存收到的每条盘口、成交、Chainlink 价格，并且（这次新增）会去 Gamma 取**每个**市场的结算结果，而不只是有纸面单的市场，这样录下来的就是一份完整数据集；
@@ -331,6 +342,24 @@ python strategy_zoo.py paper_data/bundle --confirm --out paper/confirm.md
 - 所有录制天数合并成一个数据集，样本随时间增长，随时可以重跑 `--confirm`；
 - 已有的一份独立小样本：[`real/cronos50.md`](real/cronos50.md) 用 CronosVirus00 公开的 50 个市场（2026-04-16，TWAP 结算之前）跑了同类规则。剩 30 秒买 0.80–0.97 的强势方 18 笔全胜，成本约 0.91，靠运气的概率约 18%。方向和 #10 一致，但远不够证明；而且那时还不是 TWAP 结算，机制不同；
 - 如果真有优势，最快的候选（#10 这类几乎不输的）大约 60 笔、2–3 天就能过关；胜率 70–80%、每份赚 5–10¢ 的候选（#61、#65）需要约 120–400 笔，按它们每天 50–70 笔算约 3–7 天。过了几百笔还不过关，就可以放弃这个方向。
+
+## 14. 独立大样本：kacho.io 数据集（`kacho.py`）
+
+[kacho.io](https://kacho.io/polymarket-5min-crypto-dataset) 公开了 2026-03-24 至 05-18 每个 BTC 5 分钟市场的逐秒最优报价（约 1.57 万个市场，CC0，放在 Hugging Face）。这份数据没有参与挑选候选，可以直接当独立检验集用，不用等前向数据。注意那段时间还是单点结算，不是 60 秒 TWAP：过关是强证据，不过关不能完全否定 TWAP 时代的效果。
+
+```bash
+mkdir -p data/kacho && for k in markets ticks; do
+  curl -L -o data/kacho/btc_$k.parquet \
+    https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/btc_$k.parquet
+done
+python kacho.py fetch-outcomes data/kacho      # Gamma 官方结算结果（数据集自带的标签有约 10% 缺失）
+python kacho.py fetch-binance data/kacho       # 币安 1 秒收盘价，给 #61/#62 动量规则当价格源
+python kacho.py run data/kacho --out real/kacho-btc.md
+```
+
+适配方式（都偏保守或中性）：标在第 s 秒的报价从第 s+1 秒起才使用，超过 5 秒没更新的报价当作缺失；#80 盘口失衡用 5¢ 内深度代替前三档；#61/#62 用币安 1 秒收盘价代替 Chainlink（规则不变，只换价格源）；没有成交记录和目标价，所以成交流、挂单和模型价差类策略在这里不交易。报告先给 7 个预注册候选的检验（Bonferroni 按 7 个校正），再附 100 个策略的探索性结果和一半选、一半验的样本外检验。
+
+本环境连不上 Hugging Face，所以这一步需要在能上网的机器上跑，大约需要几 GB 内存和十几分钟。
 
 ## 来源
 
