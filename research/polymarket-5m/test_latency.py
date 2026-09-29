@@ -84,3 +84,20 @@ def test_book_rules_buy_the_favourite_at_its_ask(export):
     assert len(t) == N and (t["price"] == 0.70).all() and t["won"].mean() == pytest.approx(0.8)
     assert lt.book_rule(markets, book, 90, 0.60, 0.80).empty  # 110 s without an update: stale, no trade
     assert lt.book_rule(markets, book, 295, 0.40, 0.55).shape[0] == N  # at 5 s the 0.50 ask is fresh
+
+
+def test_several_exports_count_each_row_once(export):
+    one, two = lt.load(export), lt.load(export, export)
+    assert all(len(a) == len(b) for a, b in zip(one, two))
+
+
+def test_next_test_is_judged_once_on_the_first_n_trades(export, tmp_path, monkeypatch):
+    monkeypatch.setattr(lt, "NEXT_SINCE", "2026-09-01")
+    lt.run(export, tmp_path / "all.md", reps=200)
+    assert "不适用" in (tmp_path / "all.md").read_text()
+    monkeypatch.setattr(lt, "NEXT_N", 100)
+    lt.run(export, tmp_path / "few.md", reps=200, since="2026-09-01")
+    assert f"目前 {N} 笔，不到 100 笔，不判定" in (tmp_path / "few.md").read_text()
+    monkeypatch.setattr(lt, "NEXT_N", 20)
+    lt.run(export, tmp_path / "n.md", reps=200, since="2026-09-01")
+    assert "按时间取前 20 笔）：过期报价（z=2，0.4 秒后按卖一买）：20 笔" in (tmp_path / "n.md").read_text()

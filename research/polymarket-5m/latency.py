@@ -35,7 +35,11 @@ p = 0.065, with the edge falling from +4.9c at 0 s to zero at 1 s.
 
 Next test, fixed 2026-09-29 (commit f92f5f7, 21:14 UTC) after that result and before any later data: on Dublin
 books recorded after 2026-09-29 20:30 UTC, z = 2 and a 0.4 s reaction at the ask of that moment
-pass with EV > 0 and exact p < 0.05 (run with --since 2026-09-30 or later, see NEXT_*).
+pass with EV > 0 and exact p < 0.05 (see NEXT_*). Stopping rule, fixed 2026-09-29 21:40 UTC
+before any of these books were exported: judged once, on the first 700 such trades in time order
+among markets starting from 2026-09-29 20:30 UTC (run with --since "2026-09-29 20:30" on the daily
+exports); with fewer the run reports the count and no verdict, so watching the data arrive cannot
+pick a favourable stopping point.
 """
 from __future__ import annotations
 
@@ -57,6 +61,7 @@ import binary as bo
 LAGS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 5.0)
 PRIMARY_Z, PRIMARY_LAG = 3.0, 0.5
 NEXT_Z, NEXT_LAG = 2.0, 0.4  # the next preregistered test, for books after 2026-09-29 20:30 UTC
+NEXT_SINCE, NEXT_N = "2026-09-29 20:30", 700  # judged once, on the first NEXT_N trades from NEXT_SINCE
 ZS = (2.0, 3.0, 4.0)
 TAUS = (240, 60)
 
@@ -112,13 +117,11 @@ def load_books(d):
     return books.sort_values(["market_id", "ts"], kind="stable").reset_index(drop=True)
 
 
-def load(d):
-    d = Path(d)
-    books = load_books(d)
-    reg = read_table(d, r"market_registry\.csv", ["market_id", "start_ts"])
-    out = read_table(d, r"market_outcomes\.csv", ["market_id", "winner"])
-    markets = reg.drop_duplicates("market_id").merge(out.drop_duplicates("market_id"), on="market_id")
-    _, raw = _read(d, r"shadow_current\.jsonl\.gz")
+def _binance(d):
+    try:
+        _, raw = _read(d, r"shadow_current\.jsonl\.gz")
+    except FileNotFoundError:
+        return []
     rows = []
     with gzip.open(io.BytesIO(raw), "rt", errors="replace") as f:
         for line in f:
@@ -129,8 +132,24 @@ def load(d):
                 rows.append((float(e["trade_ts"]), float(e["receive_ts"]), float(e["price"])))
             except (ValueError, KeyError, TypeError):
                 continue
-    binance = pd.DataFrame(rows, columns=["trade_ts", "receive_ts", "price"]).sort_values("trade_ts")
-    return books, markets, binance
+    return rows
+
+
+def load(*dirs):
+    """Books, markets and Binance trades of one or more export directories (e.g. the daily
+    exports), with rows that appear in several of them kept once."""
+    dirs = [Path(d) for d in dirs]
+    books = pd.concat([load_books(d) for d in dirs], ignore_index=True)
+    if len(dirs) > 1:
+        books = books.drop_duplicates().sort_values(["market_id", "ts"], kind="stable").reset_index(drop=True)
+    reg = pd.concat([read_table(d, r"market_registry\.csv", ["market_id", "start_ts"]) for d in dirs])
+    out = pd.concat([read_table(d, r"market_outcomes\.csv", ["market_id", "winner"]) for d in dirs])
+    markets = reg.drop_duplicates("market_id").merge(out.drop_duplicates("market_id"), on="market_id")
+    rows = [r for d in dirs for r in _binance(d)]
+    if not rows:
+        raise FileNotFoundError(f"no BINANCE_AGG_TRADE events under {', '.join(map(str, dirs))}")
+    binance = pd.DataFrame(rows, columns=["trade_ts", "receive_ts", "price"]).drop_duplicates().sort_values("trade_ts")
+    return books, markets, binance.reset_index(drop=True)
 
 
 def spot_grid(binance):
@@ -203,8 +222,8 @@ def trade(trig, book, lag, stale_only):
             continue
         won = float(r.winner == r.side)
         fee = float(bo.taker_fee(p))
-        rows.append((won, p, fee, won - p - fee, size))
-    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size"])
+        rows.append((won, p, fee, won - p - fee, size, r.t))
+    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t"])
 
 
 # Taker rules that only need the book: (name, tau, lo, hi); ids as in strategy_zoo.
@@ -240,8 +259,17 @@ def fmt(t, reps):
             f"{p:.4f} | {t['size'].median():.0f}")
 
 
+def verdict(t, z, lag, reps):
+    p = bo.fair_price_pvalue(t["pnl"].to_numpy(), (t["price"] + t["fee"]).to_numpy(), sims=reps) \
+        if len(t) >= 10 and t["pnl"].mean() > 0 else 1.0
+    ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05
+    return (f"过期报价（z={z:g}，{lag:g} 秒后按卖一买）：{len(t)} 笔，EV "
+            f"{100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，p = {p:.4f} → {'通过' if ok else '没通过'}")
+
+
 def run(d, out, reps=20000, since=None, until=None, label=""):
-    books, markets, binance = load(d)
+    dirs = [d] if isinstance(d, (str, Path)) else list(d)
+    books, markets, binance = load(*dirs)
     if since or until:
         lo = pd.Timestamp(since or "2000-01-01", tz="UTC").timestamp()
         hi = pd.Timestamp(until or "2100-01-01", tz="UTC").timestamp()
@@ -251,8 +279,9 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
     book = Book(books)
     delay = (binance["receive_ts"] - binance["trade_ts"]).quantile([0.5, 0.9, 0.99])
     L = [f"# 过期报价的时间尺度：币安跳变后 Polymarket 卖一能挂多久{label}", "",
-         f"数据：`{Path(d).name}`，{len(markets):,} 个 BTC 5 分钟市场，{len(books):,} 次盘口更新（交易所时间戳），"
-         f"{len(binance):,} 笔币安永续逐笔成交。探索性质：这段时间在九月链上分析里已经看过。", "",
+         f"数据：{'、'.join(f'`{Path(x).name}`' for x in dirs)}，{len(markets):,} 个 BTC 5 分钟市场"
+         f"{f'（{since} UTC 起开始的）' if since else ''}，{len(books):,} 次盘口更新（交易所时间戳），"
+         f"{len(binance):,} 笔币安永续逐笔成交。", "",
          f"币安成交到 Dublin 收到的延迟：中位 {1000 * delay[0.5]:.0f} ms，90% {1000 * delay[0.9]:.0f} ms，"
          f"99% {1000 * delay[0.99]:.0f} ms。", ""]
     verdicts = []
@@ -269,16 +298,17 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
         for lag in LAGS:
             L.append(f"| {lag:g} 秒 | {fmt(trade(trig, book, lag, False), reps)} | {fmt(trade(trig, book, lag, True), reps)} |")
         L.append("")
-        for vz, vlag, tag in ((PRIMARY_Z, PRIMARY_LAG, "09-26..29 的检验"), (NEXT_Z, NEXT_LAG, "下一次检验（只对 09-29 20:30 以后的数据有效）")):
-            if z != vz:
-                continue
-            t = trade(trig, book, vlag, False)
-            p = bo.fair_price_pvalue(t["pnl"].to_numpy(), (t["price"] + t["fee"]).to_numpy(), sims=reps) \
-                if len(t) >= 10 and t["pnl"].mean() > 0 else 1.0
-            ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05
-            verdicts.append(f"{tag}：过期报价（z={z:g}，{vlag:g} 秒后按卖一买）：{len(t)} 笔，EV "
-                            f"{100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，p = {p:.4f} → "
-                            f"{'通过' if ok else '没通过'}")
+        if z == PRIMARY_Z:
+            verdicts.append("09-26..29 的检验：" + verdict(trade(trig, book, PRIMARY_LAG, False), z, PRIMARY_LAG, reps))
+        if z == NEXT_Z:
+            t = trade(trig, book, NEXT_LAG, False).sort_values("t", kind="stable")
+            head = f"下一次检验（{NEXT_SINCE} UTC 起开始的市场，按时间取前 {NEXT_N} 笔）："
+            if not since or pd.Timestamp(since, tz="UTC") < pd.Timestamp(NEXT_SINCE, tz="UTC"):
+                verdicts.append(head + f"不适用，这次运行含更早的数据（用 --since \"{NEXT_SINCE}\"）")
+            elif len(t) < NEXT_N:
+                verdicts.append(head + f"目前 {len(t)} 笔，不到 {NEXT_N} 笔，不判定")
+            else:
+                verdicts.append(head + verdict(t.head(NEXT_N), z, NEXT_LAG, reps))
     L += ["## 真实盘口上的吃单规则", "",
           "剩 τ 秒时，强势方卖一在区间内就按卖一买 1 份（盘口 10 秒内有更新才算），付 taker 费，持有到结算。", "",
           "| # | 规则 | 笔数 / 胜率 / 平均价 / EV / p / 卖一挂单量中位 |", "|---:|---|---|"]
@@ -290,7 +320,8 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
         ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05 / len(BOOK_RULES)
         verdicts.append(f"#{rid} {name}：{len(t)} 笔，EV {100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，"
                         f"p = {p:.4f} → {'通过' if ok else '没通过'}")
-    L += ["", "## 事先定好的判定（只对 --since 2026-09-26 的运行有效）", ""] + [f"- {v}" for v in verdicts] + [""]
+    L += ["", "## 事先定好的判定", "",
+          "09-26..29 的检验和 #9–#104 只对 `--since 2026-09-26` 的那次运行有效；下一次检验见第一条。", ""] + [f"- {v}" for v in verdicts] + [""]
     L += ["每格：笔数 | 胜率 | 平均价 | EV/份 | 精确 p | 卖一挂单量中位（份）。反应延迟从币安成交所在的交易所时间算起，"
           "包括收到行情、决策和订单到达交易所的全部时间；放在 Dublin 的程序实际大约 0.15–0.3 秒。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -300,7 +331,7 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("export_dir")
+    ap.add_argument("export_dir", nargs="+", help="one or more export directories (e.g. the daily ones)")
     ap.add_argument("--out", default="real/latency-t1.md")
     ap.add_argument("--reps", type=int, default=20000)
     ap.add_argument("--since", help="only markets starting on/after this UTC date")
