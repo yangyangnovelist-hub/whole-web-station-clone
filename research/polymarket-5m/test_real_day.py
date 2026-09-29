@@ -19,8 +19,11 @@ def write_gz(path, text):
 
 @pytest.fixture(scope="module")
 def bundle(tmp_path_factory):
+    return make_bundle(tmp_path_factory.mktemp("bundle") / "polymarket-data-samples")
+
+
+def make_bundle(root):
     """A two-market bundle laid out like the outcometick sample."""
-    root = tmp_path_factory.mktemp("bundle") / "polymarket-data-samples"
     rng = np.random.default_rng(3)
     secs = np.arange(S0 - 1200, S0 + 700)
     price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-4, len(secs))))
