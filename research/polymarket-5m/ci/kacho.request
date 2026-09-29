@@ -1,4 +1,4 @@
 # Changing this file re-runs .github/workflows/polymarket-kacho.yml on this branch.
-# "mode: stage2" runs kacho.stage2 (momentum rules #62/#54 on ETH/SOL/XRP/DOGE).
-requested: 2026-09-29 stage 2
-mode: stage2
+# mode: btc (default) | stage2 (momentum #62/#54 on ETH/SOL/XRP/DOGE) | stage3 (stale-book #101/#102, all coins)
+requested: 2026-09-29 stage 3
+mode: stage3

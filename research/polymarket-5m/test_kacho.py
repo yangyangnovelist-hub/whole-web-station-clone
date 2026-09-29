@@ -96,3 +96,19 @@ def test_stage2_pools_other_coins(tmp_path):
     assert "| 62 |" in text and "| 54 |" in text and "结论：" in text
     per_coin = pd.read_csv(tmp_path / "s2.csv")
     assert set(per_coin["coin"]) == {"eth"} and set(per_coin["lag"]) == {1, 2}
+
+
+def test_stale_rules_fire_only_on_a_still_book(tmp_path):
+    coin_won = write_coin(tmp_path, "sol", seed=3)
+    spot = pd.read_parquet(tmp_path / "sol_binance_1s.parquet")
+    markets = kc.build_markets(tmp_path, spot=spot, coin="sol", signal_lag=2)
+    m = markets[3]
+    still = sz._unchanged_for(m)
+    # The synthetic book sits at 0.49/0.50 until t=200, then jumps and sits again.
+    assert still[150] >= 100 and still[202] <= 2
+    # #102 buys the favourite once both book and price have been still for 20s inside tau 120..20.
+    trade = sz.STALE[102].fn(m)
+    if trade is not None:
+        assert 180 <= trade["t"] <= 280 and 0.60 <= trade["price"] <= 0.95
+    text = kc.stage3(tmp_path, tmp_path / "s3.md", coins=("sol",), reps=200)
+    assert "第三阶段" in text and "| 101 |" in text and "| 102 |" in text

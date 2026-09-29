@@ -299,6 +299,71 @@ def maker_bid(tau, which):
     return f
 
 
+def _unchanged_for(m):
+    """Seconds since the Up quote (bid, ask) last changed, for every second of the market."""
+    bid = m.rows["bid_up"].to_numpy(float)
+    ask = m.rows["ask_up"].to_numpy(float)
+    n = len(bid)
+    changed = np.r_[True, ~((bid[1:] == bid[:-1]) & (ask[1:] == ask[:-1]))]
+    last = np.maximum.accumulate(np.where(changed, np.arange(n), 0))
+    return np.arange(n) - last
+
+
+def _spot_move(m, back):
+    """Log move of the reference price over `back` seconds, as known at each second,
+    and the per-second vol; NaN where the price is not known yet."""
+    r = m.rows
+    info = m.start + r["t_info"].to_numpy(int)
+    now = r["log_spot"].to_numpy(float)
+    past = m.log_spot.reindex(info - back).to_numpy(float) if len(m.log_spot) else np.full(len(r), np.nan)
+    ok = r["spot_ok"].to_numpy(bool) & (r["history_s"].to_numpy(float) >= rd.MIN_HISTORY_S)
+    return np.where(ok, now - past, np.nan), r[rd.MAIN_VOL].to_numpy(float)
+
+
+def stale_move(lookback=10, z=2.0, taus=(240, 60)):
+    """Information arrived, the book did not react: the reference price moved more than
+    z sigma over `lookback` seconds while the Up quote has not changed since before the
+    move began. Buy in the direction of the move at the first such second."""
+    def f(m):
+        move, vol = _spot_move(m, lookback)
+        still = _unchanged_for(m)
+        lag = m.rows.index.to_numpy() - m.rows["t_info"].to_numpy(int)
+        with np.errstate(invalid="ignore"):
+            hit = (np.abs(move) > z * vol * math.sqrt(lookback)) & (still >= lag + lookback)
+        for t in range(bo.WINDOW_S - taus[0], bo.WINDOW_S - taus[1] + 1):
+            if not hit[t]:
+                continue
+            side = "Up" if move[t] > 0 else "Down"
+            p = m.ask(m.rows.loc[t], side)
+            if in_band(p):
+                return taker(side, p, t)
+        return None
+    return f
+
+
+def stale_theta(stale_s=20, zmax=0.5, taus=(120, 20), lo=0.60, hi=0.95):
+    """Nothing happened, time passed: the Up quote has not changed for `stale_s` seconds
+    and the reference price barely moved, so the leader's fair odds rose while its
+    price did not. Buy the favourite at the first such second."""
+    def f(m):
+        move, vol = _spot_move(m, stale_s)
+        still = _unchanged_for(m)
+        with np.errstate(invalid="ignore"):
+            hit = (still >= stale_s) & (np.abs(move) <= zmax * vol * math.sqrt(stale_s))
+        for t in range(bo.WINDOW_S - taus[0], bo.WINDOW_S - taus[1] + 1):
+            if not hit[t]:
+                continue
+            r = m.rows.loc[t]
+            if not np.isfinite(r["mid"]):
+                continue
+            side = "Up" if r["mid"] >= 0.5 else "Down"
+            p = m.ask(r, side)
+            if in_band(p, lo, hi):
+                return taker(side, p, t)
+        return None
+    return f
+
+
 @dataclass
 class Strategy:
     name: str
@@ -344,6 +409,13 @@ def registry():
             s.append(Strategy(f"挂单做市 {'强势方' if which == 'favourite' else '弱势方'} τ={tau}", "J 挂单(maker)",
                               maker_bid(tau, which)))
     return s
+
+
+# Stale-book rules, added 2026-09-29 from the idea that prices move in jumps: a
+# quote that sits still while information arrives (101) or while time runs out
+# (102) should be mispriced. Kept outside registry() so ids 1-100 never shift.
+STALE = {101: Strategy("盘口未动的价格跳变 10s z>2 τ=240..60", "K 盘口停滞", stale_move()),
+         102: Strategy("盘口与价格都停 20s 买强势方 τ=120..20 [0.60,0.95]", "K 盘口停滞", stale_theta())}
 
 
 # ----------------------------------------------------------------- evaluation

@@ -4,6 +4,7 @@
     python kacho.py fetch-binance data/kacho           # Binance 1s closes for the same days
     python kacho.py run data/kacho --out real/kacho-btc.md
     python kacho.py stage2 data/kacho --out real/kacho-stage2.md   # after fetching eth/sol/xrp/doge
+    python kacho.py stage3 data/kacho --out real/kacho-stage3.md   # stale-book rules, all five coins
 
 kacho.io recorded per-second top of book for every Polymarket BTC 5m market
 from 2026-03-24 to 2026-05-18 (CC0, huggingface.co/datasets/kachoio/
@@ -56,6 +57,7 @@ STALE_S = 5
 STAGE2 = (62, 54)
 STAGE2_COINS = ("eth", "sol", "xrp", "doge")
 STAGE2_LAG = 2
+STAGE3_COINS = ("btc", "eth", "sol", "xrp", "doge")
 
 
 def paths(root, coin="btc"):
@@ -260,10 +262,25 @@ STAGE2_INTRO = """# 第二阶段：动量规则在其他币种上的检验
 通过标准：合并后 p < 0.05 / 2 = 0.025，且 EV > 0。"""
 
 
-def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
-    reg = sz.registry()
-    ids = list(STAGE2)
-    strategies = [reg[i - 1] for i in ids]
+STAGE3_INTRO = """# 第三阶段：盘口停滞时的错价（kacho.STAGE3）
+
+想法来自“价格是跳着动的”：信息到来时价格跳，没有信息时停住。停住的报价如果没跟上信息或时间，就可能错价。
+规则在跑之前写死（2026-09-29），每个市场最多一笔：
+- #101「信息到了、盘口没动」：参考价格（币安 1 秒收盘）10 秒内涨跌超过 2σ，而 Up 报价从这次变动开始前就一直没变，
+  在剩 240 到 60 秒之间第一次出现时顺着方向买；
+- #102「什么都没发生、时间在走」：Up 报价 20 秒没变、参考价格 20 秒内变动不到 0.5σ，
+  在剩 120 到 20 秒之间第一次出现时买价格在 0.60–0.95 的强势方。
+数据：kacho.io 的 {coins}（2026-03 至 05，单点结算时期）。信号延后 {lag} 秒。
+通过标准：合并后 p < 0.05 / 2 = 0.025，且 EV > 0。
+说明：#101 的“动量”部分和前两阶段相关，这些币种的数据也在前两阶段用过，所以这不是完全干净的独立检验；
+过关后还要在前向数据上复核。"""
+
+
+def pooled_test(root, out, rules, coins, intro, reps=20000, lags=(STAGE2_LAG, 1)):
+    """Run `rules` ({id: Strategy}) on every coin, pool the trades, and report a
+    Bonferroni-corrected test at lags[0] (the preregistered lag) plus the others."""
+    ids = list(rules)
+    strategies = [rules[i] for i in ids]
     pooled = {lag: [] for lag in lags}
     starts = {lag: [] for lag in lags}
     per_coin, missing = [], []
@@ -286,25 +303,25 @@ def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
             per_coin += [{"coin": coin, "lag": lag, "markets": len(markets), **r} for r in res.to_dict("records")]
             print(f"{coin} lag={lag}: {len(markets)} markets, {len(trades)} trades", flush=True)
             del markets
-    lines = [STAGE2_INTRO.format(coins="、".join(c.upper() for c in coins), lag=STAGE2_LAG)]
+    lines = [intro.format(coins="、".join(c.upper() for c in coins), lag=lags[0])]
     if missing:
         lines += ["", f"缺数据、未参与：{'、'.join(missing)}。"]
     verdict = None
     for lag in lags:
         trades = pd.concat(pooled[lag], ignore_index=True) if pooled[lag] else pd.DataFrame(columns=["strategy"])
         res = sz.summarize(trades, strategies, starts[lag] or [0], reps, ids)
-        head = "主检验" if lag == STAGE2_LAG else "参考（信号只延后 1 秒，和 BTC 那次相同）"
+        head = "主检验" if lag == lags[0] else f"参考（信号延后 {lag} 秒）"
         lines += ["", f"## {head}：信号延后 {lag} 秒，{len(starts[lag])} 个市场", "",
                   "| # | 策略 | 笔数 | 胜率 | 平均价 | EV/份 | ROI | 原始 p | 校正 p | 前半 EV | 后半 EV | 通过 |",
                   "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:-:|"]
         for r in res.itertuples():
-            ok = lag == STAGE2_LAG and r.n >= 10 and r.p < 0.05 / len(ids) and r.ev > 0
+            ok = lag == lags[0] and r.n >= 10 and r.p < 0.05 / len(ids) and r.ev > 0
             lines.append(f"| {r.id} | {r.name} | {r.n} | {sz.fmt(r.win * 100 if r.n else np.nan, '.0f')}% | "
                          f"{sz.fmt(r.price, '.3f')} | {sz.fmt(r.ev * 100 if r.n else np.nan, '+.2f')}¢ | "
                          f"{sz.fmt(r.roi * 100 if r.n else np.nan, '+.1f')}% | {r.p:.4f} | {r.p_fwer:.4f} | "
                          f"{sz.fmt(r.ev1 * 100 if np.isfinite(r.ev1) else np.nan, '+.2f')}¢ | "
                          f"{sz.fmt(r.ev2 * 100 if np.isfinite(r.ev2) else np.nan, '+.2f')}¢ | {'✓' if ok else ''} |")
-        if lag == STAGE2_LAG:
+        if lag == lags[0]:
             verdict = res.assign(passed=(res["n"] >= 10) & (res["p"] < 0.05 / len(ids)) & (res["ev"] > 0))
     pc = pd.DataFrame(per_coin)
     if not pc.empty:
@@ -316,7 +333,7 @@ def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
         n_pass = int(verdict["passed"].sum())
         lines += ["", f"**结论：{n_pass} / {len(ids)} 条规则通过。**" + (
             "通过只说明在这段历史数据上有统计优势；成交按显示的卖一价计算，真实下单可能更差，必须先小仓位实盘验证。"
-            if n_pass else "没有规则在独立币种上复现 BTC 上的优势。")]
+            if n_pass else "没有规则通过。")]
     text = "\n".join(lines) + "\n"
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(text, encoding="utf-8")
@@ -324,16 +341,26 @@ def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
     return text
 
 
+def stage2(root, out, coins=STAGE2_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
+    reg = sz.registry()
+    return pooled_test(root, out, {i: reg[i - 1] for i in STAGE2}, coins, STAGE2_INTRO, reps, lags)
+
+
+def stage3(root, out, coins=STAGE3_COINS, reps=20000, lags=(STAGE2_LAG, 1)):
+    return pooled_test(root, out, dict(sz.STALE), coins, STAGE3_INTRO, reps, lags)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2"):
+    for name in ("fetch-outcomes", "fetch-binance", "run", "stage2", "stage3"):
         p = sub.add_parser(name)
         p.add_argument("root", help="放 <coin>_markets.parquet 和 <coin>_ticks.parquet 的目录")
         if name.startswith("fetch"):
             p.add_argument("--coin", default="btc")
         else:
-            p.add_argument("--out", default="real/kacho-btc.md" if name == "run" else "real/kacho-stage2.md")
+            p.add_argument("--out", default={"run": "real/kacho-btc.md", "stage2": "real/kacho-stage2.md",
+                                             "stage3": "real/kacho-stage3.md"}[name])
             p.add_argument("--reps", type=int, default=20000)
         if name == "run":
             p.add_argument("--limit", type=int, help="只用前 N 个市场（调试用）")
@@ -344,6 +371,8 @@ def main(argv=None):
         print("%s binance days: %d of %d" % (args.coin, *fetch_binance(args.root, args.coin)))
     elif args.cmd == "stage2":
         print(stage2(args.root, args.out, reps=args.reps))
+    elif args.cmd == "stage3":
+        print(stage3(args.root, args.out, reps=args.reps))
     else:
         print(run(args.root, args.out, args.reps, args.limit))
 

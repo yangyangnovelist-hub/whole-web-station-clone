@@ -2,9 +2,9 @@ name: polymarket-kacho
 
 # Runs research/polymarket-5m/kacho.py on a GitHub runner, which can reach
 # Hugging Face, Gamma and Binance, and commits the report to this branch.
-# One run per change to ci/kacho.request; a line "mode: stage2" there runs the
-# stage-2 test on the other coins instead of the BTC check. Nothing here trades
-# or uses a key.
+# One run per change to ci/kacho.request; a line "mode: stage2" or "mode: stage3"
+# there runs that pooled test instead of the BTC check. Nothing here trades or
+# uses a key.
 on:
   push:
     branches: [claude/polymarket-options-strategy-1lc7i4]
@@ -39,13 +39,18 @@ jobs:
       - name: Mode
         id: mode
         run: |
-          if grep -q "^mode: stage2" ci/kacho.request; then echo "mode=stage2"; else echo "mode=btc"; fi >> "$GITHUB_OUTPUT"
+          mode=$(sed -n 's/^mode: *//p' ci/kacho.request | head -1)
+          case "$mode" in
+            stage2) echo "mode=stage2"; echo "coins=eth sol xrp doge" ;;
+            stage3) echo "mode=stage3"; echo "coins=btc eth sol xrp doge" ;;
+            *) echo "mode=btc" ;;
+          esac >> "$GITHUB_OUTPUT"
 
-      - name: "Stage 2: download, resolve and test ETH/SOL/XRP/DOGE"
-        if: steps.mode.outputs.mode == 'stage2'
+      - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
+        if: steps.mode.outputs.mode != 'btc'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
-          for c in eth sol xrp doge; do
+          for c in ${{ steps.mode.outputs.coins }}; do
             for k in markets ticks; do
               curl -fSL --retry 5 -o "$RUNNER_TEMP/kacho/${c}_$k.parquet" \
                 "https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/${c}_$k.parquet" || true
@@ -54,7 +59,7 @@ jobs:
             python kacho.py fetch-binance "$RUNNER_TEMP/kacho" --coin "$c" || true
           done
           ls -la "$RUNNER_TEMP/kacho"
-          python kacho.py stage2 "$RUNNER_TEMP/kacho" --out real/kacho-stage2.md
+          python kacho.py ${{ steps.mode.outputs.mode }} "$RUNNER_TEMP/kacho" --out real/kacho-${{ steps.mode.outputs.mode }}.md
 
       - name: Download the kacho.io BTC files (CC0)
         if: steps.mode.outputs.mode == 'btc'
