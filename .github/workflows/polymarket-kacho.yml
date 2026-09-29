@@ -50,7 +50,14 @@ jobs:
 
       - name: Survey Hugging Face datasets
         if: steps.mode.outputs.mode == 'survey'
-        run: python hf_survey.py --out real/hf-survey.md
+        run: |
+          specs=()
+          while IFS= read -r l; do specs+=(--inspect "$l"); done < <(sed -n 's/^inspect: *//p' ci/kacho.request)
+          if [ ${#specs[@]} -gt 0 ]; then
+            python hf_survey.py "${specs[@]}" --workdir "$RUNNER_TEMP" --out real/hf-inspect.md
+          else
+            python hf_survey.py --out real/hf-survey.md
+          fi
 
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
         if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey'
@@ -102,7 +109,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-* real/hf-survey.md 2>/dev/null || true
+          git add real/kacho-* real/hf-*.md 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \

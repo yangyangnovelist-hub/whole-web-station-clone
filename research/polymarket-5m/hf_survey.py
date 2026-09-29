@@ -1,6 +1,7 @@
 """List Hugging Face datasets that may hold Polymarket 5m data, with their files.
 
     python hf_survey.py --out real/hf-survey.md
+    python hf_survey.py --inspect "aliplayer1/polymarket-crypto-updown data/orderbook/crypto=BTC/timeframe=5-minute/*"
 
 Runs where Hugging Face is reachable (the polymarket-kacho workflow with
 "mode: survey"). For every dataset matching the searches, plus the ones named
@@ -90,10 +91,61 @@ def report(rows):
     return "\n".join(lines) + "\n"
 
 
+def inspect(spec, workdir, max_bytes=6 * 2**30):
+    """Full README, matching files, and for parquet files: schema, row count, time span, head."""
+    import fnmatch
+    import pyarrow.parquet as pq
+    ds, pattern = spec.split(maxsplit=1)
+    lines = [f"## {ds}  `{pattern}`", ""]
+    readme = get(f"https://huggingface.co/datasets/{ds}/raw/main/README.md", raw=True)
+    lines += ["<details><summary>README</summary>", "", "```", str(readme)[:30000].replace("```", "'''"), "```",
+              "", "</details>", ""]
+    tree = get(f"{API}/{ds}/tree/main?recursive=1")
+    files = [f for f in tree if isinstance(f, dict) and f.get("type") == "file"] if isinstance(tree, list) else []
+    hits = [f for f in files if fnmatch.fnmatch(f["path"], pattern)]
+    lines.append(f"匹配 {len(hits)} 个文件，共 {human(sum(f.get('size', 0) for f in hits))}：")
+    lines += [f"- `{f['path']}` {human(f.get('size', 0))}" for f in hits[:40]]
+    budget = max_bytes
+    for f in sorted(hits, key=lambda f: -f.get("size", 0))[:3]:
+        if not f["path"].endswith(".parquet") or f.get("size", 0) > min(budget, 3 * 2**30):
+            continue
+        budget -= f.get("size", 0)
+        local = Path(workdir) / f["path"].replace("/", "__")
+        url = f"https://huggingface.co/datasets/{ds}/resolve/main/{urllib.parse.quote(f['path'])}"
+        urllib.request.urlretrieve(url, local)
+        pf = pq.ParquetFile(local)
+        lines += ["", f"### `{f['path']}`", "", f"行数 {pf.metadata.num_rows:,}，row groups {pf.metadata.num_row_groups}", "",
+                  "```", str(pf.schema_arrow), "```"]
+        head = pf.read_row_group(0).slice(0, 5).to_pandas()
+        lines += ["", "```", head.to_string()[:4000], "```"]
+        md = pf.metadata
+        for j, name in enumerate(pf.schema_arrow.names):
+            if not any(k in name.lower() for k in ("time", "ts", "date", "start", "end", "slug")):
+                continue
+            lo = hi = None
+            for i in range(md.num_row_groups):
+                st = md.row_group(i).column(j).statistics
+                if st is None or not st.has_min_max:
+                    continue
+                lo = st.min if lo is None else min(lo, st.min)
+                hi = st.max if hi is None else max(hi, st.max)
+            lines.append(f"- `{name}`: {lo} → {hi}")
+        local.unlink()
+    return "\n".join(lines) + "\n"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="real/hf-survey.md")
+    ap.add_argument("--inspect", action="append", help='"<dataset> <glob>"，可重复')
+    ap.add_argument("--workdir", default=".")
     args = ap.parse_args(argv)
+    if args.inspect:
+        text = "# 数据集细查\n\n" + "\n".join(inspect(s, args.workdir) for s in args.inspect)
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(text[:30000])
+        return
     text = report(survey())
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(text, encoding="utf-8")

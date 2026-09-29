@@ -1,4 +1,8 @@
 # Changing this file re-runs .github/workflows/polymarket-kacho.yml on this branch.
-# mode: btc (default) | stage2 | stage3 | diag101 | survey (list Hugging Face Polymarket datasets)
-requested: 2026-09-29 survey for September 2026 BTC 5m data
+# mode: btc (default) | stage2 | stage3 | diag101 | survey (list HF datasets; "inspect:" lines look inside some)
+requested: 2026-09-29 inspect candidates for September 2026 BTC 5m books
 mode: survey
+inspect: aliplayer1/polymarket-crypto-updown data/orderbook/crypto=BTC/timeframe=5-minute/*
+inspect: aliplayer1/polymarket-crypto-updown data/markets.parquet
+inspect: aliplayer1/polymarket-crypto-updown data/heartbeats/*
+inspect: DineshKumar8399/polymarket-orderbook-dataset *
