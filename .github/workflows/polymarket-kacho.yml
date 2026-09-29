@@ -21,7 +21,7 @@ concurrency:
 jobs:
   kacho:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 330
     defaults:
       run:
         working-directory: research/polymarket-5m
@@ -45,6 +45,7 @@ jobs:
             stage3) echo "mode=stage3"; echo "coins=btc eth sol xrp doge" ;;
             diag101) echo "mode=diag101"; echo "coins=btc eth sol xrp doge" ;;
             survey) echo "mode=survey" ;;
+            onchain) echo "mode=onchain"; echo "later=$(sed -n 's/^later: *//p' ci/kacho.request | head -1)" ;;
             *) echo "mode=btc" ;;
           esac >> "$GITHUB_OUTPUT"
 
@@ -59,8 +60,24 @@ jobs:
             python hf_survey.py --out real/hf-survey.md
           fi
 
+      - name: Keep the filtered September fills between runs
+        if: steps.mode.outputs.mode == 'onchain'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/onchain/fills
+          key: onchain-fills-v1-${{ steps.mode.outputs.later }}
+          restore-keys: onchain-fills-v1-
+
+      - name: "On-chain: Gamma markets, Hugging Face fills, Binance, then the test"
+        if: steps.mode.outputs.mode == 'onchain'
+        run: |
+          later="${{ steps.mode.outputs.later }}"
+          python onchain.py fetch "$RUNNER_TEMP/onchain" --workdir "$RUNNER_TEMP" ${later:+--later "$later"}
+          ls -la "$RUNNER_TEMP/onchain" "$RUNNER_TEMP/onchain/fills" && du -sh "$RUNNER_TEMP/onchain" && free -g
+          python onchain.py run "$RUNNER_TEMP/onchain" --out real/onchain-sept.md --csv real/onchain-sept.csv
+
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
-        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey'
+        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
           for c in ${{ steps.mode.outputs.coins }}; do
@@ -109,7 +126,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-* real/hf-*.md 2>/dev/null || true
+          git add real/kacho-* real/hf-*.md real/onchain-* 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \

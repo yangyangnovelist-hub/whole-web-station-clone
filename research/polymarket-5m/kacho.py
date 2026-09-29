@@ -112,14 +112,8 @@ def fetch_outcomes(root, coin="btc", batch=100):
     return len(out), len(slugs)
 
 
-def fetch_binance(root, coin="btc"):
-    """Binance <COIN>USDT 1s closes for every day the markets cover, as sec,value."""
-    pt, sym = paths(root, coin), f"{coin.upper()}USDT"
-    starts = pd.read_parquet(pt["markets"], columns=["slug"])["slug"].dropna().map(slug_start)
-    d0 = datetime.fromtimestamp(starts.min() - 3600, timezone.utc).date()
-    d1 = datetime.fromtimestamp(starts.max() + 600, timezone.utc).date()
-    days = [d0 + timedelta(days=i) for i in range((d1 - d0).days + 1)]
-
+def binance_days(sym, days):
+    """Binance 1s closes for `sym` on each of `days` (missing days skipped), as sec,value."""
     def one(d):
         try:
             blob = _get(BINANCE.format(sym=sym, d=d.isoformat()), timeout=120)
@@ -133,9 +127,21 @@ def fetch_binance(root, coin="btc"):
 
     with ThreadPoolExecutor(8) as ex:
         parts = [p for p in ex.map(one, days) if p is not None]
-    spot = pd.concat(parts).drop_duplicates("sec").sort_values("sec")
+    if not parts:
+        return pd.DataFrame(columns=["sec", "value"])
+    return pd.concat(parts).drop_duplicates("sec").sort_values("sec")
+
+
+def fetch_binance(root, coin="btc"):
+    """Binance <COIN>USDT 1s closes for every day the markets cover, as sec,value."""
+    pt, sym = paths(root, coin), f"{coin.upper()}USDT"
+    starts = pd.read_parquet(pt["markets"], columns=["slug"])["slug"].dropna().map(slug_start)
+    d0 = datetime.fromtimestamp(starts.min() - 3600, timezone.utc).date()
+    d1 = datetime.fromtimestamp(starts.max() + 600, timezone.utc).date()
+    days = [d0 + timedelta(days=i) for i in range((d1 - d0).days + 1)]
+    spot = binance_days(sym, days)
     spot.to_parquet(pt["binance"], index=False)
-    return len(parts), len(days)
+    return spot["sec"].floordiv(86400).nunique(), len(days)
 
 
 # -------------------------------------------------------------------- markets
