@@ -153,3 +153,15 @@ def test_report_keeps_a_pass_that_survives_the_robust_delay(root, tmp_path):
     oc.run(root, tmp_path / "r.md", reps=200)
     text = (tmp_path / "r.md").read_text()
     assert "可信度检查" in text and "稳健 D 下仍然通过" in text
+
+
+def test_calibrate_matches_prints_to_later_fills():
+    fills = pd.DataFrame({"token_asset_id": ["a", "a", "a", "b"], "timestamp": [100, 103, 104, 101],
+                          "price": [0.5, 0.5, 0.6, 0.5], "token_amount": [7.0, 5.0, 5.0, 5.0]})
+    fills["token_asset_id"] = fills["token_asset_id"].astype("category")
+    prints = pd.DataFrame({"asset_id": ["a", "a", "c"], "price": [0.5, 0.6, 0.5], "size": [5.0, 5.0, 1.0],
+                           "ts_ms": [101_500, 101_900, 101_000]})
+    d = oc.calibrate(prints, fills).set_index("ts_ms")
+    assert d.loc[101_500, "block_ts"] == 103 and d.loc[101_500, "same_size"]  # same size beats the earlier fill
+    assert d.loc[101_900, "delay"] == pytest.approx(2.1) and len(d) == 2
+    assert "延迟中位" in "\n".join(oc.calibration_md(d, len(prints)))

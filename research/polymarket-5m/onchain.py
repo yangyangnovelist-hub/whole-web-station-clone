@@ -410,6 +410,62 @@ def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None):
     return passed
 
 
+def prints_from_bundles(src):
+    """Trade prints (last_trade_price) from recording.py bundles, with the exchange's own timestamp."""
+    import gzip
+    rows = []
+    for f in sorted(Path(src).rglob("*last_trade_price*.jsonl.gz")):
+        with gzip.open(f, "rt") as fh:
+            for line in fh:
+                r = json.loads(line)
+                m = r.get("payload") or {}
+                try:
+                    rows.append((str(r["asset_id"]), float(m["price"]), float(m["size"]), int(r["event_ts_ms"])))
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return pd.DataFrame(rows, columns=["asset_id", "price", "size", "ts_ms"]).drop_duplicates()
+
+
+def calibrate(prints, fills, before=2, after=60):
+    """Block time minus match time for each print found on chain.
+
+    A print is matched to the earliest unused fill of the same token at the same
+    price whose block time is within [-before, +after] seconds of it, preferring
+    one of the same size. Returns one row per matched print with its delay in
+    seconds (block timestamps are whole seconds, so -1 < delay < 0 is rounding)."""
+    tape = {tok: g.sort_values("timestamp") for tok, g in fills.groupby("token_asset_id", observed=True)}
+    used, out = set(), []
+    for r in prints.sort_values("ts_ms").itertuples():
+        g = tape.get(r.asset_id)
+        if g is None:
+            continue
+        ts = r.ts_ms / 1000
+        c = g[(g["timestamp"] >= math.floor(ts) - before) & (g["timestamp"] <= ts + after)
+              & ((g["price"] - r.price).abs() < 5e-5)]
+        c = c[~c.index.isin(used)]
+        if c.empty:
+            continue
+        same = c[(c["token_amount"] - r.size).abs() <= 0.01 * max(r.size, 1e-9)]
+        pick = (same if len(same) else c).index[0]
+        used.add(pick)
+        out.append((r.asset_id, r.ts_ms, int(g.at[pick, "timestamp"]), len(same) > 0))
+    d = pd.DataFrame(out, columns=["asset_id", "ts_ms", "block_ts", "same_size"])
+    d["delay"] = d["block_ts"] - d["ts_ms"] / 1000
+    return d
+
+
+def calibration_md(d, n_prints):
+    L = ["## 用带撮合时间的成交记录量出的上链延迟", "",
+         f"{len(d):,} / {n_prints:,} 条成交推送在链上找到了对应成交（同代币、同价格，优先同数量）。", ""]
+    if d.empty:
+        return L
+    q = d["delay"].quantile([0.5, 0.9, 0.95, 0.99])
+    L += [f"延迟中位 {q[0.5]:.1f} 秒，90% {q[0.9]:.1f} 秒，95% {q[0.95]:.1f} 秒，99% {q[0.99]:.1f} 秒。", "",
+          "| k 秒 | " + " | ".join(str(k) for k in range(11)) + " |", "|---|" + "---:|" * 11,
+          "| 延迟 > k 的比例 | " + " | ".join(f"{(d['delay'] > k).mean():.3f}" for k in range(11)) + " |"]
+    return L
+
+
 def robustness(main_, tape, markets, fills, tail, D, passed, reps):
     """Checks added after the first run showed a pass at D = 2 that vanished at D = 4.
     They do not change the preregistered verdict above; they say whether to believe it."""
