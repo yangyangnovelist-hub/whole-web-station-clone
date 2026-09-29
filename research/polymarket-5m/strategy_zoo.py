@@ -611,6 +611,7 @@ def main(argv=None):
     ap.add_argument("--reps", type=int, default=20000, help="模拟次数（精确 p 值）")
     ap.add_argument("--confirm", action="store_true", help="只检验预注册的候选（用新录制的数据）")
     ap.add_argument("--trades-out", help="逐笔交易另存为 CSV（id 列是注册表编号），供 forward.py 累积")
+    ap.add_argument("--extra", type=int, nargs="*", default=[], help="额外检验 STALE 里的规则，如 101")
     args = ap.parse_args(argv)
     markets = build_markets(args.root)
     strategies, ids = registry(), None
@@ -623,6 +624,10 @@ def main(argv=None):
     if args.confirm:
         ids = list(PREREGISTERED)
         strategies = [strategies[i - 1] for i in ids]
+    if args.extra:
+        ids = ids or list(range(1, len(strategies) + 1))
+        strategies = strategies + [STALE[i] for i in args.extra]
+        ids = ids + list(args.extra)
     res, trades = evaluate(markets, strategies, reps=args.reps, ids=ids)
     holdout = None if args.confirm else split_holdout(trades, markets, len(strategies), reps=args.reps)
     text = report(res, markets, args.reps, confirm=args.confirm, holdout=holdout)

@@ -67,7 +67,7 @@ jobs:
         run: |
           sleep 90
           python recording.py "$RUNNER_TEMP/paper" --fetch-outcomes
-          python strategy_zoo.py "$RUNNER_TEMP/paper/bundle" --confirm --reps 2000 \
+          python strategy_zoo.py "$RUNNER_TEMP/paper/bundle" --confirm --extra 101 --reps 2000 \
             --out "$RUNNER_TEMP/run.md" --trades-out "$RUNNER_TEMP/new_trades.csv"
           python forward.py add "$RUNNER_TEMP/new_trades.csv" --markets "$RUNNER_TEMP/paper/bundle"
           python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"

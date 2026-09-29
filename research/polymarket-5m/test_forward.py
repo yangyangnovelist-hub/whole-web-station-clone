@@ -31,6 +31,7 @@ def test_report_uses_preregistered_ids(tmp_path):
     text = fw.report(store, reps=100)
     assert "预注册候选的前向检验" in text and f"只检验 {len(sz.PREREGISTERED)} 个" in text
     assert "| 99 |" not in text  # not a candidate, ignored
+    assert "#101 的前向检验" in text
 
 
 def test_add_ledger_pools_paper_trades(tmp_path):

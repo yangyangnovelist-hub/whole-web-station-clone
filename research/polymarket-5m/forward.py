@@ -73,7 +73,15 @@ def report(store=STORE, reps=20000):
     trades["won"] = trades["won"].astype(str).str.lower().isin(["true", "1"])
     res = sz.summarize(trades, strategies, markets["start"].tolist(), reps, ids)
     shells = [SimpleNamespace(start=int(s)) for s in markets["start"]]
-    return sz.report(res, shells, reps, confirm=True) + "\n"
+    text = sz.report(res, shells, reps, confirm=True) + "\n"
+    extra = pd.read_csv(tpath) if tpath.exists() else pd.DataFrame(columns=TRADE_COLS)
+    extra = extra[extra["id"] == 101].assign(strategy=0)
+    extra["won"] = extra["won"].astype(str).str.lower().isin(["true", "1"])
+    res101 = sz.summarize(extra, [sz.STALE[101]], markets["start"].tolist(), reps, [101])
+    text += "\n---\n\n" + sz.report(res101, shells, reps, intro=(
+        "# #101 的前向检验：{span}\n\n#101（盘口未动的价格跳变）在 kacho 第三阶段通过后才加入前向检验，单独检验："
+        "原始 p < 0.05 且 EV > 0 才算在现行市场里复现。只用加入之后录制的数据。\n\n数据：纸面交易录制，{n_mk} 个 BTC 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
+    return text
 
 
 def main(argv=None):
