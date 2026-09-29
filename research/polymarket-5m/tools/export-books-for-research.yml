@@ -3,8 +3,11 @@
 #
 # On that commit (or "Run workflow" with another tag) it downloads the release bundle with the
 # repo's own token, writes an inventory of the SQLite tables and JSONL files (no secrets: columns
-# named like key/secret/private/password/signature are skipped), packs the top-5 book tape and
-# the event log into <100 MB parts, and pushes them to a separate branch `research-export`.
+# named like key/secret/private/password/signature are skipped), exports the market-data tables
+# (Polymarket top-5 books, market registry and outcomes, Chainlink TWAP and Coinbase samples; not
+# orders, fills or positions), packs them with the top-5 tape and the event log into <100 MB
+# parts, and pushes them to a separate branch `research-export`.
+# Version 2 (2026-09-29): adds the table export; optional since/until (unix seconds) cut big bundles.
 # Nothing is published outside the repo; nothing trades. Runtime is about 10 minutes of the
 # account's free Actions minutes.
 name: export-books-for-research
@@ -17,6 +20,12 @@ on:
       tag:
         description: release tag to export
         default: shadow-t1-20260914-20260916
+      since:
+        description: only rows from this unix second (empty = all)
+        default: ""
+      until:
+        description: only rows before this unix second (empty = all)
+        default: ""
 
 permissions:
   contents: write
@@ -31,6 +40,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || 'shadow-t1-20260914-20260916' }}
+          SINCE: ${{ inputs.since }}
+          UNTIL: ${{ inputs.until }}
         run: |
           set -euo pipefail
           ./tools/materialize_database.sh "$TAG" "$RUNNER_TEMP/bundle"
@@ -80,6 +91,42 @@ jobs:
           dst.write_text("\n".join(L) + "\n")
           print("\n".join(L)[:20000])
           PY
+          python3 - "$RUNNER_TEMP/bundle" "$out" <<'PY'
+          import csv, os, sqlite3, sys
+          from pathlib import Path
+          src, out = Path(sys.argv[1]), Path(sys.argv[2])
+          lo, hi = float(os.environ.get("SINCE") or 0), float(os.environ.get("UNTIL") or 9e18)
+          want = {  # table: (columns, time column for since/until or None)
+              "poly_probability_observations_v1": ("market_id, up_token_id, source_ts, receive_ts, sequence, "
+                                                   "best_bid, best_ask, bids_json, asks_json", "source_ts"),
+              "market_registry": ("*", None),
+              "market_outcomes": ("*", None),
+              "chainlink_twap60_samples": ("source_ts, receive_ts, publisher_ts, exact_e18", "source_ts"),
+              "coinbase_perp_mid_samples_v1": ("event_ts, receive_ts, best_bid, best_ask", "event_ts"),
+          }
+          for db in sorted(src.glob("*.sqlite")):
+              con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+              have = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+              for table, (cols, tcol) in want.items():
+                  if table not in have:
+                      continue
+                  where = f' where "{tcol}" >= ? and "{tcol}" < ?' if tcol else ""
+                  cur = con.execute(f'select {cols} from "{table}"{where}', (lo, hi) if tcol else ())
+                  path = out / f"{db.stem}.{table}.csv"
+                  n = 0
+                  with open(path, "w", newline="") as fh:
+                      w = csv.writer(fh)
+                      w.writerow([d[0] for d in cur.description])
+                      for row in cur:
+                          w.writerow(row)
+                          n += 1
+                  print(f"{table}: {n:,} rows, {path.stat().st_size / 1e6:.0f} MB", flush=True)
+          PY
+          for f in "$out"/*.csv; do
+            zstd -19 -T0 -q --rm "$f" -o "$f.zst"
+            split -b 90m "$f.zst" "$f.zst.part-"
+            rm "$f.zst"
+          done
           for f in "$RUNNER_TEMP"/bundle/*.jsonl; do
             zstd -19 -T0 -q "$f" -o "$RUNNER_TEMP/$(basename "$f").zst"
             split -b 90m "$RUNNER_TEMP/$(basename "$f").zst" "$out/$(basename "$f").zst.part-"
