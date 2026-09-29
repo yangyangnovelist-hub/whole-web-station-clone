@@ -189,3 +189,8 @@ def test_calibration_run_measures_the_delay_and_reprices_by_match_time(root, tmp
     assert len(d) == len(fills) and d["delay"].median() == pytest.approx(1.5, abs=0.1)
     text = (tmp_path / "delay.md").read_text()
     assert "延迟中位 1.5 秒" in text and "按撮合时间" in text
+    cal = json.loads((tmp_path / "delay.json").read_text())
+    assert cal["q95"] == pytest.approx(1.5, abs=0.1)
+    oc.run(root, tmp_path / "r.md", reps=200, delay_json=tmp_path / "delay.json")
+    text = (tmp_path / "r.md").read_text()
+    assert "D = 2 秒。" in text and "最终结论：通过" in text  # the stale fills sit at t+3..t+7

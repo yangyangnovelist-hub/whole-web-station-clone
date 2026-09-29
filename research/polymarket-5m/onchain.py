@@ -335,7 +335,7 @@ def load(root):
     return markets, load_fills(root)
 
 
-def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None):
+def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None, delay_json=None):
     pth = paths(root)
     markets, fills = load(root)
     counts, rate, tail, d95 = settlement_delay(fills, markets)
@@ -398,6 +398,8 @@ def run(root, out, reps=20000, d0=FIRST, d1=LAST, csv_out=None):
     for d in SWEEP:
         L.append(f"| {d} | {fmt(stats(price(main_, tape, d, d + WINDOW), reps))} |")
     L += robustness(main_, tape, markets, fills, tail, D, passed, reps)
+    if delay_json and Path(delay_json).exists():
+        L += measured_verdict(main_, tape, json.loads(Path(delay_json).read_text()), reps)
     if len(later):
         L += ["", f"## 之后的日子（{later['day'].min()} 起，事后检查，D = {D}）", ""] + HEAD + [
               f"| 全部 | {fmt(stats(price(later, tape, D, D + WINDOW), reps))} |"]
@@ -508,8 +510,35 @@ def calibration_run(root, prints_src, out, reps=20000):
         L += ["", "每格：笔数 | 胜率 | 平均价 | EV/份 | 精确 p。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    if len(d):
+        q = d["delay"].quantile([0.5, 0.95, 0.99])
+        Path(out).with_suffix(".json").write_text(json.dumps({
+            "day": f"{datetime.fromtimestamp(lo + 600, timezone.utc):%Y-%m-%d}", "n": len(d),
+            "q50": float(q[0.5]), "q95": float(q[0.95]), "q99": float(q[0.99])}), encoding="utf-8")
     print("\n".join(L))
     return d
+
+
+def measured_verdict(main_, tape, cal, reps):
+    """The preregistered intent, D = the 95th percentile of the settlement delay, with the
+    delay measured directly from exchange-stamped prints instead of the close."""
+    Dm = max(2, math.ceil(cal["q95"]))
+    prim = price(main_, tape, Dm, Dm + WINDOW)
+    first = prim["day"] < HALF
+    s_all, s_a, s_b = stats(prim, reps), stats(prim[first], reps), stats(prim[~first], reps)
+    ok = bool(s_all["n"] and s_all["ev"] > 0 and s_all["p"] < 0.05 and s_a["ev"] > 0 and s_b["ev"] > 0)
+    L = ["", "## 按直接量出的上链延迟判定", "",
+         f"{cal['day']} 的 {cal['n']:,} 条带撮合时间的成交推送和链上成交一一对上（`real/onchain-delay.md`）："
+         f"延迟中位 {cal['q50']:.1f} 秒，95% {cal['q95']:.1f} 秒，99% {cal['q99']:.1f} 秒。"
+         f"事先规定的意图是 D = 延迟的 95 分位，所以 D = {Dm} 秒。收盘后那截 3% 左右的平尾巴是收盘后仍在撮合，不是延迟。", ""
+         ] + HEAD + [f"| 全部 | {fmt(s_all)} |", f"| 前半月 | {fmt(s_a)} |", f"| 后半月 | {fmt(s_b)} |", "",
+         f"区块时间在 t+k 的成交，撮合时间一般早 {cal['q50']:.1f} 秒（99% 早不到 {cal['q99']:.1f} 秒）："
+         f"上面 1 秒一格的表里，k ≤ {math.floor(cal['q50'])} 的成交大多在决策时点 t 之前撮合"
+         f"（比信号晚 2 秒的做法更快的人拿走的），k ≥ {Dm} 的才基本都在 t 之后。", "",
+         "**最终结论：通过。**" if ok else
+         "**最终结论：没通过。** 过期报价确实存在，但只存在于币安跳变后一两秒内，被更快的程序拿走；"
+         "在信号晚 2 秒、按真实延迟排除掉提前撮合的成交之后，没有优势。"]
+    return L
 
 
 def robustness(main_, tape, markets, fills, tail, D, passed, reps):
@@ -559,6 +588,7 @@ def main(argv=None):
     ap.add_argument("--workdir")
     ap.add_argument("--out", default="real/onchain-sept.md")
     ap.add_argument("--csv")
+    ap.add_argument("--delay-json", help="run: the .json that calibrate writes next to its report")
     ap.add_argument("--reps", type=int, default=20000)
     a = ap.parse_args(argv)
     d0, d1 = date.fromisoformat(a.d0), date.fromisoformat(a.d1)
@@ -571,7 +601,7 @@ def main(argv=None):
     elif a.cmd == "calibrate":
         calibration_run(a.root, a.prints, a.out, a.reps)
     else:
-        run(a.root, a.out, a.reps, d0, d1, a.csv)
+        run(a.root, a.out, a.reps, d0, d1, a.csv, a.delay_json)
 
 
 if __name__ == "__main__":

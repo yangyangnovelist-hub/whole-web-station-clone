@@ -74,7 +74,6 @@ jobs:
           later="${{ steps.mode.outputs.later }}"
           python onchain.py fetch "$RUNNER_TEMP/onchain" --workdir "$RUNNER_TEMP" ${later:+--later "$later"}
           ls -la "$RUNNER_TEMP/onchain" "$RUNNER_TEMP/onchain/fills" && du -sh "$RUNNER_TEMP/onchain" && free -g
-          python onchain.py run "$RUNNER_TEMP/onchain" --out real/onchain-sept.md --csv real/onchain-sept.csv
           if grep -q '^calibrate: *outcometick' ci/kacho.request; then
             # Exchange-stamped trade prints for 2026-09-08 (outcometick sample, CC BY 4.0) against that day's fills.
             mkdir -p "$RUNNER_TEMP/otick"
@@ -82,6 +81,8 @@ jobs:
               | tar xz -C "$RUNNER_TEMP/otick" --wildcards '*last_trade_price*'
             python onchain.py calibrate "$RUNNER_TEMP/onchain" --prints "$RUNNER_TEMP/otick" --out real/onchain-delay.md
           fi
+          python onchain.py run "$RUNNER_TEMP/onchain" --out real/onchain-sept.md --csv real/onchain-sept.csv \
+            --delay-json real/onchain-delay.json
 
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
         if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain'
