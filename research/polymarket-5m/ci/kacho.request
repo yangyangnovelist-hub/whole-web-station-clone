@@ -1,4 +1,4 @@
 # Changing this file re-runs .github/workflows/polymarket-kacho.yml on this branch.
-# mode: btc (default) | stage2 | stage3 | diag101 (is #101 real or a frozen recorder?)
-requested: 2026-09-29 diag101
-mode: diag101
+# mode: btc (default) | stage2 | stage3 | diag101 | survey (list Hugging Face Polymarket datasets)
+requested: 2026-09-29 survey for September 2026 BTC 5m data
+mode: survey

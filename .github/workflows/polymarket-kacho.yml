@@ -44,11 +44,16 @@ jobs:
             stage2) echo "mode=stage2"; echo "coins=eth sol xrp doge" ;;
             stage3) echo "mode=stage3"; echo "coins=btc eth sol xrp doge" ;;
             diag101) echo "mode=diag101"; echo "coins=btc eth sol xrp doge" ;;
+            survey) echo "mode=survey" ;;
             *) echo "mode=btc" ;;
           esac >> "$GITHUB_OUTPUT"
 
+      - name: Survey Hugging Face datasets
+        if: steps.mode.outputs.mode == 'survey'
+        run: python hf_survey.py --out real/hf-survey.md
+
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
-        if: steps.mode.outputs.mode != 'btc'
+        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
           for c in ${{ steps.mode.outputs.coins }}; do
@@ -97,7 +102,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-*
+          git add real/kacho-* real/hf-survey.md 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
