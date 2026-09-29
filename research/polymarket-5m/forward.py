@@ -88,9 +88,9 @@ def report(store=STORE, reps=20000):
         fam = extra[extra["id"].isin(ids)].assign(strategy=lambda d: d["id"].map(ids.index))
         res = sz.summarize(fam, [sz.ONCHAIN[i] for i in ids], later["start"].tolist(), reps, ids)
         text += "\n---\n\n" + sz.report(res, [SimpleNamespace(start=int(s)) for s in later["start"]], reps, intro=(
-            "# 九月链上规律的前向检验：{span}\n\n#103–#106 来自 `makers.py` 在九月链上成交里看到的规律"
+            "# 九月链上规律的前向检验：{span}\n\n#103–#108 来自 `makers.py` 在九月链上成交里看到的规律"
             "（那些是别人主动成交的平均结果），这里检验能直接执行的版本，只用加入之后录制的数据。"
-            "4 条一起按 Bonferroni 校正：原始 p < {alpha:.4f} 且 EV > 0 才算通过。挂单只在之后有成交价更低时才算成交。"
+            "6 条一起按 Bonferroni 校正：原始 p < {alpha:.4f} 且 EV > 0 才算通过。#105/#106 的挂单只在之后有更低的成交价时才算成交；#107/#108 按排队顺序，以挂单价卖出的量超过挂单时排在前面的量才算成交。"
             "\n\n数据：纸面交易录制，{n_mk} 个 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
     return text
 

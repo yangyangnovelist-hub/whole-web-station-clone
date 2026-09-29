@@ -371,6 +371,38 @@ class Strategy:
     fn: Callable
 
 
+def maker_queue(tau, which, lo, hi):
+    """Join the best bid of one side at the back of its queue. Filled once sells at that price
+    add up to more than the size shown ahead of us when we joined, or a sell prints below it.
+    Cancels ahead of us are assumed not to happen (they would only move us up), so this is
+    between the queue-front average and the trade-through rule."""
+    def f(m):
+        t = bo.WINDOW_S - tau
+        r = m.at(t)
+        if r is None or not np.isfinite(r["mid"]):
+            return None
+        fav = "Up" if r["mid"] >= 0.5 else "Down"
+        side = fav if which == "favourite" else ("Down" if fav == "Up" else "Up")
+        token = m.up_token if side == "Up" else m.down_token
+        snap = m.book(token, (m.start + t) * 1000)
+        if snap is None or not snap[0]:
+            return None
+        bid = max(px for px, _ in snap[0])
+        ahead = sum(sz for px, sz in snap[0] if abs(px - bid) < 1e-9)
+        if not in_band(bid, lo, hi):
+            return None
+        g = m.prints(token, (m.start + t) * 1000, m.end * 1000)
+        if g is None or g.empty:
+            return None
+        sells = g[g["side"] == "SELL"]
+        through = (sells["price"] < bid - 1e-9).any()
+        at_bid = sells.loc[(sells["price"] - bid).abs() < 1e-9, "size"].sum()
+        if not (through or at_bid > ahead):
+            return None
+        return {"side": side, "price": float(round(bid, 4)), "fee": 0.0, "t": t, "kind": "maker"}
+    return f
+
+
 def registry():
     s = []
     for tau in (10, 20, 30, 45, 60, 90, 120, 180):
@@ -425,7 +457,11 @@ STALE = {101: Strategy("盘口未动的价格跳变 10s z>2 τ=240..60", "K 盘�
 ONCHAIN = {103: Strategy("强势方 τ=90 [0.60,0.80]", "L 九月链上", late_favourite(90, 0.60, 0.80)),
            104: Strategy("强势方 τ=45 [0.60,0.80]", "L 九月链上", late_favourite(45, 0.60, 0.80)),
            105: Strategy("挂单买强势方 τ=45 买一 [0.60,0.80]", "L 九月链上", maker_bid(45, "favourite", 0.60, 0.80)),
-           106: Strategy("挂单买弱势方 τ=90 买一 [0.02,0.10]", "L 九月链上", maker_bid(90, "longshot", 0.02, 0.10))}
+           106: Strategy("挂单买弱势方 τ=90 买一 [0.02,0.10]", "L 九月链上", maker_bid(90, "longshot", 0.02, 0.10)),
+           # The same two resting orders with a queue model instead of trade-through, added the
+           # same day (before 18:00 UTC) after the on-chain tester showed trade-through fills lose.
+           107: Strategy("排队挂单买强势方 τ=45 买一 [0.60,0.80]", "L 九月链上", maker_queue(45, "favourite", 0.60, 0.80)),
+           108: Strategy("排队挂单买弱势方 τ=90 买一 [0.02,0.10]", "L 九月链上", maker_queue(90, "longshot", 0.02, 0.10))}
 EXTRA = {**STALE, **ONCHAIN}
 
 

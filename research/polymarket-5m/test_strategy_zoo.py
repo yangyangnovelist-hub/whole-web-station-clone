@@ -108,4 +108,22 @@ def test_maker_bid_respects_its_price_band(markets):
     m0 = markets[0]
     assert sz.maker_bid(240, "favourite", 0.60, 0.80)(m0) is None  # the 0.50 bid is outside the band
     assert sz.maker_bid(240, "favourite", 0.45, 0.55)(m0)["price"] == 0.50
-    assert set(sz.EXTRA) == {101, 102, 103, 104, 105, 106}
+    assert set(sz.EXTRA) == {101, 102, 103, 104, 105, 106, 107, 108}
+
+
+def test_queue_maker_waits_for_the_size_ahead():
+    start = 1_000_000
+    rows = pd.DataFrame({"t": range(300), "mid": 0.70}).set_index("t")
+    book_ms = np.array([(start + 250) * 1000])
+    books = {"up": (book_ms, [([(0.69, 30.0), (0.68, 100.0)], [(0.71, 50.0)])])}
+
+    def market(prints):
+        trades = {"up": pd.DataFrame(prints, columns=["recv_ms", "side", "size", "price"])}
+        return sz.Market("s", start, start + 300, True, None, "up", "down", rows, pd.Series(dtype=float), books, trades)
+
+    rule = sz.maker_queue(45, "favourite", 0.60, 0.80)  # joins at t=255 behind 30 shares at 0.69
+    at = lambda s: (start + s) * 1000
+    assert rule(market([(at(260), "SELL", 20.0, 0.69)])) is None                      # 20 < 30 ahead
+    assert rule(market([(at(260), "SELL", 20.0, 0.69), (at(270), "SELL", 15.0, 0.69)]))["price"] == 0.69
+    assert rule(market([(at(260), "SELL", 1.0, 0.68)]))["kind"] == "maker"           # traded through
+    assert rule(market([(at(260), "BUY", 50.0, 0.69)])) is None                       # buys do not fill a bid
