@@ -30,6 +30,12 @@ were looked at (run with --since 2026-09-26):
   with EV > 0 and exact p < 0.05;
 - taker rules on the real book: #9, #10, #11 (preregistered 2026-09-08) and #103, #104
   (2026-09-29): each passes with EV > 0 and exact p < 0.05 / 5.
+Result (real/latency-dublin-0926-0929.md): nothing passed; stale quotes at 0.5 s gave +2.00c,
+p = 0.065, with the edge falling from +4.9c at 0 s to zero at 1 s.
+
+Next test, fixed 2026-09-29 21:25 UTC after that result and before any later data: on Dublin
+books recorded after 2026-09-29 20:30 UTC, z = 2 and a 0.4 s reaction at the ask of that moment
+pass with EV > 0 and exact p < 0.05 (run with --since 2026-09-30 or later, see NEXT_*).
 """
 from __future__ import annotations
 
@@ -48,8 +54,9 @@ import pyarrow.csv as pacsv
 
 import binary as bo
 
-LAGS = (0.0, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 5.0)
+LAGS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 5.0)
 PRIMARY_Z, PRIMARY_LAG = 3.0, 0.5
+NEXT_Z, NEXT_LAG = 2.0, 0.4  # the next preregistered test, for books after 2026-09-29 20:30 UTC
 ZS = (2.0, 3.0, 4.0)
 TAUS = (240, 60)
 
@@ -262,12 +269,14 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
         for lag in LAGS:
             L.append(f"| {lag:g} 秒 | {fmt(trade(trig, book, lag, False), reps)} | {fmt(trade(trig, book, lag, True), reps)} |")
         L.append("")
-        if z == PRIMARY_Z:
-            t = trade(trig, book, PRIMARY_LAG, False)
+        for vz, vlag, tag in ((PRIMARY_Z, PRIMARY_LAG, "09-26..29 的检验"), (NEXT_Z, NEXT_LAG, "下一次检验（只对 09-29 20:30 以后的数据有效）")):
+            if z != vz:
+                continue
+            t = trade(trig, book, vlag, False)
             p = bo.fair_price_pvalue(t["pnl"].to_numpy(), (t["price"] + t["fee"]).to_numpy(), sims=reps) \
                 if len(t) >= 10 and t["pnl"].mean() > 0 else 1.0
             ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05
-            verdicts.append(f"过期报价（z={z:g}，{PRIMARY_LAG:g} 秒后按卖一买）：{len(t)} 笔，EV "
+            verdicts.append(f"{tag}：过期报价（z={z:g}，{vlag:g} 秒后按卖一买）：{len(t)} 笔，EV "
                             f"{100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，p = {p:.4f} → "
                             f"{'通过' if ok else '没通过'}")
     L += ["## 真实盘口上的吃单规则", "",
