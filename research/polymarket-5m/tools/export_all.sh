@@ -5,6 +5,7 @@
 #
 #   bash export_all.sh mac       # on the Mac: Aug 23 - Sep 25 local copies, plus the T1 release
 #   bash export_all.sh dublin    # on the Dublin server: Sep 21 - 30, database and logs
+#   bash export_all.sh dublin /path/to/sgk90_regime_reverse_filter_shadow   # if it is not found
 #
 # It skips sources it cannot find, keeps going when one fails, and ends with a checklist.
 set -uo pipefail
@@ -71,20 +72,25 @@ mac)
   run pk-backups-0924-0925 "$D/sgk90_point_kelly_base_shadow_backups"
   ;;
 dublin)
-  roots="$HOME /opt /srv /data /var/lib"
-  db=$(find $roots -maxdepth 6 -name runtime_1000.sqlite -path '*reverse_filter*' 2>/dev/null | head -1)
-  svc=${db:+$(dirname "$(dirname "$db")")}
+  roots="$HOME /opt /srv /data /var/lib /home /root"
+  svc=${2:-}
+  if [ -z "$svc" ]; then
+    db=$(find $roots -maxdepth 8 -name 'runtime*.sqlite' 2>/dev/null | grep -i 'reverse.filter' | head -1)
+    svc=${db:+$(dirname "$(dirname "$db")")}
+  fi
+  echo "reverse-filter service folder: ${svc:-not found}"
   # the whole service folder: every database (market tables only) and log (market events only) in it
   run dublin-shadow-0921-0930 "$svc" 2026-09-21 2026-09-30
   # engine logs kept outside the service folder
-  find $roots -maxdepth 5 -name '*reverse*filter*.jsonl*' -size +20M 2>/dev/null | while read -r f; do
+  find $roots -maxdepth 8 -iname '*reverse*filter*.jsonl*' -size +20M 2>/dev/null | sort -u | while read -r f; do
     case "$f" in "$svc"/*) continue ;; esac
     echo "$f"
   done > /tmp/export_logs.txt
   n=0
   while read -r f; do n=$((n + 1)); run "dublin-log-$n-$(basename "$f" | grep -o '20[0-9]\{6\}' | head -1)" "$f" 2026-09-21 2026-09-30
   done < /tmp/export_logs.txt
-  find $roots -maxdepth 4 -type d -name '*point_kelly*' 2>/dev/null > /tmp/export_pk.txt
+  : > /tmp/export_pk.txt  # Point-Kelly folders were exported by the first run; set PK=1 to redo them
+  [ "${PK:-0}" = 1 ] && find $roots -maxdepth 4 -type d -name '*point_kelly*' 2>/dev/null > /tmp/export_pk.txt
   while read -r d; do run "dublin-pk-$(basename "$d")" "$d" 2026-09-24 2026-09-30; done < /tmp/export_pk.txt
   ;;
 *)
