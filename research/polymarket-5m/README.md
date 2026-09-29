@@ -23,11 +23,11 @@
 | `rules.py` | 通用回测器：在九月链上成交里还原每秒的买一卖一，批量检验 172 条可执行规则（§18） |
 | `makers.py` | 把九月链上成交拆成挂单方和吃单方，按价格和剩余时间分格，前半月选、后半月验（§17） |
 | `onchain.py` | 用九月全部链上成交（Hugging Face TimeSeventeen/Polymarket-v2）检验 #101 背后的过期报价，并用带撮合时间的成交推送量上链延迟（§16） |
-| `test_*.py` | 96 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具、100 个策略、录制转换、累积检验、kacho 适配、链上检验和纸面交易 |
+| `test_*.py` | 93 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具、100 个策略、录制转换、累积检验、kacho 适配、链上检验和纸面交易 |
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q          # 96 个测试
+python -m pytest -q          # 93 个测试
 python simulate.py           # 约 20 秒，重写 results.md
 ```
 

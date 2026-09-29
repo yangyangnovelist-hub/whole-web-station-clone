@@ -33,7 +33,7 @@ were looked at (run with --since 2026-09-26):
 Result (real/latency-dublin-0926-0929.md): nothing passed; stale quotes at 0.5 s gave +2.00c,
 p = 0.065, with the edge falling from +4.9c at 0 s to zero at 1 s.
 
-Next test, fixed 2026-09-29 21:25 UTC after that result and before any later data: on Dublin
+Next test, fixed 2026-09-29 (commit f92f5f7, 21:14 UTC) after that result and before any later data: on Dublin
 books recorded after 2026-09-29 20:30 UTC, z = 2 and a 0.4 s reaction at the ask of that moment
 pass with EV > 0 and exact p < 0.05 (run with --since 2026-09-30 or later, see NEXT_*).
 """
