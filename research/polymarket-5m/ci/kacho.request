@@ -1,8 +1,6 @@
 # Changing this file re-runs .github/workflows/polymarket-kacho.yml on this branch.
 # mode: btc (default) | stage2 | stage3 | diag101 | survey (list HF datasets; "inspect:" lines look inside some)
-requested: 2026-09-29 inspect candidates for September 2026 BTC 5m books
+requested: 2026-09-29 inspect TimeSeventeen on-chain fills for September
 mode: survey
-inspect: aliplayer1/polymarket-crypto-updown data/orderbook/crypto=BTC/timeframe=5-minute/*
-inspect: aliplayer1/polymarket-crypto-updown data/markets.parquet
-inspect: aliplayer1/polymarket-crypto-updown data/heartbeats/*
-inspect: DineshKumar8399/polymarket-orderbook-dataset *
+inspect: TimeSeventeen/Polymarket-v2 *2026_09_0[1-3]*
+inspect: TimeSeventeen/Polymarket-v2 *2026?09?1[0-1]*
