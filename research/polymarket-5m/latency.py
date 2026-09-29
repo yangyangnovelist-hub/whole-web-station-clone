@@ -22,6 +22,14 @@ shown at the move ("stale limit"). One trade per market.
 
 09-14..16 lies inside the September range already explored on chain, so this is for
 understanding the mechanism and its time scale, not a pass/fail test.
+
+Pass/fail test, fixed 2026-09-29 21:15 UTC before any of the Dublin export's 09-26..29 books
+were looked at (run with --since 2026-09-26):
+- stale quotes: z = 3, reaction L = 0.5 s after the Binance trade (Dublin receives Binance in a
+  median 0.27 s; 0.5 s leaves room to send the order), buying at the ask of that moment: passes
+  with EV > 0 and exact p < 0.05;
+- taker rules on the real book: #9, #10, #11 (preregistered 2026-09-08) and #103, #104
+  (2026-09-29): each passes with EV > 0 and exact p < 0.05 / 5.
 """
 from __future__ import annotations
 
@@ -41,6 +49,7 @@ import pyarrow.csv as pacsv
 import binary as bo
 
 LAGS = (0.0, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 5.0)
+PRIMARY_Z, PRIMARY_LAG = 3.0, 0.5
 ZS = (2.0, 3.0, 4.0)
 TAUS = (240, 60)
 
@@ -71,14 +80,34 @@ def first_size(ladder):
     return pd.to_numeric(ladder.astype(str).str.extract(r"^\[\[\s*[0-9.eE+-]+\s*,\s*([0-9.eE+-]+)")[0], errors="coerce")
 
 
+def load_books(d):
+    """The Up token's best bid/ask and first-level sizes per update, read in streamed batches so the
+    JSON ladders (millions of rows) never sit in memory at once."""
+    import pyarrow.compute as pc
+    base, raw = _read(d, r"poly_probability_observations_v1\.csv")
+    codec = "zstd" if base.endswith(".zst") else "gzip" if base.endswith(".gz") else None
+    stream = pa.CompressedInputStream(pa.BufferReader(raw), codec) if codec else pa.BufferReader(raw)
+    cols = ["market_id", "source_ts", "best_bid", "best_ask", "bids_json", "asks_json"]
+    reader = pacsv.open_csv(stream, read_options=pacsv.ReadOptions(block_size=64 << 20),
+                            convert_options=pacsv.ConvertOptions(include_columns=cols, column_types={
+                                "market_id": pa.string(), "source_ts": pa.float64(), "best_bid": pa.float64(),
+                                "best_ask": pa.float64(), "bids_json": pa.string(), "asks_json": pa.string()}))
+    pat = r"^\[\[\s*(?P<p>[0-9.eE+-]+)\s*,\s*(?P<s>[0-9.eE+-]+)"
+    parts = []
+    for batch in reader:
+        size = {k: pc.cast(pc.struct_field(pc.extract_regex(batch.column(c), pat), [1]), pa.float64())
+                for k, c in (("bid_size", "bids_json"), ("ask_size", "asks_json"))}
+        parts.append(pa.table({"market_id": pc.dictionary_encode(batch.column("market_id")),
+                               "ts": batch.column("source_ts"), "bid": batch.column("best_bid"),
+                               "ask": batch.column("best_ask"), **size}))
+    books = pa.concat_tables(parts, promote_options="permissive").to_pandas()
+    books["market_id"] = books["market_id"].astype(str)
+    return books.sort_values(["market_id", "ts"], kind="stable").reset_index(drop=True)
+
+
 def load(d):
     d = Path(d)
-    books = read_table(d, r"poly_probability_observations_v1\.csv",
-                       ["market_id", "source_ts", "best_bid", "best_ask", "bids_json", "asks_json"])
-    books = pd.DataFrame({"market_id": books["market_id"], "ts": books["source_ts"].astype(float),
-                          "bid": books["best_bid"].astype(float), "ask": books["best_ask"].astype(float),
-                          "bid_size": first_size(books["bids_json"]), "ask_size": first_size(books["asks_json"])})
-    books = books.sort_values(["market_id", "ts"], kind="stable")
+    books = load_books(d)
     reg = read_table(d, r"market_registry\.csv", ["market_id", "start_ts"])
     out = read_table(d, r"market_outcomes\.csv", ["market_id", "winner"])
     markets = reg.drop_duplicates("market_id").merge(out.drop_duplicates("market_id"), on="market_id")
@@ -219,6 +248,7 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
          f"{len(binance):,} 笔币安永续逐笔成交。探索性质：这段时间在九月链上分析里已经看过。", "",
          f"币安成交到 Dublin 收到的延迟：中位 {1000 * delay[0.5]:.0f} ms，90% {1000 * delay[0.9]:.0f} ms，"
          f"99% {1000 * delay[0.99]:.0f} ms。", ""]
+    verdicts = []
     for z in ZS:
         trig = triggers(markets, grid, sigma, z)
         react = np.array([book.reaction(r.market_id, r.t, r.side) for r in trig.itertuples()])
@@ -232,12 +262,26 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
         for lag in LAGS:
             L.append(f"| {lag:g} 秒 | {fmt(trade(trig, book, lag, False), reps)} | {fmt(trade(trig, book, lag, True), reps)} |")
         L.append("")
+        if z == PRIMARY_Z:
+            t = trade(trig, book, PRIMARY_LAG, False)
+            p = bo.fair_price_pvalue(t["pnl"].to_numpy(), (t["price"] + t["fee"]).to_numpy(), sims=reps) \
+                if len(t) >= 10 and t["pnl"].mean() > 0 else 1.0
+            ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05
+            verdicts.append(f"过期报价（z={z:g}，{PRIMARY_LAG:g} 秒后按卖一买）：{len(t)} 笔，EV "
+                            f"{100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，p = {p:.4f} → "
+                            f"{'通过' if ok else '没通过'}")
     L += ["## 真实盘口上的吃单规则", "",
           "剩 τ 秒时，强势方卖一在区间内就按卖一买 1 份（盘口 10 秒内有更新才算），付 taker 费，持有到结算。", "",
           "| # | 规则 | 笔数 / 胜率 / 平均价 / EV / p / 卖一挂单量中位 |", "|---:|---|---|"]
     for rid, (name, tau, lo, hi) in BOOK_RULES.items():
-        L.append(f"| {rid} | {name} | {fmt(book_rule(markets, book, tau, lo, hi), reps)} |")
-    L.append("")
+        t = book_rule(markets, book, tau, lo, hi)
+        L.append(f"| {rid} | {name} | {fmt(t, reps)} |")
+        p = bo.fair_price_pvalue(t["pnl"].to_numpy(), (t["price"] + t["fee"]).to_numpy(), sims=reps) \
+            if len(t) >= 10 and t["pnl"].mean() > 0 else 1.0
+        ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05 / len(BOOK_RULES)
+        verdicts.append(f"#{rid} {name}：{len(t)} 笔，EV {100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，"
+                        f"p = {p:.4f} → {'通过' if ok else '没通过'}")
+    L += ["", "## 事先定好的判定（只对 --since 2026-09-26 的运行有效）", ""] + [f"- {v}" for v in verdicts] + [""]
     L += ["每格：笔数 | 胜率 | 平均价 | EV/份 | 精确 p | 卖一挂单量中位（份）。反应延迟从币安成交所在的交易所时间算起，"
           "包括收到行情、决策和订单到达交易所的全部时间；放在 Dublin 的程序实际大约 0.15–0.3 秒。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
