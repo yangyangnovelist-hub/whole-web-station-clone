@@ -30,6 +30,7 @@ import gzip
 import io
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -44,42 +45,46 @@ ZS = (2.0, 3.0, 4.0)
 TAUS = (240, 60)
 
 
-def _parts(d, stem):
-    parts = sorted(Path(d).glob(f"{stem}.part-*"))
-    if not parts:
-        raise FileNotFoundError(f"no {stem}.part-* under {d}")
-    return b"".join(p.read_bytes() for p in parts)
+def _read(d, pattern):
+    """Bytes and name of the export file matching `pattern` (whole or in .part-* pieces, .zst or .gz),
+    preferring the live runtime over staging and archive copies."""
+    d = Path(d)
+    names = sorted({re.sub(r"\.part-[a-z]+$", "", q.name) for q in d.iterdir() if re.search(pattern, q.name)})
+    names = [n for n in names if "staging" not in n and "archive" not in n] or names
+    if not names:
+        raise FileNotFoundError(f"nothing matching {pattern} under {d}")
+    base = sorted(names, key=lambda n: (not n.startswith(("state__runtime_1000", "runtime_1000")), n))[0]
+    parts = sorted(d.glob(base + ".part-*")) or [d / base]
+    return base, b"".join(q.read_bytes() for q in parts)
 
 
-def read_csv_zst(d, stem):
-    raw = _parts(d, stem)
-    with pa.CompressedInputStream(pa.BufferReader(raw), "zstd") as f:
-        return pacsv.read_csv(f, convert_options=pacsv.ConvertOptions(strings_can_be_null=True)).to_pandas()
+def read_table(d, pattern, columns=None):
+    base, raw = _read(d, pattern)
+    codec = "zstd" if base.endswith(".zst") else "gzip" if base.endswith(".gz") else None
+    stream = pa.CompressedInputStream(pa.BufferReader(raw), codec) if codec else pa.BufferReader(raw)
+    opts = pacsv.ConvertOptions(strings_can_be_null=True, include_columns=columns)
+    return pacsv.read_csv(stream, convert_options=opts).to_pandas()
 
 
-def first_level(js):
-    """Price and size of the first level of a JSON ladder like [[0.17,677.85],...]."""
-    try:
-        lv = json.loads(js)
-        return (float(lv[0][0]), float(lv[0][1])) if lv else (np.nan, np.nan)
-    except (TypeError, ValueError, IndexError):
-        return np.nan, np.nan
+def first_size(ladder):
+    """Size at the first level of JSON ladders like [[0.17,677.85],...], vectorised."""
+    return pd.to_numeric(ladder.astype(str).str.extract(r"^\[\[\s*[0-9.eE+-]+\s*,\s*([0-9.eE+-]+)")[0], errors="coerce")
 
 
 def load(d):
     d = Path(d)
-    books = read_csv_zst(d, "runtime_1000.poly_probability_observations_v1.csv.zst")
-    ask = np.array([first_level(x) for x in books["asks_json"]])
-    bid = np.array([first_level(x) for x in books["bids_json"]])
+    books = read_table(d, r"poly_probability_observations_v1\.csv",
+                       ["market_id", "source_ts", "best_bid", "best_ask", "bids_json", "asks_json"])
     books = pd.DataFrame({"market_id": books["market_id"], "ts": books["source_ts"].astype(float),
                           "bid": books["best_bid"].astype(float), "ask": books["best_ask"].astype(float),
-                          "bid_size": bid[:, 1], "ask_size": ask[:, 1]}).sort_values(["market_id", "ts"])
-    reg = read_csv_zst(d, "runtime_1000.market_registry.csv.zst")
-    out = read_csv_zst(d, "runtime_1000.market_outcomes.csv.zst")
-    markets = reg[["market_id", "start_ts"]].merge(out[["market_id", "winner"]], on="market_id")
-    raw = _parts(d, "shadow_current.jsonl.gz")
+                          "bid_size": first_size(books["bids_json"]), "ask_size": first_size(books["asks_json"])})
+    books = books.sort_values(["market_id", "ts"], kind="stable")
+    reg = read_table(d, r"market_registry\.csv", ["market_id", "start_ts"])
+    out = read_table(d, r"market_outcomes\.csv", ["market_id", "winner"])
+    markets = reg.drop_duplicates("market_id").merge(out.drop_duplicates("market_id"), on="market_id")
+    _, raw = _read(d, r"shadow_current\.jsonl\.gz")
     rows = []
-    with gzip.open(io.BytesIO(raw), "rt") as f:
+    with gzip.open(io.BytesIO(raw), "rt", errors="replace") as f:
         for line in f:
             if '"BINANCE_AGG_TRADE"' not in line:
                 continue
@@ -121,13 +126,16 @@ class Book:
         self.by = {mid: (g["ts"].to_numpy(), g[["bid", "ask", "bid_size", "ask_size"]].to_numpy())
                    for mid, g in books.groupby("market_id", sort=False)}
 
-    def at(self, mid, t):
-        """(bid, ask, bid_size, ask_size) of the Up token as the exchange showed it at time t."""
+    def at(self, mid, t, max_age=None):
+        """(bid, ask, bid_size, ask_size) of the Up token as the exchange showed it at time t
+        (None if nothing was shown yet, or the last update is older than max_age seconds)."""
         if mid not in self.by:
             return None
         ts, v = self.by[mid]
         i = np.searchsorted(ts, t, "right") - 1
-        return v[i] if i >= 0 else None
+        if i < 0 or (max_age is not None and t - ts[i] > max_age):
+            return None
+        return v[i]
 
     def side_ask(self, mid, t, side):
         r = self.at(mid, t)
@@ -163,6 +171,30 @@ def trade(trig, book, lag, stale_only):
     return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size"])
 
 
+# Taker rules that only need the book: (name, tau, lo, hi); ids as in strategy_zoo.
+BOOK_RULES = {9: ("强势方 τ=30 卖一∈[0.70,0.97]", 30, 0.70, 0.97), 10: ("强势方 τ=30 卖一∈[0.80,0.97]", 30, 0.80, 0.97),
+              11: ("强势方 τ=30 卖一∈[0.85,0.99]", 30, 0.85, 0.99), 103: ("强势方 τ=90 卖一∈[0.60,0.80]", 90, 0.60, 0.80),
+              104: ("强势方 τ=45 卖一∈[0.60,0.80]", 45, 0.60, 0.80)}
+
+
+def book_rule(markets, book, tau, lo, hi):
+    """Buy the favourite at its ask with `tau` seconds left when the ask is in [lo, hi]; the book must
+    have updated within the last 10 seconds. One share, taker fee, held to settlement."""
+    rows = []
+    for m in markets.itertuples():
+        r = book.at(m.market_id, m.start_ts + bo.WINDOW_S - tau, max_age=10)
+        if r is None or not (np.isfinite(r[0]) and np.isfinite(r[1])):
+            continue
+        side = "Up" if (r[0] + r[1]) / 2 >= 0.5 else "Down"
+        p, size = (r[1], r[3]) if side == "Up" else (1 - r[0], r[2])
+        if not (lo - 1e-9 <= p <= hi + 1e-9):
+            continue
+        won = float(m.winner == side)
+        fee = float(bo.taker_fee(p))
+        rows.append((won, p, fee, won - p - fee, size, m.start_ts))
+    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "start"])
+
+
 def fmt(t, reps):
     if t.empty:
         return "0 | – | – | – | – | –"
@@ -172,12 +204,17 @@ def fmt(t, reps):
             f"{p:.4f} | {t['size'].median():.0f}")
 
 
-def run(d, out, reps=20000):
+def run(d, out, reps=20000, since=None, until=None, label=""):
     books, markets, binance = load(d)
+    if since or until:
+        lo = pd.Timestamp(since or "2000-01-01", tz="UTC").timestamp()
+        hi = pd.Timestamp(until or "2100-01-01", tz="UTC").timestamp()
+        markets = markets[(markets["start_ts"] >= lo) & (markets["start_ts"] < hi)]
+        books = books[books["market_id"].isin(set(markets["market_id"]))]
     grid, sigma = spot_grid(binance)
     book = Book(books)
     delay = (binance["receive_ts"] - binance["trade_ts"]).quantile([0.5, 0.9, 0.99])
-    L = ["# 过期报价的时间尺度：币安跳变后 Polymarket 卖一能挂多久", "",
+    L = [f"# 过期报价的时间尺度：币安跳变后 Polymarket 卖一能挂多久{label}", "",
          f"数据：`{Path(d).name}`，{len(markets):,} 个 BTC 5 分钟市场，{len(books):,} 次盘口更新（交易所时间戳），"
          f"{len(binance):,} 笔币安永续逐笔成交。探索性质：这段时间在九月链上分析里已经看过。", "",
          f"币安成交到 Dublin 收到的延迟：中位 {1000 * delay[0.5]:.0f} ms，90% {1000 * delay[0.9]:.0f} ms，"
@@ -195,6 +232,12 @@ def run(d, out, reps=20000):
         for lag in LAGS:
             L.append(f"| {lag:g} 秒 | {fmt(trade(trig, book, lag, False), reps)} | {fmt(trade(trig, book, lag, True), reps)} |")
         L.append("")
+    L += ["## 真实盘口上的吃单规则", "",
+          "剩 τ 秒时，强势方卖一在区间内就按卖一买 1 份（盘口 10 秒内有更新才算），付 taker 费，持有到结算。", "",
+          "| # | 规则 | 笔数 / 胜率 / 平均价 / EV / p / 卖一挂单量中位 |", "|---:|---|---|"]
+    for rid, (name, tau, lo, hi) in BOOK_RULES.items():
+        L.append(f"| {rid} | {name} | {fmt(book_rule(markets, book, tau, lo, hi), reps)} |")
+    L.append("")
     L += ["每格：笔数 | 胜率 | 平均价 | EV/份 | 精确 p | 卖一挂单量中位（份）。反应延迟从币安成交所在的交易所时间算起，"
           "包括收到行情、决策和订单到达交易所的全部时间；放在 Dublin 的程序实际大约 0.15–0.3 秒。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -207,8 +250,11 @@ def main(argv=None):
     ap.add_argument("export_dir")
     ap.add_argument("--out", default="real/latency-t1.md")
     ap.add_argument("--reps", type=int, default=20000)
+    ap.add_argument("--since", help="only markets starting on/after this UTC date")
+    ap.add_argument("--until", help="only markets starting before this UTC date")
+    ap.add_argument("--label", default="")
     a = ap.parse_args(argv)
-    run(a.export_dir, a.out, a.reps)
+    run(a.export_dir, a.out, a.reps, a.since, a.until, a.label)
 
 
 if __name__ == "__main__":

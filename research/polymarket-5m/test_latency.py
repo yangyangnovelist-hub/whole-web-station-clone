@@ -75,3 +75,12 @@ def test_report(export, tmp_path):
     lt.run(export, tmp_path / "r.md", reps=500)
     text = (tmp_path / "r.md").read_text()
     assert "中位 100 ms" in text and "| 0.2 秒 |" in text
+
+
+def test_book_rules_buy_the_favourite_at_its_ask(export):
+    books, markets, binance = lt.load(export)
+    book = lt.Book(books)
+    t = lt.book_rule(markets, book, 199, 0.60, 0.80)  # at 101 s the Up ask is 0.70 (updated at 100.4)
+    assert len(t) == N and (t["price"] == 0.70).all() and t["won"].mean() == pytest.approx(0.8)
+    assert lt.book_rule(markets, book, 90, 0.60, 0.80).empty  # 110 s without an update: stale, no trade
+    assert lt.book_rule(markets, book, 295, 0.40, 0.55).shape[0] == N  # at 5 s the 0.50 ask is fresh
