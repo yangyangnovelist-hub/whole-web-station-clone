@@ -38,7 +38,12 @@ FIXED_POINT = 10**18
 
 # ------------------------------------------------------------------- loading
 
+DAY = None  # --day: pick one UTC day out of a multi-day recording (python -m bot paper writes one file per day)
+
+
 def _one(root, pattern):
+    if DAY:
+        pattern = pattern.replace("-*.", f"-{DAY}.")
     hits = sorted(Path(root).rglob(pattern))
     if len(hits) != 1:
         raise SystemExit(f"expected one {pattern} under {root}, found {len(hits)}")
@@ -363,7 +368,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", help="unpacked polymarket-data-samples directory")
     ap.add_argument("--out", help="write the markdown report here")
+    ap.add_argument("--day", help="UTC day (YYYY-MM-DD) when the directory holds several recorded days")
     args = ap.parse_args(argv)
+    global DAY
+    DAY = args.day
 
     markets = load_markets(args.root)
     spot = load_chainlink(_one(args.root, "BTCUSD-prices-*.csv.gz"))
