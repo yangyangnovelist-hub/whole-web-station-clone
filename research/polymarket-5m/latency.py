@@ -65,6 +65,14 @@ puts the edge at +2..3c within 300-500 ms, where the sparse Binance feeds used s
 print a second) cannot see it; 3,000 trades give about three chances in four of passing at +2c.
 With two tests running (the one above and test C), each passes only with p < 0.025 (FAMILY_ALPHA),
 so the chance of a false pass stays 5%.
+
+Revision, 2026-09-30 09:40 UTC, still before any of test C's data was recorded (its markets start
+at 11:00) and before any data of the test above was looked at: the same study on ETH
+(real/cross-stale-eth.md) shows the edge gone by 300 ms (z = 3: +2.1c at 0 ms, -0.05c at 300 ms)
+with a quarter of BTC's size at the ask, so pooling coins would dilute a BTC effect. Test C is
+now BTC only, judged once on the first 1,500 trades (about six days), with p < 0.05. The
+2-sigma / 0.4 s test above is withdrawn: it triggers on Binance feeds of about one print a second,
+which the May-August study shows cannot see an edge that lives within half a second.
 """
 from __future__ import annotations
 
@@ -85,15 +93,15 @@ import binary as bo
 
 LAGS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 5.0)
 PRIMARY_Z, PRIMARY_LAG = 3.0, 0.5
-NEXT_Z, NEXT_LAG = 2.0, 0.4  # the next preregistered test, for books after 2026-09-29 20:30 UTC
+NEXT_Z, NEXT_LAG = 2.0, 0.4  # withdrawn 2026-09-30 09:40 UTC (see module notes); reported, not judged
 NEXT_SINCE, NEXT_N = "2026-09-29 20:30", 700  # judged once, on the first NEXT_N trades from NEXT_SINCE
 ZS = (2.0, 3.0, 4.0)
 TAUS = (240, 60)
 # Test C: Coinbase-triggered, all recorded coins pooled, on the GitHub forward recordings.
-C_SPOT, C_Z, C_LAG, C_N = "coinbase", 3.0, 0.3, 3000
+C_SPOT, C_Z, C_LAG, C_N = "coinbase", 3.0, 0.3, 1500
 C_SINCE = "2026-09-30 11:00"
-C_COINS = ("btc", "eth", "sol", "xrp", "doge")
-FAMILY_ALPHA = 0.025  # the next test and test C: two tests, 5% in all
+C_COINS = ("btc",)  # revised 09:40 UTC from all five coins, before any of the test's data existed
+FAMILY_ALPHA = 0.05  # test C alone: the 2-sigma / 0.4 s test above was withdrawn at 09:40 UTC
 
 
 def _read(d, pattern):
@@ -348,13 +356,13 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
             verdicts.append("09-26..29 的检验：" + verdict(trade(trig, book, PRIMARY_LAG, False), z, PRIMARY_LAG, reps))
         if z == NEXT_Z:
             t = trade(trig, book, NEXT_LAG, False).sort_values("t", kind="stable")
-            head = f"下一次检验（{NEXT_SINCE} UTC 起开始的市场，按时间取前 {NEXT_N} 笔）："
+            head = f"已撤销的 2σ/0.4 秒检验（{NEXT_SINCE} UTC 起开始的市场，按时间取前 {NEXT_N} 笔，只作描述）："
             if not since or pd.Timestamp(since, tz="UTC") < pd.Timestamp(NEXT_SINCE, tz="UTC"):
                 verdicts.append(head + f"不适用，这次运行含更早的数据（用 --since \"{NEXT_SINCE}\"）")
             elif len(t) < NEXT_N:
                 verdicts.append(head + f"目前 {len(t)} 笔，不到 {NEXT_N} 笔，不判定")
             else:
-                verdicts.append(head + verdict(t.head(NEXT_N), z, NEXT_LAG, reps, FAMILY_ALPHA))
+                verdicts.append(head + verdict(t.head(NEXT_N), z, NEXT_LAG, reps).split(" → ")[0] + "（已撤销，不判定）")
     L += ["## 真实盘口上的吃单规则", "",
           "剩 τ 秒时，强势方卖一在区间内就按卖一买 1 份（盘口 10 秒内有更新才算），付 taker 费，持有到结算。", "",
           "| # | 规则 | 笔数 / 胜率 / 平均价 / EV / p / 卖一挂单量中位 |", "|---:|---|---|"]
@@ -367,7 +375,7 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
         verdicts.append(f"#{rid} {name}：{len(t)} 笔，EV {100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，"
                         f"p = {p:.4f} → {'通过' if ok else '没通过'}")
     L += ["", "## 事先定好的判定", "",
-          "09-26..29 的检验和 #9–#104 只对 `--since 2026-09-26` 的那次运行有效；下一次检验见第一条。", ""] + [f"- {v}" for v in verdicts] + [""]
+          "09-26..29 的检验和 #9–#104 只对 `--since 2026-09-26` 的那次运行有效；2σ/0.4 秒检验已撤销（见第一条），现在的检验是检验 C（`--pooled`）。", ""] + [f"- {v}" for v in verdicts] + [""]
     L += ["每格：笔数 | 胜率 | 平均价 | EV/份 | 精确 p | 卖一挂单量中位（份）。反应延迟从币安成交所在的交易所时间算起，"
           "包括收到行情、决策和订单到达交易所的全部时间；放在 Dublin 的程序实际大约 0.15–0.3 秒。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)

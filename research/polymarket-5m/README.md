@@ -23,11 +23,11 @@
 | `rules.py` | 通用回测器：在九月链上成交里还原每秒的买一卖一，批量检验 172 条可执行规则（§18） |
 | `makers.py` | 把九月链上成交拆成挂单方和吃单方，按价格和剩余时间分格，前半月选、后半月验（§17） |
 | `onchain.py` | 用九月全部链上成交（Hugging Face TimeSeventeen/Polymarket-v2）检验 #101 背后的过期报价，并用带撮合时间的成交推送量上链延迟（§16） |
-| `test_*.py` | 99 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具、100 个策略、录制转换、累积检验、kacho 适配、链上检验和纸面交易 |
+| `test_*.py` | 100 个测试：蒙特卡洛验证定价公式；合成盘口验证回测工具、100 个策略、录制转换、累积检验、kacho 适配、链上检验和纸面交易 |
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q          # 99 个测试
+python -m pytest -q          # 100 个测试
 python simulate.py           # 约 20 秒，重写 results.md
 ```
 
@@ -561,7 +561,7 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 **结论**：唯一站得住的优势是 5m 市场里币安急动后几百毫秒内的过期卖一，需要低延迟的程序；其余（跨周期组合、排队挂单、长周期市场）不赚钱或太小。为了在新数据上检验这一条，GitHub 录制从 9 月 30 日起记下 Polymarket 转发的币安价格和 Coinbase 逐笔成交（都带交易所时间），盘口用交易所时间戳。
 
-**检验 C**（2026-09-30 09:00 UTC 写死在 `latency.C_*`，那时它的数据还没开始录）：GitHub 前向录制，9 月 30 日 11:00 UTC 起开始的 btc/eth/sol/xrp/doge 5m 市场；各币种自己的 Coinbase 逐笔成交在剩 240–60 秒时第一次相对至少一秒前涨跌超过 3σ，0.3 秒后按交易所时间戳盘口的卖一买顺势一方，付 taker 费，持有到结算；合并后按触发时间取前 3,000 笔判定一次（按每份 +2¢ 估计约有四分之三的把握通过，约三天）。和上面的 2σ/0.4 秒检验一起，两个检验各自要 p < 0.025 才算通过，合计误报率 5%。汇总在 `polymarket-kacho` 的 `mode: latency`（[`real/latency-test-c.md`](real/latency-test-c.md)）。
+**检验 C**（2026-09-30 08:53 UTC 写死在 `latency.C_*`，09:40 修订，两次都在它的数据开始录之前）：GitHub 前向录制，9 月 30 日 11:00 UTC 起开始的 BTC 5m 市场；Coinbase BTC-USD 逐笔成交在剩 240–60 秒时第一次相对至少一秒前涨跌超过 3σ，0.3 秒后按交易所时间戳盘口的卖一买顺势一方，付 taker 费，持有到结算；按触发时间取前 1,500 笔判定一次（约 6 天），EV > 0 且精确 p < 0.05 才算通过。修订的原因：同样的研究在 ETH 上（[`real/cross-stale-eth.md`](real/cross-stale-eth.md)）300 ms 时优势已经没了（3σ：0 ms +2.1¢，300 ms −0.05¢），卖一挂单量也只有 BTC 的四分之一，合并币种只会稀释 BTC 的效果；原来的 2σ/0.4 秒检验撤销，因为它用的币安行情约每秒一笔，看不到半秒内的优势（撤销时它的数据都还没看过）。汇总在 `polymarket-kacho` 的 `mode: latency`（[`real/latency-test-c.md`](real/latency-test-c.md)）。
 
 ## 来源
 
