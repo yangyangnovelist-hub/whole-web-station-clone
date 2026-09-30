@@ -457,12 +457,48 @@ def analyze(workdir, out, days=None):
     print("\n".join(L))
 
 
+def probe_trades(workdir, out):
+    """Which sources the trades and books tables hold (is there a Polymarket trade tape?)."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    name = arcs[-1][0]
+    local = fetch(name, workdir / name)
+    trades, books = [], []
+    with tarfile.open(local, "r|gz") as tar:
+        for m in tar:
+            if not (m.isfile() and m.name.endswith(".parquet")):
+                continue
+            if "dataset=trades/" in m.name:
+                trades.append(pq.read_table(io.BytesIO(tar.extractfile(m).read())).to_pandas())
+            elif "dataset=books_100ms/" in m.name and len(books) < 30:
+                books.append(pq.read_table(io.BytesIO(tar.extractfile(m).read())).to_pandas())
+    t = pd.concat(trades, ignore_index=True)
+    b = pd.concat(books, ignore_index=True)
+    L = [f"# trades / books_100ms 的来源（{name}）", "", "## trades", "",
+         "```", t.groupby([t["exchange"].astype(str), t["instrument"].astype(str)]).size().to_string()[:5000], "```", ""]
+    other = t[t["exchange"].astype(str).str.lower() != "binance"]
+    L += ["非币安的样例：", "", "```", other.head(20).to_string(max_colwidth=70)[:6000], "```", "",
+          f"taker_side: {t['taker_side'].astype(str).value_counts().to_dict()}", "",
+          "## books_100ms", "", "```",
+          b.groupby([b["venue"].astype(str), b["snapshot_kind"].astype(str)]).size().to_string()[:3000], "```", "",
+          "```", b[b["venue"].astype(str).str.lower().str.contains("poly")].head(5).to_string(max_colwidth=90)[:5000], "```"]
+    Path(local).unlink()
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("probe")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe.md")
+    p = sub.add_parser("probe-trades")
+    p.add_argument("--workdir", default="/tmp/cross")
+    p.add_argument("--out", default="real/cross-probe-trades.md")
     for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
@@ -471,6 +507,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "probe":
         probe(a.workdir, a.out)
+    elif a.cmd == "probe-trades":
+        probe_trades(a.workdir, a.out)
     elif a.cmd == "analyze":
         analyze(a.workdir, a.out, a.days)
     else:

@@ -7,7 +7,7 @@
 #       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-09-30 06:50 box arbitrage and box rules on all 67 days
+requested: 2026-09-30 07:40 which sources the trades and books tables hold (Polymarket trade tape for a queue model?)
 mode: cross
-cross: analyze
+cross: probe-trades
 later: 2026-09-28
