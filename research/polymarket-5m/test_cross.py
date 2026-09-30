@@ -79,3 +79,24 @@ def test_stale_quote_timing():
     assert list(t["t0"].unique()) == [t_jump + 150] and set(t["horizon"]) == {5}
     assert dict(zip(t["lag"], t["price"])) == {0: 0.50, 200: 0.50, 500: 0.70}
     assert t["still"].tolist() == [True, True, False]
+
+
+def test_maker_queue_fills():
+    """Up bid 0.60 with 100 shares ahead: sells of 60 then 50 at 0.60 fill a joining order on the
+    second print; an order one tick above (0.61) fills on the first print (a sell below it)."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.60, "up_best_ask": 0.62, "down_best_bid": 0.38, "down_best_ask": 0.40,
+                         "up_ask_size": 20.0, "down_ask_size": 20.0, "up_bid_size": 100.0, "down_bid_size": 50.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0],
+                         "horizon": [5], "up_token": ["u"], "down_token": ["d"]})
+    trades = pd.DataFrame({"recv_ts_ms": [E - 80_000, E - 70_000], "instrument": ["u", "u"], "price": [0.60, 0.60],
+                           "size": [60.0, 50.0], "taker_side": ["sell", "sell"]})
+    o = cross.maker_orders(feat, mkts, trades, taus=(90,))
+    fav = o[o["which"] == "fav"].set_index("mode")
+    assert fav.loc["join", "filled"] and fav.loc["join", "fill_s"] == pytest.approx(19.8)
+    assert fav.loc["improve", "price"] == 0.61 and fav.loc["improve", "fill_s"] == pytest.approx(9.8)
+    assert fav.loc["join", "pnl"] == pytest.approx(0.40)
+    dog = o[o["which"] == "dog"]
+    assert len(dog) == 2 and not dog["filled"].any()  # nobody sold Down

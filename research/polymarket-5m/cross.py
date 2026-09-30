@@ -121,9 +121,9 @@ def probe(workdir, out):
 
 
 FEAT_COLS = ["timestamp_ms", "market_id", "lifecycle_state", "up_best_bid", "up_best_ask", "down_best_bid",
-             "down_best_ask", "up_ask_sizes", "down_ask_sizes"]
+             "down_best_ask", "up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes"]
 MKT_COLS = ["market_id", "slug", "session_start_ts", "session_end_ts", "chainlink_open_price", "up_won",
-            "outcome_direction", "lifecycle_state"]
+            "outcome_direction", "lifecycle_state", "up_token_id", "down_token_id"]
 
 
 def read_day(path):
@@ -143,7 +143,7 @@ def read_day(path):
                 have = [c for c in FEAT_COLS if c in t.column_names]
                 t = t.select(have)
                 cols = {c: t[c] for c in have if not c.endswith("_sizes")}
-                for c in ("up_ask_sizes", "down_ask_sizes"):  # size at the best ask
+                for c in ("up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes"):  # size at the best price
                     if c in have:
                         cols[c.replace("_sizes", "_size")] = pa.array([(v[0] if v else None) for v in t[c].to_pylist()],
                                                                       pa.float64())
@@ -235,6 +235,164 @@ def stale_trades(feat, mkts, binance, zs=(2.0, 3.0, 4.0), lags=(0, 100, 200, 300
                                        "still"])
 
 
+def read_poly_trades(path):
+    """Polymarket prints (token, receipt time, price, size, taker side) of one daily archive."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    parts = []
+    with tarfile.open(path, "r|gz") as tar:
+        for m in tar:
+            if m.isfile() and "dataset=trades/" in m.name and m.name.endswith(".parquet"):
+                t = pq.read_table(io.BytesIO(tar.extractfile(m).read()),
+                                  columns=["recv_ts_ms", "exchange", "instrument", "price", "size", "taker_side"]).to_pandas()
+                parts.append(t[t["exchange"].astype(str).str.lower() == "polymarket"])
+    if not parts:
+        return pd.DataFrame(columns=["recv_ts_ms", "instrument", "price", "size", "taker_side"])
+    t = pd.concat(parts, ignore_index=True).drop(columns="exchange").drop_duplicates()
+    t["instrument"] = t["instrument"].astype(str)
+    t["taker_side"] = t["taker_side"].astype(str).str.lower()
+    return t.sort_values("recv_ts_ms", kind="stable").reset_index(drop=True)
+
+
+MAKER_TAUS = (240, 180, 120, 90, 60, 45, 30)
+
+
+def maker_orders(feat, mkts, trades, taus=MAKER_TAUS, latency_ms=200, cancel_s=10):
+    """Resting buy orders in 5m markets, filled by a queue model on the real depth and prints.
+
+    At `tau` seconds left the order reaches the book `latency_ms` after the decision, on the
+    favourite or the underdog (by the Up mid then), either joining its best bid behind the size
+    already there ("join") or one tick above it at the front ("improve", when that is still below
+    the ask). It fills once sells printed at its price exceed the size that was ahead of it, or
+    as soon as any sell prints below its price; cancellations ahead of it are never counted, so
+    fills come late rather than early. Unfilled orders are cancelled `cancel_s` before the close.
+    A fill pays no fee and is held to settlement."""
+    import numpy as np
+    import pandas as pd
+    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    tr = {tok: (g["recv_ts_ms"].to_numpy(), g["price"].to_numpy(float), g["size"].to_numpy(float),
+                (g["taker_side"] == "sell").to_numpy())
+          for tok, g in trades.groupby("instrument")}
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by or mk.get("up_token") is None:
+            continue
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        for tau in taus:
+            ta = mk["end"] - tau * 1000 + latency_ms
+            k = np.searchsorted(fts, ta, "left")
+            if k >= len(f) or fts[k] > ta + 1000:
+                continue
+            r = f.iloc[k]
+            if not all(np.isfinite([r["up_best_bid"], r["up_best_ask"]])):
+                continue
+            fav_up = (r["up_best_bid"] + r["up_best_ask"]) / 2 >= 0.5
+            for which in ("fav", "dog"):
+                up = fav_up if which == "fav" else not fav_up
+                bid, ask = (r["up_best_bid"], r["up_best_ask"]) if up else (r["down_best_bid"], r["down_best_ask"])
+                q0 = r["up_bid_size"] if up else r["down_bid_size"]
+                tok = mk["up_token"] if up else mk["down_token"]
+                if not (np.isfinite(bid) and np.isfinite(ask) and 0.01 <= bid < ask):
+                    continue
+                won = float(mk["up_won"] == (1.0 if up else 0.0))
+                t_ts, t_px, t_sz, t_sell = tr.get(tok, (np.array([]), np.array([]), np.array([]), np.array([], bool)))
+                a, b = np.searchsorted(t_ts, [ta, mk["end"] - cancel_s * 1000], "right")
+                for mode in ("join", "improve"):
+                    price = bid if mode == "join" else round(bid + 0.01, 2)
+                    if mode == "improve" and price >= ask - 1e-9:
+                        continue
+                    ahead = (q0 if np.isfinite(q0) else 0.0) if mode == "join" else 0.0
+                    fill_t = np.nan
+                    sells = t_sell[a:b]
+                    px, sz, ts = t_px[a:b][sells], t_sz[a:b][sells], t_ts[a:b][sells]
+                    through = np.flatnonzero(px < price - 1e-9)
+                    at = np.flatnonzero(np.abs(px - price) < 1e-9)
+                    cum = np.cumsum(sz[at]) if len(at) else np.array([])
+                    i_at = at[np.argmax(cum > ahead)] if len(at) and (cum > ahead).any() else None
+                    cands = [ts[i] for i in ([through[0]] if len(through) else []) + ([i_at] if i_at is not None else [])]
+                    if cands:
+                        fill_t = min(cands)
+                    rows.append((mid, mk["end"], tau, which, mode, price, ahead, np.isfinite(fill_t),
+                                 (fill_t - ta) / 1000 if np.isfinite(fill_t) else np.nan, won, won - price))
+    return pd.DataFrame(rows, columns=["market_id", "end", "tau", "which", "mode", "price", "ahead", "filled",
+                                       "fill_s", "won", "pnl"])
+
+
+BANDS = (0.0, 0.1, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+
+
+def makers(workdir, out, days=None, reps=5000):
+    """Queue-model maker orders on every 5m market; cells chosen on the first half of the days
+    (by date) are checked on the second half."""
+    import numpy as np
+    import pandas as pd
+    import binary as bo
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            trades = read_poly_trades(local)
+            Path(local).unlink()
+            o = maker_orders(feat, market_table(mk, rs), trades)
+            o["day"] = name[15:25]
+            parts.append(o)
+            print(f"{name}: {len(trades):,} Polymarket prints, {o['market_id'].nunique() if len(o) else 0} markets, "
+                  f"fill rate {o['filled'].mean() if len(o) else float('nan'):.2f}", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# 排队挂单：普通人挂在队尾（或抢到队首）能不能赚（{DS}，5m 市场）", "",
+         f"{len(arcs)} 个日档，{df['market_id'].nunique() if len(df) else 0:,} 个市场。剩 τ 秒时下一张 1 份的买单（200 ms 后到达），"
+         "强势方或弱势方，排在买一已有的量后面（join）或高一个价位抢队首（improve）。以挂单价卖出的成交量超过排在前面的量、"
+         "或有更低价的卖出成交才算成交；前面有人撤单不算，所以成交只会偏晚。收盘前 10 秒未成交就撤单。不付手续费，持有到结算。"
+         "按日期前一半选格、后一半检验：前一半每份盈亏最好的格子（成交 ≥ 30 笔），在后一半成交里 EV > 0 且 p < 0.05/格子数才算通过。探索性质。", ""]
+    if df.empty:
+        L.append("没有可用的数据。")
+    else:
+        df["band"] = pd.cut(df["price"], BANDS)
+        days_sorted = sorted(df["day"].unique())
+        first = set(days_sorted[: len(days_sorted) // 2])
+        df["half"] = np.where(df["day"].isin(first), "A", "B")
+        cells = df.groupby(["mode", "which", "tau", "band"], observed=True)
+        L += ["| 挂法 | 方向 | τ | 价位 | 下单 | 成交率 | 成交后胜率 | 平均价 | 每份盈亏（成交） | 每单盈亏（含未成交） | 前一半 | 后一半 |",
+              "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+        summary = []
+        for key, g in cells:
+            fl = g[g["filled"]]
+            if len(fl) < 30:
+                continue
+            ea = fl[fl["half"] == "A"]["pnl"].mean()
+            eb = fl[fl["half"] == "B"]["pnl"].mean()
+            summary.append((key, len(g), fl, ea, eb))
+            L.append(f"| {key[0]} | {key[1]} | {key[2]} | {key[3]} | {len(g):,} | {g['filled'].mean():.0%} | "
+                     f"{fl['won'].mean():.1%} | {fl['price'].mean():.3f} | {100 * fl['pnl'].mean():+.2f}¢ | "
+                     f"{100 * fl['pnl'].sum() / len(g):+.2f}¢ | {100 * ea:+.2f}¢ | {100 * eb:+.2f}¢ |")
+        chosen = sorted([x for x in summary if len(x[2][x[2]["half"] == "A"]) >= 30 and x[3] > 0],
+                        key=lambda x: -x[3])[:10]
+        L += ["", f"## 前一半选出的 {len(chosen)} 个格子在后一半的检验（Bonferroni ÷ {max(len(chosen), 1)}）", "",
+              "| 挂法 | 方向 | τ | 价位 | 前一半 EV | 后一半成交 | 后一半 EV | p | 判定 |", "|---|---|---:|---|---:|---:|---:|---:|---|"]
+        for key, n, fl, ea, eb in chosen:
+            h = fl[fl["half"] == "B"]
+            pv = bo.fair_price_pvalue(h["pnl"].to_numpy(), h["price"].to_numpy(), sims=reps) \
+                if len(h) >= 10 and h["pnl"].mean() > 0 else 1.0
+            ok = len(h) >= 10 and h["pnl"].mean() > 0 and pv < 0.05 / max(len(chosen), 1)
+            L.append(f"| {key[0]} | {key[1]} | {key[2]} | {key[3]} | {100 * ea:+.2f}¢ | {len(h):,} | "
+                     f"{100 * h['pnl'].mean():+.2f}¢ | {pv:.4f} | {'通过' if ok else '没通过'} |")
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def stale(workdir, out, days=None, reps=5000):
     import numpy as np
     import pandas as pd
@@ -298,6 +456,9 @@ def market_table(mk, rs):
     g = mk.sort_values("session_end_ts").groupby("market_id")
     out = g.agg(slug=("slug", "last"), start=("session_start_ts", "last"), end=("session_end_ts", "last"),
                 k=("chainlink_open_price", lambda x: x.dropna().iloc[-1] if x.notna().any() else np.nan))
+    for c in ("up_token_id", "down_token_id"):
+        if c in mk:
+            out[c.replace("_id", "")] = g[c].agg(lambda x: str(x.dropna().iloc[-1]) if x.notna().any() else None)
     won = pd.Series(np.nan, index=out.index)
     if "up_won" in mk:
         w = mk.dropna(subset=["up_won"]).groupby("market_id")["up_won"].last()
@@ -499,7 +660,8 @@ def main(argv=None):
     p = sub.add_parser("probe-trades")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-trades.md")
-    for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md")):
+    for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md"),
+                          ("makers", "real/cross-makers.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -511,6 +673,8 @@ def main(argv=None):
         probe_trades(a.workdir, a.out)
     elif a.cmd == "analyze":
         analyze(a.workdir, a.out, a.days)
+    elif a.cmd == "makers":
+        makers(a.workdir, a.out, a.days)
     else:
         stale(a.workdir, a.out, a.days)
 
