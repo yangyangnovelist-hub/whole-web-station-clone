@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-09-30 16:51 BTC 5m gated rule with the book-health filter: is the edge a stalled-recorder artifact?
-cmd: gated --health --out real/cross-gated-health.md
+requested: 2026-09-30 19:11 fade Polymarket jumps that Binance does not explain (BTC 5m, health filter)
+cmd: fade --out real/cross-fade.md

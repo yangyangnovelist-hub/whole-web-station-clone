@@ -1179,6 +1179,221 @@ def hourly(workdir, out, days=None, reps=5000, health=False):
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 
+FADE_JUMPS = (0.03, 0.05, 0.08)
+FADE_THETAS = (0.0, 0.02, 0.04, 0.06, 0.08, 0.12)
+
+
+def _spot_state(binance):
+    """(receipt times, log prices in receipt order, per-second sigma) of a Binance trade table."""
+    import numpy as np
+    import pandas as pd
+    rt = binance["recv_ts_ms"].to_numpy()
+    lp = np.log(binance["price"].to_numpy())
+    tt = binance["trade_ts_ms"].to_numpy()
+    order = np.argsort(tt, kind="stable")
+    last = pd.Series(lp[order], index=tt[order] // 1000).groupby(level=0).last()
+    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=10)
+    return rt, lp, grid.diff().rolling(600, min_periods=300).std()
+
+
+def fade_trades(feat, mkts, binance, jumps=FADE_JUMPS, thetas=FADE_THETAS, lag_ms=300, quiet=0.5, health=True):
+    """The mirror of the gated rule (5m markets): the Polymarket Up mid moves by at least `jump`
+    within a second while Binance moves less than `quiet` sigma over the same second, so the move is
+    not explained by spot. With the mid a second earlier as the prior and that second's Binance move,
+    fair Up = Phi(Phi^-1(P_prev) + dx / (sigma * twap_std_factor(t))); the side the move made cheaper
+    is bought at its ask lag_ms later if fair - ask - fee >= theta. Decisions on every snapshot with
+    240..15 s left (recorder clock); first trade per market, jump and theta. With `health`, the three
+    quotes used must be sane and the book must have changed around the signal and the fill."""
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import norm
+    import binary as bo
+    if binance.empty:
+        return pd.DataFrame()
+    rt, lp, sigma = _spot_state(binance)
+    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by:
+            continue
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        ub, ua = f["up_best_bid"].to_numpy(), f["up_best_ask"].to_numpy()
+        da, uas, das = f["down_best_ask"].to_numpy(), f["up_ask_size"].to_numpy(), f["down_ask_size"].to_numpy()
+        sane, changes = book_health(f) if health else (np.ones(len(f), bool), None)
+        mid_up = (ub + ua) / 2
+        k = np.flatnonzero((fts >= mk["end"] - 240_000) & (fts <= mk["end"] - 15_000))
+        if not len(k):
+            continue
+        t = fts[k]
+        k1 = np.searchsorted(fts, t - 1000, "right") - 1
+        ok = (k1 >= 0) & (t - fts[np.maximum(k1, 0)] <= 1500) & sane[k] & sane[np.maximum(k1, 0)]
+        dm = mid_up[k] - mid_up[np.maximum(k1, 0)]
+        j0, j1 = np.searchsorted(rt, t - 1000, "right") - 1, np.searchsorted(rt, t, "right") - 1
+        dx = np.where((j0 >= 0) & (j1 >= 0), lp[np.maximum(j1, 0)] - lp[np.maximum(j0, 0)], np.nan)
+        sg = sigma.reindex(t // 1000 - 2).to_numpy()
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(ok & (np.abs(dm) >= min(jumps)) & (np.abs(dx) <= quiet * sg) & (sg > 0))
+        done = set()
+        for i in cand:
+            if health and not changed_near(changes, t[i], HEALTH_ALIVE[0], 10**12):
+                continue
+            p_prev = min(max(mid_up[k1[i]], 0.005), 0.995)
+            t_mkt = (t[i] - (mk["end"] - bo.WINDOW_S * 1000)) / 1000
+            fac = float(bo.twap_std_factor(t_mkt)) * sg[i]
+            p1 = float(norm.cdf(norm.ppf(p_prev) + dx[i] / fac))
+            up = dm[i] < 0  # the move made Up cheaper: buy Up; else buy Down
+            fair = p1 if up else 1 - p1
+            kk = np.searchsorted(fts, t[i] + lag_ms, "left")
+            if kk >= len(f) or fts[kk] > t[i] + lag_ms + 1000:
+                continue
+            if health and not (sane[kk] and changed_near(changes, fts[kk], 10**12, HEALTH_ALIVE[1])):
+                continue
+            px = ua[kk] if up else da[kk]
+            if not (np.isfinite(px) and 0.02 <= px <= 0.98):
+                continue
+            fee = 0.07 * px * (1 - px)
+            won = float(mk["up_won"] == (1.0 if up else 0.0))
+            for jump in jumps:
+                if abs(dm[i]) < jump:
+                    continue
+                for th in thetas:
+                    if (jump, th) in done or fair - px - fee < th:
+                        continue
+                    done.add((jump, th))
+                    rows.append((mid, jump, th, int(t[i]), (mk["end"] - t[i]) / 1000, float(dm[i]),
+                                 float(dx[i] / sg[i]), fair, px, uas[kk] if up else das[kk], fee, won, won - px - fee))
+    return pd.DataFrame(rows, columns=["market_id", "jump", "theta", "t", "tau", "dmid", "dx_sigma", "fair", "price",
+                                       "size", "fee", "won", "pnl"])
+
+
+FOLLOW_SIZES = (100, 500, 2000)
+
+
+def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lag_ms=300, slip=0.01, health=True):
+    """Copy large Polymarket takers (5m markets): a taker print of at least `size` USDC with
+    240..15 s left is followed by buying the side it bet on (a buy of a token, or the other token
+    after a sell) at that side's ask lag_ms after the print was received, if the ask is at most
+    `slip` above the price the print implies for that side; first trade per market and size."""
+    import numpy as np
+    import pandas as pd
+    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    if trades.empty or "up_token" not in m5:
+        return pd.DataFrame()
+    side_of = {}
+    for mid, mk in m5.iterrows():
+        side_of[str(mk["up_token"])] = (mid, "Up")
+        side_of[str(mk["down_token"])] = (mid, "Down")
+    tr = trades[trades["instrument"].isin(side_of)]
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    health_of = {}
+    rows, done = [], set()
+    for r in tr.itertuples():
+        mid, tok_side = side_of[r.instrument]
+        mk = m5.loc[mid]
+        t = int(r.recv_ts_ms)
+        if not (mk["end"] - 240_000 <= t <= mk["end"] - 15_000) or mid not in by:
+            continue
+        notional = float(r.price) * float(r.size)
+        buy = r.taker_side == "buy"
+        side = tok_side if buy else ("Down" if tok_side == "Up" else "Up")
+        implied = float(r.price) if buy else 1 - float(r.price)
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        if health and mid not in health_of:
+            health_of[mid] = book_health(f)
+        kk = np.searchsorted(fts, t + lag_ms, "left")
+        if kk >= len(f) or fts[kk] > t + lag_ms + 1000:
+            continue
+        if health:
+            sane, changes = health_of[mid]
+            if not (sane[kk] and changed_near(changes, fts[kk], 10**12, HEALTH_ALIVE[1])
+                    and changed_near(changes, t, HEALTH_ALIVE[0], 10**12)):
+                continue
+        px = f["up_best_ask"].to_numpy()[kk] if side == "Up" else f["down_best_ask"].to_numpy()[kk]
+        size = f["up_ask_size"].to_numpy()[kk] if side == "Up" else f["down_ask_size"].to_numpy()[kk]
+        if not (np.isfinite(px) and 0.02 <= px <= 0.98 and px <= implied + slip + 1e-9):
+            continue
+        fee = 0.07 * px * (1 - px)
+        won = float(mk["up_won"] == (1.0 if side == "Up" else 0.0))
+        for s_min in sizes:
+            if notional < s_min or (mid, s_min) in done:
+                continue
+            done.add((mid, s_min))
+            rows.append((mid, s_min, t, (mk["end"] - t) / 1000, side, notional, implied, px, size, fee, won,
+                         won - px - fee))
+    return pd.DataFrame(rows, columns=["market_id", "min_usdc", "t", "tau", "side", "notional", "implied", "price",
+                                       "size", "fee", "won", "pnl"])
+
+
+def _period_table(df, keys, reps, title_cols):
+    """Rows per key and period (A May 25 - Jul 15, B Jul 16 - Aug 16, C Aug 17 - 29) with EV and p."""
+    import numpy as np
+    import binary as bo
+    df = df.copy()
+    df["period"] = np.select([df["day"] <= "2026-07-15", df["day"] <= "2026-08-16"],
+                             ["A 5/25–7/15", "B 7/16–8/16"], "C 8/17–8/29")
+    L = ["| " + " | ".join(title_cols) + " | 时段 | 笔数 | 胜率 | 平均价 | EV/份 | p | 卖一数量中位 |",
+         "|" + "---:|" * len(title_cols) + "---|---:|---:|---:|---:|---:|---:|"]
+    for key, g in df.groupby(keys + ["period"]):
+        pv = bo.fair_price_pvalue(g["pnl"].to_numpy(), (g["price"] + g["fee"]).to_numpy(), sims=reps) \
+            if len(g) >= 10 and g["pnl"].mean() > 0 else 1.0
+        L.append("| " + " | ".join(str(k) for k in key[:-1]) + f" | {key[-1]} | {len(g):,} | {g['won'].mean():.1%} | "
+                 f"{g['price'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} | {g['size'].median():.0f} |")
+    return L
+
+
+def fadefollow(kind, workdir, out, days=None, reps=5000, health=True):
+    """fade or follow on every day; parameters compared on May 25 - Jul 15, checked later."""
+    import pandas as pd
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            mkts = market_table(mk, rs)
+            if kind == "fade":
+                t = fade_trades(feat, mkts, read_binance(local), health=health)
+            else:
+                t = follow_trades(feat, mkts, read_poly_trades(local), health=health)
+            Path(local).unlink()
+            t["day"] = name[15:25]
+            parts.append(t)
+            print(f"{name}: {len(t):,} trades", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    if kind == "fade":
+        L = [f"# 反向：Polymarket 自己的跳动（{DS}，5m 市场，记录机时钟）", "",
+             "候选：剩 240–15 秒时每个快照，Up 中间价一秒内变动 ≥ 跳动幅度，而币安同一秒的涨跌不到 0.5σ（现货没动）。"
+             "以一秒前的中间价为原来的概率，加上这一秒币安的涨跌，算出公平价；买这次跳动变便宜的一方，300 ms 后按卖一，"
+             "只在 公平价 − 卖一 − taker 费 ≥ θ 时成交；每个市场、每组（跳动幅度, θ）取第一笔，持有到结算。"
+             "加盘口健康检查。5 月 25 日–7 月 15 日比较参数，之后只核对。探索性质。", ""]
+        keys, cols = ["jump", "theta"], ["跳动", "θ"]
+    else:
+        L = [f"# 跟随大单（{DS}，5m 市场，记录机时钟）", "",
+             "候选：剩 240–15 秒时每一笔金额 ≥ 门槛的 Polymarket 吃单（买某个代币，或卖出后等于买另一个）；"
+             "记录机收到后 300 ms 按同一方向的卖一买，只在卖一不超过这笔成交隐含的价格 1¢ 以上时成交；"
+             "每个市场、每个门槛取第一笔，持有到结算。加盘口健康检查。5 月 25 日–7 月 15 日比较门槛，之后只核对。探索性质。", ""]
+        keys, cols = ["min_usdc"], ["金额门槛（USDC）"]
+    if df.empty:
+        L.append("没有可用的交易。")
+    else:
+        L += _period_table(df, keys, reps, cols)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 HF_API = "https://huggingface.co/api/datasets?"
 SCAN_QUERIES = ("author=whodisidk", "search=polymarket", "search=updown", "search=up-down", "search=kalshi")
 
@@ -1424,7 +1639,8 @@ def main(argv=None):
     p.add_argument("--out", default="real/cross-probe-trades.md")
     for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md"),
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
-                          ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md")):
+                          ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md"),
+                          ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -1457,6 +1673,8 @@ def main(argv=None):
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":
         hourly(a.workdir, a.out, a.days, health=a.health)
+    elif a.cmd in ("fade", "follow"):
+        fadefollow(a.cmd, a.workdir, a.out, a.days)
     else:
         stale(a.workdir, a.out, a.days)
 

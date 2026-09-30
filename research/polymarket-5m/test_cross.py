@@ -298,3 +298,52 @@ def test_book_health_keeps_live_books_and_drops_stalled_or_crossed_ones():
     feat, _, _ = _gated_fixture(live=True)
     feat["observed_halt_flag"] = True
     assert cross.gated_trades(feat, mkts, binance, z0=6.0, health=True).empty
+
+
+def _live_book(ts, t_jump, before, after):
+    """Snapshots whose Up/Down tops switch from `before` to `after` at t_jump; sizes tick every
+    100 ms like a running feed. before/after: (up_bid, up_ask, down_bid, down_ask)."""
+    b = np.array([before if t < t_jump else after for t in ts])
+    return pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": b[:, 0], "up_best_ask": b[:, 1], "down_best_bid": b[:, 2],
+                         "down_best_ask": b[:, 3], "up_ask_size": 25.0 + np.arange(len(ts)) % 7,
+                         "down_ask_size": 30.0, "up_bid_size": 10.0, "down_bid_size": 10.0})
+
+
+def test_fade_buys_the_side_a_spotless_jump_made_cheap():
+    """Up jumps 0.50 -> 0.65 at E-100 s while Binance is flat: fair stays about 0.50, so Down at the
+    0.36 ask clears every theta up to 12c at every jump size; Down wins."""
+    start, t_jump = E - 300_000, E - 100_000
+    ts = np.arange(start, E, 100)
+    feat = _live_book(ts, t_jump, (0.49, 0.51, 0.49, 0.51), (0.64, 0.66, 0.34, 0.36))
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [0.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-5, len(tt))))
+    price[tt >= t_jump - 60_000] = price[np.searchsorted(tt, t_jump - 60_000)]  # flat around the jump
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    f = cross.fade_trades(feat, mkts, binance)
+    assert len(f) == len(cross.FADE_JUMPS) * len(cross.FADE_THETAS)
+    assert (f["t"] == t_jump).all() and (f["price"] == 0.36).all() and (f["won"] == 1.0).all()
+    assert f["fair"].iloc[0] == pytest.approx(0.50, abs=0.01)
+    stalled = feat.assign(up_ask_size=25.0)  # the same prices from a frozen feed: nothing
+    assert cross.fade_trades(stalled, mkts, binance).empty
+
+
+def test_follow_copies_large_takers_within_a_cent():
+    start, t_print = E - 300_000, E - 100_000
+    ts = np.arange(start, E, 100)
+    feat = _live_book(ts, t_print + 200, (0.49, 0.50, 0.49, 0.51), (0.50, 0.51, 0.48, 0.50))
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0],
+                         "horizon": [5], "up_token": ["u"], "down_token": ["d"]})
+    trades = pd.DataFrame({"recv_ts_ms": [t_print - 5_000, t_print], "instrument": ["u", "u"], "price": [0.50, 0.50],
+                           "size": [100.0, 5000.0], "taker_side": ["buy", "buy"]})
+    f = cross.follow_trades(feat, mkts, trades)
+    assert f["min_usdc"].tolist() == list(cross.FOLLOW_SIZES) and (f["t"] == t_print).all()
+    assert (f["side"] == "Up").all() and (f["price"] == 0.51).all()
+    assert f["pnl"].iloc[0] == pytest.approx(1 - 0.51 - 0.07 * 0.51 * 0.49)
+    sold = trades.assign(taker_side="sell", price=0.48)  # selling Up at 0.48 bets on Down at 0.52: Down ask 0.50
+    g = cross.follow_trades(feat, mkts, sold)
+    assert (g["side"] == "Down").all() and (g["price"] == 0.50).all() and (g["won"] == 0.0).all()
+    far = trades.assign(price=0.45)  # the ask is now 6c above the print: not followed
+    assert cross.follow_trades(feat, mkts, far).empty

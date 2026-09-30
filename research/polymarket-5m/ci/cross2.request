@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
 # beside ci/cross.request): "cmd:" is the cross.py command, as there.
-requested: 2026-09-30 16:51 1h markets vs the Binance candle, with the book-health filter, four lags and the 0.072 fee before July
-cmd: hourly --health --out real/cross-hourly-health.md
+requested: 2026-09-30 19:11 follow large Polymarket takers within a cent (BTC 5m, health filter)
+cmd: follow --out real/cross-follow.md
