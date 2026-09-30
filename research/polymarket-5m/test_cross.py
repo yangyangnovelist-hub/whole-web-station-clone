@@ -143,3 +143,23 @@ def test_maker_fill_tagged_by_a_preceding_adverse_move():
     o = cross.maker_orders(feat, mkts, trades, taus=(90,), binance=binance)
     fav = o[o["which"] == "fav"].set_index("mode")
     assert fav.loc["join", "adverse"] == 1.0 and fav.loc["improve", "adverse"] == 0.0
+
+
+def test_open_trades_price_the_twap_reference():
+    """Binance stays flat for 20 minutes, then is 0.3% higher from the open on: the fair Up price
+    just after the open is above 0.9 against a reference averaged before the open; Up at 0.60 is bought."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.58, "up_best_ask": 0.60, "down_best_bid": 0.40, "down_best_ask": 0.42,
+                         "up_ask_size": 20.0, "down_ask_size": 20.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(2)
+    tt = np.arange(start - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 2e-6, len(tt))))
+    price[tt >= start - 1000] *= 1.003
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 100, "price": price})
+    o = cross.open_trades(feat, mkts, binance, delays=(3,))
+    up = o[o["side"] == "Up"]
+    assert len(up) == len(cross.OPEN_THETAS) and (up["p_up"] > 0.9).all() and (up["price"] == 0.60).all()
+    assert (o["side"] == "Up").all()

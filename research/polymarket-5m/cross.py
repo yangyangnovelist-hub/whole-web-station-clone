@@ -17,6 +17,7 @@ is reachable (the polymarket-kacho workflow, "mode: cross").
     python cross.py analyze --workdir /tmp/x                           # ... on every day
     python cross.py stale 10 --workdir /tmp/x                          # stale 5m quotes after Binance moves
     python cross.py gated --workdir /tmp/x                             # ... only when the fair jump is worth it
+    python cross.py openmis --workdir /tmp/x                           # mispricing just after the open
 
 For every pair of markets ending together (5m-15m, 5m-1h, 15m-1h), at every 100 ms snapshot
 while both trade, the cost of the box that pays at least 1 (Up on the lower reference, Down on
@@ -570,6 +571,113 @@ def gated(workdir, out, days=None, reps=5000):
     print("\n".join(L))
 
 
+OPEN_THETAS = (0.0, 0.02, 0.03, 0.05, 0.08)
+
+
+def open_trades(feat, mkts, binance, delays=(3, 10, 30), lag_ms=300, thetas=OPEN_THETAS, window=60):
+    """Just after a 5m market opens, the reference price is the average of the last `window`
+    seconds before the open (TWAP era) while the settlement average is still all ahead, so the
+    fair Up price is Phi(log(spot now / average before the open) / (sigma * twap_std_factor(t))),
+    measured on Binance (the Binance-Chainlink basis cancels in the ratio). At `d` s after the
+    open (as received) the side with fair - ask - fee >= theta is bought at the ask lag_ms later
+    and held. Before the TWAP settlement (strike = price at the open) the same rule is a placebo."""
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import norm
+    import binary as bo
+    if binance.empty:
+        return pd.DataFrame()
+    rt = binance["recv_ts_ms"].to_numpy()
+    tt = binance["trade_ts_ms"].to_numpy()
+    order = np.argsort(tt, kind="stable")
+    tt_s = tt[order]
+    lp_s = np.log(binance["price"].to_numpy())[order]
+    last = pd.Series(lp_s, index=tt_s // 1000).groupby(level=0).last()
+    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=10)
+    sigma = grid.diff().rolling(600, min_periods=300).std()
+    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by:
+            continue
+        s0 = int(mk["start"] // 1000)
+        before = grid.reindex(range(s0 - window - 1, s0 - 1)).to_numpy()  # [open-W-2, open-2]
+        sg = sigma.get(s0 - 1, np.nan)
+        if np.isnan(before).sum() > 5 or not np.isfinite(sg) or sg <= 0:
+            continue
+        k = np.nanmean(before)
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        for d in delays:
+            t_dec = mk["start"] + d * 1000
+            i = np.searchsorted(rt, t_dec, "right") - 1  # last Binance print received by then
+            if i < 0 or t_dec - rt[i] > 5000:
+                continue
+            x = np.log(binance["price"].to_numpy()[i])
+            fac = float(bo.twap_std_factor(d)) * sg
+            p_up = float(norm.cdf((x - k) / fac))
+            j = np.searchsorted(fts, t_dec + lag_ms, "left")
+            if j >= len(f) or fts[j] > t_dec + lag_ms + 1000:
+                continue
+            r = f.iloc[j]
+            for side, fair, px in (("Up", p_up, r["up_best_ask"]), ("Down", 1 - p_up, r["down_best_ask"])):
+                if not (np.isfinite(px) and 0.02 <= px <= 0.98):
+                    continue
+                fee = 0.07 * px * (1 - px)
+                won = float(mk["up_won"] == (1.0 if side == "Up" else 0.0))
+                for th in thetas:
+                    if fair - px - fee >= th:
+                        rows.append((mid, d, th, side, p_up, fair, px, fee, won, won - px - fee))
+    return pd.DataFrame(rows, columns=["market_id", "delay", "theta", "side", "p_up", "fair", "price", "fee", "won", "pnl"])
+
+
+def openmis(workdir, out, days=None, reps=5000):
+    import numpy as np
+    import pandas as pd
+    import binary as bo
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            binance = read_binance(local)
+            Path(local).unlink()
+            t = open_trades(feat, market_table(mk, rs), binance)
+            t["day"] = name[15:25]
+            parts.append(t)
+            print(f"{name}: {len(t):,} open trades", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# 开盘后几秒的定价（{DS}，5m 市场）", "",
+         "参考价是开盘前约一分钟的平均价（TWAP 结算以后），而结算平均还全在后面，所以开盘后公平价 = "
+         "Φ(ln(现价 / 开盘前 [−62 s, −2 s] 的平均) / (σ·TWAP 标准差系数))，都用币安价格算（与 Chainlink 的价差在比值里抵消）。"
+         "开盘后 d 秒（记录机收到时）、300 ms 后按卖一买 公平价 − 卖一 − taker 费 ≥ θ 的一方，持有到结算。"
+         "8 月 14 日以后（60 秒 TWAP）是要看的时段；8 月 6 日以前参考价是开盘那一刻的价格，同一规则应当没有优势（对照）。探索性质。", ""]
+    if df.empty:
+        L.append("没有可用的数据。")
+    else:
+        df["period"] = np.select([df["day"] <= "2026-08-06", df["day"] <= "2026-08-13"],
+                                 ["对照 5/25–8/6（开盘价）", "8/7–8/13（30 秒 TWAP）"], "8/14–8/29（60 秒 TWAP）")
+        L += ["| 时段 | d | θ | 笔数 | 胜率 | 平均价 | 平均公平价 | EV/份 | p |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+        for (per, d, th), g in df.groupby(["period", "delay", "theta"]):
+            pv = bo.fair_price_pvalue(g["pnl"].to_numpy(), (g["price"] + g["fee"]).to_numpy(), sims=reps) \
+                if len(g) >= 10 and g["pnl"].mean() > 0 else 1.0
+            L.append(f"| {per} | {d} s | {100 * th:.0f}¢ | {len(g):,} | {g['won'].mean():.1%} | {g['price'].mean():.3f} | "
+                     f"{g['fair'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} |")
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def stale(workdir, out, days=None, reps=5000):
     import numpy as np
     import pandas as pd
@@ -845,7 +953,8 @@ def main(argv=None):
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-trades.md")
     for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md"),
-                          ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md")):
+                          ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
+                          ("openmis", "real/cross-open.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -864,6 +973,8 @@ def main(argv=None):
         makers(a.workdir, a.out, a.days)
     elif a.cmd == "gated":
         gated(a.workdir, a.out, a.days)
+    elif a.cmd == "openmis":
+        openmis(a.workdir, a.out, a.days)
     else:
         stale(a.workdir, a.out, a.days)
 
