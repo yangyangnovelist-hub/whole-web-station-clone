@@ -577,6 +577,8 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 **抢单**（[`real/cross-gated-compete.md`](real/cross-gated-compete.md)）：检验 D 的规则在 8 月 17–29 日，触发时卖一中位 65 份，我们的单到达前别人已经买走中位 16 份（62% 的笔数有人先买），到达后 300 ms 内又被买走 19 份，三分之一的笔数里后来者买走的不少于剩下的。实际每笔大约能拿到二三十份到四五十份。
 
+**反向和跟随**（[`real/cross-fade.md`](real/cross-fade.md)、[`real/cross-follow.md`](real/cross-follow.md)，都加盘口健康检查，代码经过对抗式审查后才跑）：Polymarket 自己一秒内跳动 ≥ 3/5/8¢ 而币安没动时买变便宜的一方——A 段选出的格子三段 −2.2/−1.9/−1.6¢，全部格子为负：Polymarket 自己的跳动通常是对的。跟随 ≥ 100/500/2,000 USDC 的大单、300 ms 后价差不超过 1¢ 才跟——A 段选出的格子三段 −1.2/−1.7/−3.2¢，全部为负。都放弃。
+
 **同一规则在其他市场上**（[`real/cross-gated-eth.md`](real/cross-gated-eth.md)、[`-sol.md`](real/cross-gated-sol.md)、[`-15m.md`](real/cross-gated-15m.md)）：检验 D 的规则（θ = 12¢、300 ms）在 ETH 5m 上 A 段 −0.01¢、B 段 +5.2¢、C 段 −3.0¢，不稳定；SOL 5m 全部为负（A −0.9¢、C −3.1¢）；BTC 15m（剩 840–15 秒，TWAP 标准差按 900 秒窗口算）在 A 段选出 θ = 8¢（+2.75¢/份），B 段 +5.83¢（p = 0.0004）、C 段 +2.98¢（p = 0.015）。这个优势只在 BTC 上成立（币安是 BTC 价格的领先市场），15 分钟市场上约为 5 分钟的一半。
 
 **开盘错价**（[`real/cross-open.md`](real/cross-open.md)）：TWAP 结算以后参考价是开盘前一分钟的平均，所以开盘后几秒的公平价不是 0.5。开盘后 3/10/30 秒按公平价买：8 月 14–29 日 15 个格子里只有 3 秒、5¢/8¢ 两格 p ≈ 0.04，经多重比较不显著；10 秒、30 秒为负；对照期（开盘价结算）−2~−3¢。放弃。
