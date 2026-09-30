@@ -50,6 +50,7 @@ jobs:
             survey) echo "mode=survey" ;;
             replay) echo "mode=replay" ;;
             latency) echo "mode=latency" ;;
+            cross) echo "mode=cross"; echo "cross=$(sed -n 's/^cross: *//p' ci/kacho.request | head -1)" ;;
             onchain|makers|rules) echo "mode=$mode"; echo "later=$(sed -n 's/^later: *//p' ci/kacho.request | head -1)" ;;
             *) echo "mode=btc" ;;
           esac >> "$GITHUB_OUTPUT"
@@ -114,6 +115,10 @@ jobs:
           python latency.py "${dirs[@]}" --since "2026-09-30 05:00" --out real/latency-github.md \
             --label "（GitHub 前向录制，2026-09-30 05:00 UTC 起开始的市场）"
 
+      - name: "Cross: 5m / 15m / 1h markets ending together (cross.py)"
+        if: steps.mode.outputs.mode == 'cross'
+        run: python cross.py ${{ steps.mode.outputs.cross || 'probe' }} --workdir "$RUNNER_TEMP/cross"
+
       - name: Keep the filtered September fills between runs
         if: steps.mode.outputs.mode == 'onchain' || steps.mode.outputs.mode == 'makers' || steps.mode.outputs.mode == 'rules'
         uses: actions/cache@v4
@@ -147,7 +152,7 @@ jobs:
             --delay-json real/onchain-delay.json
 
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
-        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules' && steps.mode.outputs.mode != 'replay' && steps.mode.outputs.mode != 'latency'
+        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules' && steps.mode.outputs.mode != 'replay' && steps.mode.outputs.mode != 'latency' && steps.mode.outputs.mode != 'cross'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
           for c in ${{ steps.mode.outputs.coins }}; do
@@ -196,7 +201,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-*.md 2>/dev/null || true
+          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-*.md real/cross-*.md 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \

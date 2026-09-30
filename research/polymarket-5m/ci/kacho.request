@@ -5,6 +5,9 @@
 #       | makers (makers.py: resting orders vs aggressors by price and time left, select 09-01..13, test 09-14..25)
 #       | rules (rules.py: 116 executable rules on the on-chain tape, split-half holdout, candidates for --final)
 #       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
-requested: 2026-09-29 replay again now that markets without a recorded strike are kept (3.6x the markets)
-mode: replay
+#       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
+#       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
+requested: 2026-09-30 probe the 5m/15m/1h BTC dataset for cross-horizon consistency
+mode: cross
+cross: probe
 later: 2026-09-28
