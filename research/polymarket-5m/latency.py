@@ -84,6 +84,16 @@ of the recording cannot pass for a stale exchange quote; a market recorded in tw
 earlier trigger; damaged recordings are listed and skipped; the verdict, once reached, is written to
 real/latency-test-c.verdict.md with the recordings behind it and never recomputed. The rule itself
 (C_SPOT, C_Z, C_LAG, C_N, C_SINCE, C_COINS, FAMILY_ALPHA) is unchanged.
+
+Test D, fixed 2026-09-30 13:40 UTC, before any of its data was converted or looked at (see D_* and
+gated_trades): the stale-ask rule gated by the fair-value jump the move implies, chosen on May 25 -
+Jul 15 of the dense May-August study (cross.py gated, real/cross-gated.md: theta = 12c had the
+highest EV/share there at 300 ms, +3.2c) and holding on the later days it was not chosen on
+(Jul 16 - Aug 16 +7.6c, Aug 17 - 29 +6.3c, both p < 0.001, against +1.4c ungated in the latter).
+BTC 5m markets from 2026-09-30 14:00 UTC on the GitHub forward recordings, Coinbase prints, z0 = 2,
+0.3 s, theta = 12c, first 1,200 trades, same data hygiene as test C. With tests C and D both
+running, each passes only with p < 0.025 (FAMILY_ALPHA); test C's threshold moved from 0.05 to
+0.025 at the same time, still before any of its data was converted.
 """
 from __future__ import annotations
 
@@ -112,12 +122,16 @@ TAUS = (240, 60)
 C_SPOT, C_Z, C_LAG, C_N = "coinbase", 3.0, 0.3, 1500
 C_SINCE = "2026-09-30 11:00"
 C_COINS = ("btc",)  # revised 09:40 UTC from all five coins, before any of the test's data existed
-FAMILY_ALPHA = 0.05  # test C alone: the 2-sigma / 0.4 s test above was withdrawn at 09:40 UTC
+FAMILY_ALPHA = 0.025  # tests C and D, 5% in all (0.05 for C alone until test D was added at 13:40 UTC)
 # Test C data hygiene, fixed 2026-09-30 before any of its data was converted (see module notes):
 # each recording is processed on its own; the spot grid does not carry prices across gaps of more
 # than C_MAX_GAP s; the reference print is at most C_REF_AGE s old; a trade needs the book feed
 # running (an update within C_ALIVE[0] s before and C_ALIVE[1] s after the order time).
 C_MAX_GAP, C_REF_AGE, C_ALIVE = 10, 5.0, (30.0, 10.0)
+# Test D: stale asks gated by the fair-value jump (cross.py gated), same data and hygiene as test C.
+D_SPOT, D_Z0, D_LAG, D_THETA, D_N = "coinbase", 2.0, 0.3, 0.12, 1200
+D_SINCE, D_TAU_LO = "2026-09-30 14:00", 15
+D_COINS = ("btc",)
 
 
 def _read(d, pattern):
@@ -416,12 +430,60 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
     print("\n".join(L))
 
 
-def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,), notes=None):
-    """Trades of the stale-quote rule, each recording (directory) on its own spot feed and book,
-    pooled over recordings and coins; a market recorded twice keeps its earlier trigger. One row
-    per (coin, market, lag) with the trigger time `t` and the recording `run`."""
+def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0=D_Z0, tau_lo=D_TAU_LO):
+    """Test D's trades: every spot print with 240..tau_lo s left whose log price moved more than z0
+    sigma from the last print at most C_REF_AGE s and at least 1 s earlier is a candidate. The Up
+    mid shown by the exchange at that print is the prior P0; the move shifts the expected settlement
+    TWAP by the whole move, so the fair Up price is Phi(Phi^-1(P0) + dx / (sigma *
+    twap_std_factor(t))). The side of the move is bought at the ask `lag` s later if
+    fair - ask - fee >= theta (a fill-and-kill limit order sent at the print) and the book feed was
+    running then; the first fill per market is kept and held to settlement."""
+    from scipy.stats import norm
+    ts = spot_trades["trade_ts"].to_numpy()
+    lp = np.log(spot_trades["price"].to_numpy())
+    rows = []
+    for m in markets.itertuples():
+        end = m.start_ts + bo.WINDOW_S
+        a, b = np.searchsorted(ts, [end - TAUS[0], end - tau_lo])
+        if b <= a:
+            continue
+        j = np.searchsorted(ts, ts[a:b] - 1.0, "right") - 1
+        ok = (j >= 0) & (ts[a:b] - ts[np.maximum(j, 0)] <= C_REF_AGE)
+        dx = np.where(ok, lp[a:b] - lp[np.maximum(j, 0)], np.nan)
+        sg = sigma.reindex(np.floor(ts[a:b]).astype("int64") - 1).to_numpy()
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(np.abs(dx) > z0 * sg)
+        for i in cand:
+            t0 = float(ts[a + i])
+            r = book.at(m.market_id, t0)
+            if r is None or not (np.isfinite(r[0]) and np.isfinite(r[1])):
+                continue
+            p0 = min(max((r[0] + r[1]) / 2, 0.005), 0.995)
+            fac = float(bo.twap_std_factor(t0 - m.start_ts)) * sg[i]
+            if not (np.isfinite(fac) and fac > 0):
+                continue
+            up = dx[i] > 0
+            p1 = float(norm.cdf(norm.ppf(p0) + dx[i] / fac))
+            fair = p1 if up else 1 - p1
+            side = "Up" if up else "Down"
+            if not book.alive(m.market_id, t0 + lag, *C_ALIVE):
+                continue
+            px, size = book.side_ask(m.market_id, t0 + lag, side)
+            if not (np.isfinite(px) and 0.02 <= px <= 0.98):
+                continue
+            fee = float(bo.taker_fee(px))
+            if fair - px - fee < theta:
+                continue
+            won = float(m.winner == side)
+            rows.append((won, px, fee, won - px - fee, size, t0, m.market_id, p0, fair, lag))
+            break
+    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t", "market_id", "p0", "fair", "lag"])
+
+
+def _per_recording(dirs_by_coin, since, spot, make, keys, notes):
+    """Run `make(markets, spot_trades, sigma, book)` on each recording (directory) on its own and
+    pool the rows over recordings and coins; rows repeated across recordings keep the earliest."""
     lo = pd.Timestamp(since, tz="UTC").timestamp()
-    notes = [] if notes is None else notes
     out = []
     for coin, dirs in sorted(dirs_by_coin.items()):
         for d in dirs:
@@ -437,28 +499,66 @@ def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,), notes=
                 notes.append(f"{coin} {run}: no markets from {since} with book and spot data")
                 continue
             _, sigma = spot_grid(spot_trades, max_gap=C_MAX_GAP)
-            trig = triggers(markets, spot_trades, sigma, z, max_ref_age=C_REF_AGE)
-            book = Book(books)
-            for lag in lags:
-                t = trade(trig, book, lag, False, alive=C_ALIVE)
-                t["coin"], t["lag"], t["run"] = coin, lag, run
-                out.append(t)
+            t = make(markets, spot_trades, sigma, Book(books))
+            t["coin"], t["run"] = coin, run
+            out.append(t)
     if not out:
         return pd.DataFrame(columns=["t", "pnl", "coin", "lag", "run", "market_id"])
     t = pd.concat(out, ignore_index=True).sort_values("t", kind="stable")
-    return t.drop_duplicates(["coin", "lag", "market_id"], keep="first").reset_index(drop=True)
+    return t.drop_duplicates(keys, keep="first").reset_index(drop=True)
+
+
+def _judge(out, main_t, n, head, reps, spec_lines):
+    """The once-only verdict: pinned in <out>.verdict.md (with the recordings behind it) and the
+    trades in <out>.trades.csv when the first n trades exist, then only ever read back."""
+    pinned = Path(out).with_suffix(".verdict.md")
+    if pinned.exists():
+        return [pinned.read_text(encoding="utf-8").strip() + "（已判定，不再重算）"]
+    if len(main_t) < n:
+        return [head + f"目前 {len(main_t):,} 笔，不到 {n:,} 笔，不判定。"]
+    first = main_t.head(n)
+    v = head + spec_lines(first)
+    runs = sorted(first["run"].unique())
+    pinned.parent.mkdir(parents=True, exist_ok=True)
+    pinned.write_text(v + f"（录制段 {len(runs)} 个：{', '.join(map(str, runs))}；"
+                      f"最后一笔触发于 {pd.to_datetime(first['t'].max(), unit='s', utc=True):%Y-%m-%d %H:%M} UTC）\n",
+                      encoding="utf-8")
+    first.to_csv(Path(out).with_suffix(".trades.csv"), index=False)
+    return [pinned.read_text(encoding="utf-8").strip()]
+
+
+def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,), notes=None):
+    """Trades of the stale-quote rule, each recording (directory) on its own spot feed and book,
+    pooled over recordings and coins; a market recorded twice keeps its earlier trigger. One row
+    per (coin, market, lag) with the trigger time `t` and the recording `run`."""
+    notes = [] if notes is None else notes
+
+    def make(markets, spot_trades, sigma, book):
+        trig = triggers(markets, spot_trades, sigma, z, max_ref_age=C_REF_AGE)
+        parts = []
+        for lag in lags:
+            t = trade(trig, book, lag, False, alive=C_ALIVE)
+            t["lag"] = lag
+            parts.append(t)
+        return pd.concat(parts, ignore_index=True)
+    return _per_recording(dirs_by_coin, since, spot, make, ["coin", "lag", "market_id"], notes)
+
+
+def _latency_dirs(roots, coins):
+    dirs = {}
+    for r in roots:
+        for d in sorted(Path(r).glob("**/bundle-*/latency")):
+            coin = d.parent.name.removeprefix("bundle-")
+            if coin in coins:
+                dirs.setdefault(coin, []).append(d)
+    return dirs
 
 
 def run_pooled(roots, out, reps=20000):
     """Test C on every <root>/**/bundle-<coin>/latency directory: judged once on the first C_N
     trades in trigger-time order, pooled over C_COINS; fewer trades give the count, no verdict.
     Once a verdict is written to <out>.verdict.md it is kept and never recomputed."""
-    dirs = {}
-    for r in roots:
-        for d in sorted(Path(r).glob("**/bundle-*/latency")):
-            coin = d.parent.name.removeprefix("bundle-")
-            if coin in C_COINS:
-                dirs.setdefault(coin, []).append(d)
+    dirs = _latency_dirs(roots, C_COINS)
     notes = []
     t = pooled_trades(dirs, C_SINCE, lags=sorted(set(LAGS) | {C_LAG}), notes=notes)
     coins = "、".join(C_COINS)
@@ -477,22 +577,36 @@ def run_pooled(roots, out, reps=20000):
     L += ["", "| L | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---:|---|---|---|---|---|---|"]
     for lag, g in t.groupby("lag") if len(t) else []:
         L.append(f"| {lag:g} 秒 | {fmt(g, reps)} |")
-    head = f"检验 C（前 {C_N:,} 笔）："
-    pinned = Path(out).with_suffix(".verdict.md")
-    if pinned.exists():
-        L += ["", pinned.read_text(encoding="utf-8").strip() + "（已判定，不再重算）"]
-    elif len(main_t) < C_N:
-        L += ["", head + f"目前 {len(main_t):,} 笔，不到 {C_N:,} 笔，不判定。"]
-    else:
-        first = main_t.head(C_N)
-        v = head + verdict(first, C_Z, C_LAG, reps, FAMILY_ALPHA)
-        runs = sorted(first["run"].unique())
-        pinned.parent.mkdir(parents=True, exist_ok=True)
-        pinned.write_text(v + f"（录制段 {len(runs)} 个：{', '.join(map(str, runs))}；"
-                          f"最后一笔触发于 {pd.to_datetime(first['t'].max(), unit='s', utc=True):%Y-%m-%d %H:%M} UTC）\n",
-                          encoding="utf-8")
-        first.to_csv(Path(out).with_suffix(".trades.csv"), index=False)
-        L += ["", pinned.read_text(encoding="utf-8").strip()]
+    L += [""] + _judge(out, main_t, C_N, f"检验 C（前 {C_N:,} 笔）：", reps,
+                       lambda first: verdict(first, C_Z, C_LAG, reps, FAMILY_ALPHA))
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
+def run_test_d(roots, out, reps=20000):
+    """Test D on the same recordings as test C: judged once on the first D_N trades."""
+    dirs = _latency_dirs(roots, D_COINS)
+    notes = []
+    t = _per_recording(dirs, D_SINCE, D_SPOT, lambda mk, sp, sg, bk: gated_trades(mk, sp, sg, bk),
+                       ["coin", "market_id"], notes)
+    coins = "、".join(D_COINS)
+    L = [f"# 检验 D：按公平价跳变筛选的过期报价（{coins}，{D_SPOT} 触发，GitHub 前向录制）", "",
+         f"事先写死（9 月 30 日 13:40 UTC，数据还没看过）：{D_SINCE} UTC 起开始的 5m 市场；剩 240–{D_TAU_LO} 秒时，"
+         f"与至少一秒前（不早于 {C_REF_AGE:g} 秒）相比涨跌超过 {D_Z0:g}σ 的每一笔 {D_SPOT} 成交都是候选；以那一刻交易所显示的"
+         f" Up 中间价为原来的概率，这次涨跌让结算 TWAP 的期望整体移动，算出新的公平价；{D_LAG:g} 秒后按卖一买顺势一方，"
+         f"只在 公平价 − 卖一 − taker 费 ≥ {100 * D_THETA:.0f}¢ 时成交（相当于在触发时下一张成交不了就取消的限价单），"
+         f"每个市场取第一笔，持有到结算；按触发时间取前 {D_N:,} 笔判定一次，EV > 0 且精确 p < {FAMILY_ALPHA} 才算通过。"
+         "数据处理同检验 C。", ""]
+    main_t = t.sort_values("t", kind="stable") if len(t) else t
+    L += [f"录制段 {sum(len(v) for v in dirs.values())} 个，成交 {len(main_t):,} 笔。"]
+    if notes:
+        L += ["", "跳过的录制段：", ""] + [f"- {n}" for n in notes]
+    if len(main_t):
+        L += ["", "| 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---|---|---|---|---|---|", f"| {fmt(main_t, reps)} |"]
+    L += [""] + _judge(out, main_t, D_N, f"检验 D（前 {D_N:,} 笔）：", reps,
+                       lambda first: verdict(first, D_Z0, D_LAG, reps, FAMILY_ALPHA).replace(
+                           "过期报价（", f"公平价筛选的过期报价（θ={100 * D_THETA:.0f}¢，"))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
@@ -509,8 +623,11 @@ def main(argv=None):
     ap.add_argument("--spot", default="binance", choices=sorted(SPOT), help="trade feed that triggers")
     ap.add_argument("--pooled", action="store_true",
                     help="test C: export_dir are roots holding recording bundle-<coin>/latency directories")
+    ap.add_argument("--test-d", action="store_true", help="test D on the same roots as --pooled")
     a = ap.parse_args(argv)
-    if a.pooled:
+    if a.test_d:
+        run_test_d(a.export_dir, a.out, a.reps)
+    elif a.pooled:
         run_pooled(a.export_dir, a.out, a.reps)
     else:
         run(a.export_dir, a.out, a.reps, a.since, a.until, a.label, a.spot)

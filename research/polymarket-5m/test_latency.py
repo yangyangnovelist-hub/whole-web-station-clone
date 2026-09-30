@@ -174,3 +174,21 @@ def test_test_c_does_not_trigger_across_recording_gaps(export, tmp_path, monkeyp
     shutil_dir = tmp_path / "sparse" / "1" / "x" / "bundle-btc" / "latency"
     _latency_dir(shutil_dir, export, lines, starts, book_step=60.0)
     assert lt.pooled_trades({"btc": [shutil_dir]}, "2026-09-01").empty
+
+
+def test_test_d_trades_only_jumps_worth_the_threshold(export, tmp_path, monkeypatch):
+    """Each market has one +0.4% jump at start+100 s (fair Up about 0.9) and 1e-5 noise elsewhere
+    (a 2-sigma noise print moves the fair price by far less than 12c): one trade per market, at
+    the 0.50 ask 0.3 s after the jump."""
+    starts = [S0 + 300 * i for i in range(N)]
+    _latency_dir(tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency", export, _coinbase_lines(export), starts)
+    monkeypatch.setattr(lt, "D_SINCE", "2026-09-01")
+    dirs = lt._latency_dirs([tmp_path / "rec"], ("btc",))
+    t = lt._per_recording(dirs, "2026-09-01", "coinbase", lambda mk, sp, sg, bk: lt.gated_trades(mk, sp, sg, bk),
+                          ["coin", "market_id"], [])
+    assert len(t) == N and (t["price"] == 0.50).all() and (t["fair"] - t["price"] - t["fee"] >= 0.12).all()
+    assert np.allclose(t["t"] - np.array(starts), 100.05)
+    monkeypatch.setattr(lt, "D_N", 20)
+    out = tmp_path / "real" / "d.md"
+    lt.run_test_d([tmp_path / "rec"], out, reps=200)
+    assert "检验 D（前 20 笔）：公平价筛选的过期报价（θ=12¢，z=2，0.3 秒后按卖一买）：20 笔" in out.read_text()
