@@ -58,6 +58,7 @@ jobs:
           ls -d "$rec"/*/x/bundle-btc/latency 2>/dev/null | wc -l
           python latency.py "$rec" --pooled --out real/latency-test-c.md || true
           python latency.py "$rec" --test-d --out real/latency-test-d.md || true
+          python latency.py "$rec" --diagnose-d --out real/latency-test-d-diagnose.md || true
 
       - name: Commit the reports
         run: |

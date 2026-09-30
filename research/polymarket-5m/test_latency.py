@@ -260,3 +260,13 @@ def test_load_closes_reads_a_truncated_log(tmp_path):
     (tmp_path / "x" / "raw" / "2026-09-30" / "errors.jsonl.gz").write_bytes(blob[:-12])  # no gzip trailer
     got = lt.load_closes(d)
     assert len(got) >= 40 and got[0] == 1.0
+
+
+def test_diagnose_d_lists_test_d_trades(export, tmp_path, monkeypatch):
+    starts = [S0 + 300 * i for i in range(N)]
+    _latency_dir(tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency", export, _coinbase_lines(export), starts)
+    monkeypatch.setattr(lt, "D_SINCE", "2026-09-01")
+    out = tmp_path / "real" / "diag.md"
+    lt.diagnose_d([tmp_path / "rec"], out)
+    text = out.read_text()
+    assert f"{N} 笔：" in text and "cb_z" in text

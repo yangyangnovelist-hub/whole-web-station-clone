@@ -1681,6 +1681,55 @@ def probe_ali(out, ds=ALI):
     print("\n".join(L))
 
 
+BINANCE_WS = ("wss://data-stream.binance.vision/ws/btcusdt@aggTrade", "wss://stream.binance.com:9443/ws/btcusdt@aggTrade",
+              "wss://fstream.binance.com/ws/btcusdt@aggTrade", "wss://stream.binance.us:9443/ws/btcusd@aggTrade")
+BINANCE_REST = ("https://data-api.binance.vision/api/v3/aggTrades?symbol=BTCUSDT&limit=3",
+                "https://api.binance.com/api/v3/aggTrades?symbol=BTCUSDT&limit=3")
+
+
+def probe_binance_ws(out, seconds=20):
+    """Which Binance trade feeds a GitHub runner (US) can reach: messages received per websocket in
+    `seconds`, the delay from trade time to receipt, and the REST endpoints' status."""
+    import asyncio
+    import json
+    import time
+    import websockets
+    L = ["# 币安行情在 GitHub 机器上能不能连（逐笔成交 websocket）", ""]
+
+    async def one(url):
+        n, lags, first = 0, [], None
+        try:
+            async with websockets.connect(url, open_timeout=15, max_size=None) as ws:
+                end = time.time() + seconds
+                while time.time() < end:
+                    try:
+                        text = await asyncio.wait_for(ws.recv(), timeout=max(0.1, end - time.time()))
+                    except asyncio.TimeoutError:
+                        break
+                    m = json.loads(text)
+                    first = first or text[:200]
+                    if "T" in m:
+                        lags.append(time.time() * 1000 - float(m["T"]))
+                    n += 1
+            return f"- {url}: {n} 条 / {seconds} 秒" + (f"，收到延迟中位 {sorted(lags)[len(lags) // 2]:.0f} ms" if lags else "") + \
+                (f"\n  样例：`{first}`" if first else "")
+        except Exception as e:
+            return f"- {url}: 连不上（{type(e).__name__}: {str(e)[:200]}）"
+
+    async def main():
+        return [await one(u) for u in BINANCE_WS]
+
+    L += asyncio.run(main())
+    L += ["", "REST："]
+    for u in BINANCE_REST:
+        try:
+            L.append(f"- {u}: {_get(u, 20)[:160].decode('utf-8', 'replace')}")
+        except Exception as e:
+            L.append(f"- {u}: {type(e).__name__}: {str(e)[:200]}")
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1696,6 +1745,9 @@ def main(argv=None):
     p = sub.add_parser("probe-ali")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-ali.md")
+    p = sub.add_parser("probe-binance-ws")
+    p.add_argument("--workdir", default="/tmp/cross")
+    p.add_argument("--out", default="real/cross-binance-ws.md")
     p = sub.add_parser("probe-trades")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-trades.md")
@@ -1725,6 +1777,8 @@ def main(argv=None):
         cards(a.out)
     elif a.cmd == "probe-ali":
         probe_ali(a.out)
+    elif a.cmd == "probe-binance-ws":
+        probe_binance_ws(a.out)
     elif a.cmd == "probe-trades":
         probe_trades(a.workdir, a.out)
     elif a.cmd == "analyze":

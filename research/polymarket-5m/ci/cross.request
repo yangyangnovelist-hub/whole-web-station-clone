@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-09-30 20:06 fade, after the review fixes (fresh-fill check, spot quiet over 3 s, 5-share minimum, lags 300/500/1000)
-cmd: fade --out real/cross-fade.md
+requested: 2026-09-30 21:35 which Binance trade feeds a GitHub runner can reach (for a live feed like the backtest's)
+cmd: probe-binance-ws

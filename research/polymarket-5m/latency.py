@@ -713,6 +713,69 @@ def run_test_d(roots, out, reps=20000):
     print("\n".join(L))
 
 
+def diagnose_d(roots, out):
+    """Per-trade look at test D's trades so far (reporting only; the rule and the verdict are
+    untouched): the Coinbase move that triggered, the Binance move Polymarket relays (about one
+    print a second) over the same seconds, and where the Up mid went after the order."""
+    dirs = _latency_dirs(roots, D_COINS)
+    rows = []
+    for coin, ds in sorted(dirs.items()):
+        for d in ds:
+            run = Path(d).parent.parent.parent.name
+            try:
+                books, markets, cb = load(d, spot="coinbase")
+            except Exception:
+                continue
+            markets = markets[markets["start_ts"] >= pd.Timestamp(D_SINCE, tz="UTC").timestamp()]
+            books = books[books["market_id"].isin(set(markets["market_id"]))]
+            if markets.empty or books.empty:
+                continue
+            _, sigma = spot_grid(cb, max_gap=C_MAX_GAP)
+            closes = load_closes(d)
+            book = Book(books, closes)
+            t = gated_trades(markets, cb, sigma, book)
+            bn = pd.DataFrame(_binance(d, "binance"), columns=["trade_ts", "receive_ts", "price"]).sort_values("trade_ts")
+            cts, cpx = cb["trade_ts"].to_numpy(), cb["price"].to_numpy()
+            bts, bpx = bn["trade_ts"].to_numpy(), bn["price"].to_numpy()
+
+            def last(ts, px, x):
+                i = np.searchsorted(ts, x, "right") - 1
+                return px[i] if i >= 0 else np.nan
+
+            for r in t.itertuples():
+                side_up = (r.won == 1.0) == (markets.set_index("market_id").loc[r.market_id, "winner"] == "Up")
+                i = np.searchsorted(cts, r.t, "right") - 1
+                j = np.searchsorted(cts, r.t - 1.0, "right") - 1
+                cb_move = np.log(cpx[i] / cpx[j]) if i >= 0 and j >= 0 else np.nan
+                sg = sigma.reindex([int(np.floor(r.t)) - 1]).to_numpy()[0]
+                bn_move = np.log(last(bts, bpx, r.t + 1.0) / last(bts, bpx, r.t - 2.0)) if len(bts) else np.nan
+                mids = []
+                for dt in (-2.0, 0.0, 0.3, 2.0, 10.0):
+                    q = book.at(r.market_id, r.t + dt)
+                    mids.append((q[0] + q[1]) / 2 if q is not None else np.nan)
+                sign = 1 if side_up else -1
+                rows.append({"run": run, "market_id": r.market_id, "t": r.t, "side": "Up" if side_up else "Down",
+                             "price": r.price, "p0": r.p0, "fair": r.fair, "won": r.won, "pnl": r.pnl,
+                             "cb_z": sign * cb_move / sg if sg and np.isfinite(sg) else np.nan,
+                             "bn_move_bp": sign * 1e4 * bn_move, "mid_m2": mids[0], "mid_0": mids[1],
+                             "mid_03": mids[2], "mid_2": mids[3], "mid_10": mids[4]})
+    df = pd.DataFrame(rows).sort_values("t") if rows else pd.DataFrame()
+    L = ["# 检验 D 的逐笔诊断（只看数据，规则和判定不变）", "",
+         "cb_z：触发的 Coinbase 涨跌（按买的方向，单位 σ）；bn：Polymarket 转发的币安价格在触发前 2 秒到后 1 秒的涨跌"
+         "（按买的方向，基点，约每秒一笔）；mid：Up 中间价在触发前 2 秒、触发时、0.3 秒、2 秒、10 秒后的值。", ""]
+    if df.empty:
+        L.append("还没有成交。")
+    else:
+        conf = df["bn_move_bp"] > 0
+        L += [f"{len(df)} 笔：币安同向 {int(conf.sum())} 笔（胜率 {df.loc[conf, 'won'].mean():.0%}，每份 "
+              f"{100 * df.loc[conf, 'pnl'].mean():+.1f}¢），币安没同向 {int((~conf).sum())} 笔（胜率 "
+              f"{df.loc[~conf, 'won'].mean():.0%}，每份 {100 * df.loc[~conf, 'pnl'].mean():+.1f}¢）。", "",
+              "```", df.drop(columns=["market_id"]).round(3).to_string(index=False), "```"]
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("export_dir", nargs="+", help="one or more export directories (e.g. the daily ones)")
@@ -725,8 +788,11 @@ def main(argv=None):
     ap.add_argument("--pooled", action="store_true",
                     help="test C: export_dir are roots holding recording bundle-<coin>/latency directories")
     ap.add_argument("--test-d", action="store_true", help="test D on the same roots as --pooled")
+    ap.add_argument("--diagnose-d", action="store_true", help="per-trade look at test D's trades (report only)")
     a = ap.parse_args(argv)
-    if a.test_d:
+    if a.diagnose_d:
+        diagnose_d(a.export_dir, a.out)
+    elif a.test_d:
         run_test_d(a.export_dir, a.out, a.reps)
     elif a.pooled:
         run_pooled(a.export_dir, a.out, a.reps)
