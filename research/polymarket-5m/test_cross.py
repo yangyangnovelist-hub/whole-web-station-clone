@@ -58,3 +58,24 @@ def test_box_on_the_lower_reference(archive):
     assert r["pair"] == "5m-15m" and r["min_cost"] == pytest.approx(0.90 + fee)
     assert r["n_persist"] == 9 and r["persist_size"] == 25.0 and r["tau_best"] == pytest.approx(60.0)
     assert r["payoff"] == 2.0  # Up won on the 5m (final >= 100) and Down on the 15m (final < 101)
+
+
+def test_stale_quote_timing():
+    """Binance jumps +0.4% at E-100 s (received 150 ms later); the 5m Up ask stays 0.50 until
+    400 ms after receipt, then 0.70. Up wins."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.49, "up_best_ask": np.where(ts < t_jump + 150 + 400, 0.50, 0.70),
+                         "down_best_bid": 0.49, "down_best_ask": 0.51, "up_ask_size": 25.0, "down_ask_size": 30.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    price[tt >= t_jump] *= 1.004
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    t = cross.stale_trades(feat, mkts, binance, zs=(6.0,), lags=(0, 200, 500))
+    assert list(t["t0"].unique()) == [t_jump + 150]
+    assert dict(zip(t["lag"], t["price"])) == {0: 0.50, 200: 0.50, 500: 0.70}
+    assert t["still"].tolist() == [True, True, False]

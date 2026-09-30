@@ -15,6 +15,7 @@ is reachable (the polymarket-kacho workflow, "mode: cross").
     python cross.py probe --workdir /tmp/x --out real/cross-probe.md    # tables, schemas, samples
     python cross.py analyze 3 --workdir /tmp/x                         # the box on the last 3 days
     python cross.py analyze --workdir /tmp/x                           # ... on every day
+    python cross.py stale 10 --workdir /tmp/x                          # stale 5m quotes after Binance moves
 
 For every pair of markets ending together (5m-15m, 5m-1h, 15m-1h), at every 100 ms snapshot
 while both trade, the cost of the box that pays at least 1 (Up on the lower reference, Down on
@@ -160,6 +161,120 @@ def read_day(path):
     return f, mk, rs
 
 
+def read_binance(path):
+    """Binance trades (trade_ts_ms, recv_ts_ms, price) of one daily archive."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+    parts = []
+    with tarfile.open(path, "r|gz") as tar:
+        for m in tar:
+            if m.isfile() and "dataset=trades/" in m.name and m.name.endswith(".parquet"):
+                t = pq.read_table(io.BytesIO(tar.extractfile(m).read()),
+                                  columns=["trade_ts_ms", "recv_ts_ms", "exchange", "price"]).to_pandas()
+                parts.append(t[t["exchange"].astype(str).str.lower() == "binance"])
+    if not parts:
+        return pd.DataFrame(columns=["trade_ts_ms", "recv_ts_ms", "price"])
+    b = pd.concat(parts, ignore_index=True).drop(columns="exchange").drop_duplicates()
+    return b.sort_values("recv_ts_ms", kind="stable").reset_index(drop=True)
+
+
+def stale_trades(feat, mkts, binance, zs=(2.0, 3.0, 4.0), lags=(0, 100, 200, 300, 500, 1000, 2000, 5000)):
+    """For each 5m market: the first Binance trade (as received) in the 240..60 s-left window whose
+    price moved more than z sigma from the last trade at least a second earlier; buy that side at
+    the ask of the first snapshot at or after receipt + L. Everything in the recorder's clock."""
+    import numpy as np
+    import pandas as pd
+    if binance.empty:
+        return pd.DataFrame()
+    rt = binance["recv_ts_ms"].to_numpy()
+    tt = binance["trade_ts_ms"].to_numpy()
+    lp = np.log(binance["price"].to_numpy())
+    order = np.argsort(tt, kind="stable")
+    tt_s, lp_s = tt[order], lp[order]
+    sec = tt_s // 1000
+    last = pd.Series(lp_s, index=sec).groupby(level=0).last()
+    grid = last.reindex(range(int(sec[0]), int(sec[-1]) + 1)).ffill()
+    sigma = grid.diff().rolling(600, min_periods=300).std()
+    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by:
+            continue
+        a, b = np.searchsorted(rt, [mk["end"] - 240_000, mk["end"] - 60_000])
+        if b <= a:
+            continue
+        j = np.searchsorted(tt_s, tt[a:b] - 1000, "right") - 1
+        ref = np.where(j >= 0, lp_s[np.maximum(j, 0)], np.nan)
+        sg = sigma.reindex(tt[a:b] // 1000 - 1).to_numpy()
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        for z in zs:
+            with np.errstate(invalid="ignore"):
+                hit = np.abs(lp[a:b] - ref) > z * sg
+            if not hit.any():
+                continue
+            i = int(np.argmax(hit))
+            t0, up = rt[a + i], lp[a + i] > ref[i]
+            k0 = np.searchsorted(fts, t0, "left")
+            a0 = np.nan if k0 >= len(f) else f["up_best_ask"].iloc[k0] if up else f["down_best_ask"].iloc[k0]
+            for lag in lags:
+                k = np.searchsorted(fts, t0 + lag, "left")
+                if k >= len(f) or fts[k] > t0 + lag + 1000:
+                    continue
+                p = f["up_best_ask"].iloc[k] if up else f["down_best_ask"].iloc[k]
+                size = f["up_ask_size"].iloc[k] if up else f["down_ask_size"].iloc[k]
+                if not (np.isfinite(p) and 0.02 <= p <= 0.98):
+                    continue
+                won = float(mk["up_won"] == (1.0 if up else 0.0))
+                fee = 0.07 * p * (1 - p)
+                rows.append((mid, z, lag, t0, won, p, fee, won - p - fee, size, p <= a0 + 1e-9))
+    return pd.DataFrame(rows, columns=["market_id", "z", "lag", "t0", "won", "price", "fee", "pnl", "size", "still"])
+
+
+def stale(workdir, out, days=None, reps=5000):
+    import numpy as np
+    import pandas as pd
+    import binary as bo
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            binance = read_binance(local)
+            Path(local).unlink()
+            t = stale_trades(feat, market_table(mk, rs), binance)
+            t["day"] = name[15:25]
+            parts.append(t)
+            print(f"{name}: {len(binance):,} Binance trades, {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
+        except Exception as e:
+            print(f"{name}: failed {e!r}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# 币安跳变后 5m 卖一还挂多久（{DS}，逐笔币安、100 ms 盘口，记录机的时钟）", "",
+         f"{len(arcs)} 个日档。触发：窗口剩 240–60 秒时，第一笔与至少一秒前最后一笔相比涨跌超过 zσ 的币安成交，"
+         "以记录机收到它的时刻为 0；L 毫秒后按那一刻快照里的卖一买顺势一方，付 taker 费，持有到结算。探索性质。", ""]
+    if df.empty:
+        L.append("没有可用的数据。")
+    for z, g in df.groupby("z") if not df.empty else []:
+        L += [f"## z = {z:g}（{g['market_id'].nunique():,} 个市场触发）", "",
+              "| L | 笔数 | 胜率 | 平均价 | EV/份 | p | 卖一数量中位 | 卖一没动的比例 |", "|---:|---:|---:|---:|---:|---:|---:|---:|"]
+        for lag, h in g.groupby("lag"):
+            pv = bo.fair_price_pvalue(h["pnl"].to_numpy(), (h["price"] + h["fee"]).to_numpy(), sims=reps) \
+                if len(h) >= 10 and h["pnl"].mean() > 0 else 1.0
+            L.append(f"| {lag} ms | {len(h):,} | {h['won'].mean():.1%} | {h['price'].mean():.3f} | "
+                     f"{100 * h['pnl'].mean():+.2f}¢ | {pv:.4f} | {h['size'].median():.0f} | {h['still'].mean():.0%} |")
+        L.append("")
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def market_table(mk, rs):
     """One row per market: horizon, window, reference price and (if known) whether Up won."""
     import numpy as np
@@ -297,15 +412,18 @@ def main(argv=None):
     p = sub.add_parser("probe")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe.md")
-    p = sub.add_parser("analyze")
-    p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
-    p.add_argument("--workdir", default="/tmp/cross")
-    p.add_argument("--out", default="real/cross-boxes.md")
+    for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md")):
+        p = sub.add_parser(name)
+        p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
+        p.add_argument("--workdir", default="/tmp/cross")
+        p.add_argument("--out", default=default)
     a = ap.parse_args(argv)
     if a.cmd == "probe":
         probe(a.workdir, a.out)
-    else:
+    elif a.cmd == "analyze":
         analyze(a.workdir, a.out, a.days)
+    else:
+        stale(a.workdir, a.out, a.days)
 
 
 if __name__ == "__main__":
