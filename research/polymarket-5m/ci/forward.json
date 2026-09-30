@@ -10,5 +10,5 @@
     "xrp",
     "doge"
   ],
-  "kick": "2026-09-30 10:40 shorter runs: conversion now also writes latency files and takes ~45 min"
+  "kick": "2026-09-30 21:42 restart with the Binance aggTrade feed (test F) and the recorder fixes"
 }

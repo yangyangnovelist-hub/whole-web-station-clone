@@ -270,3 +270,25 @@ def test_diagnose_d_lists_test_d_trades(export, tmp_path, monkeypatch):
     lt.diagnose_d([tmp_path / "rec"], out)
     text = out.read_text()
     assert f"{N} 笔：" in text and "cb_z" in text
+
+
+def test_test_f_triggers_on_binance_trades(export, tmp_path, monkeypatch):
+    """The fixture's spot prints written as Binance trades trigger test F exactly as they trigger
+    test D when written as Coinbase prints; test F ignores Coinbase prints."""
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    dirs = lt._latency_dirs([tmp_path / "rec"], lt.F_COINS)
+    tf = lt._per_recording(dirs, "2026-09-01", lt.F_SPOT, lambda mk, sp, sg, bk: lt.gated_trades(mk, sp, sg, bk),
+                           ["coin", "market_id"], [])
+    td = lt._per_recording(dirs, "2026-09-01", lt.D_SPOT, lambda mk, sp, sg, bk: lt.gated_trades(mk, sp, sg, bk),
+                           ["coin", "market_id"], [])
+    assert len(tf) == N and tf[["t", "price", "pnl"]].equals(td[["t", "price", "pnl"]])
+    (d / "coinbase_trades.jsonl.gz").unlink()
+    monkeypatch.setattr(lt, "F_SINCE", "2026-09-01")
+    monkeypatch.setattr(lt, "F_N", 5)
+    out = tmp_path / "real" / "f.md"
+    lt.run_test_f([tmp_path / "rec"], out, reps=200)
+    assert "检验 F（前 5 笔）" in out.read_text()

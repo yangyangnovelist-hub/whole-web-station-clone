@@ -263,3 +263,20 @@ def test_latency_files_keep_the_clob_disconnects(recorded, tmp_path):
     assert counts["latency_clob_closes"] == 1
     import latency as lt
     assert lt.load_closes(tmp_path / "bundle" / "latency").tolist() == [S0 + 150.25]
+
+
+def test_binance_trades_reach_the_latency_files(recorded, tmp_path):
+    import shutil
+    out = tmp_path / "paper"
+    shutil.copytree(recorded[0], out)
+    trader = pt.LiveTrader(out, P, fetch=lambda url: [])
+    for i, (sym, px) in enumerate((("BTCUSDT", 80000.5), ("ETHUSDT", 3000.1), ("BTCUSDT", 80001.0))):
+        trader.on_binance(json.dumps({"stream": f"{sym.lower()}@aggTrade", "data": {
+            "e": "aggTrade", "s": sym, "p": str(px), "q": "0.01", "T": (S0 + 100) * 1000 + i, "m": False}}),
+            (S0 + 100) * 1000 + 50 + i)
+    trader.rec.close()
+    counts = rc.build(out, tmp_path / "bundle")
+    assert counts["latency_binance_ws"] == 2
+    import gzip as gz
+    rows = [json.loads(l) for l in gz.open(tmp_path / "bundle" / "latency" / "binance_trades.jsonl.gz", "rt")]
+    assert [r["price"] for r in rows] == [80000.5, 80001.0] and rows[0]["trade_ts"] == S0 + 100

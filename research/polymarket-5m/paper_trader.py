@@ -42,6 +42,9 @@ RTDS_WS = "wss://ws-live-data.polymarket.com"
 RTDS_SUBS = {"rtds": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}],
              "rtds-binance": [{"topic": "crypto_prices", "type": "update", "filters": ""}]}
 COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"  # public trade prints, exchange-stamped
+# Binance's market-data-only host, reachable from US runners (stream.binance.com answers 451 there):
+# every aggregated BTCUSDT (etc.) trade with its exchange time, the feed the May-August backtests used.
+BINANCE_WS = "wss://data-stream.binance.vision/stream?streams={streams}"
 SLUG = "{coin}-updown-5m-{start}"
 COINS = ("btc", "eth", "sol", "xrp", "doge")  # the coins with 5m Up/Down series
 NAN = float("nan")
@@ -334,6 +337,14 @@ class LiveTrader:
             self.rec.write("coinbase", {"recv_ms": recv_ms, "p": msg.get("product_id"), "t": msg.get("time"),
                                         "px": msg.get("price"), "sz": msg.get("size"), "side": msg.get("side")})
 
+    def on_binance(self, text, recv_ms):
+        """Binance aggregated trades (combined stream), kept compact: symbol, exchange time, price."""
+        msg = json.loads(text)
+        d = msg.get("data", msg)
+        if d.get("e") == "aggTrade":
+            self.rec.write("binance", {"recv_ms": recv_ms, "s": d.get("s"), "T": d.get("T"), "p": d.get("p"),
+                                       "q": d.get("q"), "m": d.get("m")})
+
     def top(self, token):
         lad = self.ladders.get(token, Ladder())
         return (lad.bid, lad.ask, lad.size_at("ask", lad.ask), lad.size_at("bid", lad.bid))
@@ -509,6 +520,18 @@ class LiveTrader:
                 self.rec.write("errors", {"at": now_ms(), "where": "coinbase", "err": repr(e)})
             await asyncio.sleep(2)
 
+    async def binance_loop(self):
+        import websockets
+        url = BINANCE_WS.format(streams="/".join(f"{c}usdt@aggTrade" for c in self.coins))
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20, max_size=None) as ws:
+                    async for text in ws:
+                        self.on_binance(text, now_ms())
+            except Exception as e:
+                self.rec.write("errors", {"at": now_ms(), "where": "binance", "err": repr(e)})
+            await asyncio.sleep(2)
+
     @staticmethod
     async def _ping(ws, word, every):
         while True:
@@ -553,7 +576,7 @@ class LiveTrader:
                                                         "err": repr(ctx.get("exception") or ctx.get("message"))}))
         tasks = [asyncio.create_task(c) for c in
                  (self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
-                  self.coinbase_loop(), self.scheduler(), self.resolver(), self.reporter())]
+                  self.coinbase_loop(), self.binance_loop(), self.scheduler(), self.resolver(), self.reporter())]
         try:
             await asyncio.sleep(hours * 3600)
         finally:

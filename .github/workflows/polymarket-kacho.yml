@@ -119,6 +119,7 @@ jobs:
             --label "（GitHub 前向录制，2026-09-30 05:00 UTC 起开始的市场）" || true
           python latency.py "$rec" --pooled --out real/latency-test-c.md
           python latency.py "$rec" --test-d --out real/latency-test-d.md
+          python latency.py "$rec" --test-f --out real/latency-test-f.md
 
       - name: "Cross: 5m / 15m / 1h markets ending together (cross.py)"
         if: steps.mode.outputs.mode == 'cross'

@@ -113,6 +113,20 @@ stamped after the order time, not at this market's next update, so it does not d
 market moved after the order; test C's note counts its judged lag only. The rule itself (C_*, D_*, FAMILY_ALPHA) is
 unchanged. The recorder was also changed so it disconnects less: Gamma lookups no longer block the
 event loop, and markets that have settled are dropped from the resubscription list.
+
+Test F, fixed 2026-09-30 about 22:10 UTC, before any of its data was recorded (see F_*): test D's
+first 39 live trades won 26% at an average price of 0.384 (-14.2c a share). A per-trade look
+(latency.py --diagnose-d, real/latency-test-d-diagnose.md) shows why: in nearly every trade the Up
+mid had already moved toward the side bought in the two seconds before the Coinbase print, so
+Polymarket's makers had repriced on a faster feed (Binance, which leads BTC), and the rule counted
+the move twice (a prior that already holds it plus the Coinbase move again). The backtest the rule
+was chosen on used Binance trades. GitHub runners cannot reach stream.binance.com (HTTP 451) but do
+receive Binance's market-data-only stream data-stream.binance.vision (real/cross-binance-ws.md, about
+50 ms), so the recorder now records BTCUSDT (and the other coins') aggregated trades, and test F is
+test D's rule with that trigger: BTC 5m markets from F_SINCE, z0 = 2, 0.3 s after the trade's
+exchange time, theta = 12c, first 1,200 trades, p < 0.025, same hygiene. Test D keeps running and
+will be judged as fixed; with tests C, D and F each at 0.025, the chance of at least one false pass
+is at most 7.5%.
 """
 from __future__ import annotations
 
@@ -151,6 +165,12 @@ C_MAX_GAP, C_REF_AGE, C_ALIVE = 10, 5.0, (30.0, 10.0)
 D_SPOT, D_Z0, D_LAG, D_THETA, D_N = "coinbase", 2.0, 0.3, 0.12, 1200
 D_SINCE, D_TAU_LO = "2026-09-30 14:00", 15
 D_COINS = ("btc",)
+# Test F (fixed 2026-09-30 about 22:10 UTC, before any of its data was recorded): test D's rule with
+# the trigger it was chosen on, Binance BTCUSDT trades (data-stream.binance.vision), not Coinbase.
+F_SPOT, F_Z0, F_LAG, F_THETA, F_N = "binancews", 2.0, 0.3, 0.12, 1200
+F_SINCE, F_TAU_LO = "2026-09-30 23:00", 15
+F_COINS = ("btc",)
+F_ALPHA = 0.025
 
 
 def _read(d, pattern):
@@ -235,7 +255,8 @@ def load_closes(d):
 
 
 SPOT = {"binance": (r"shadow_current\.jsonl\.gz", "BINANCE_AGG_TRADE"),  # which trade feed triggers
-        "coinbase": (r"coinbase_trades\.jsonl\.gz", "COINBASE_TRADE")}
+        "coinbase": (r"coinbase_trades\.jsonl\.gz", "COINBASE_TRADE"),
+        "binancews": (r"binance_trades\.jsonl\.gz", "BINANCE_WS_TRADE")}  # data-stream.binance.vision aggTrades
 
 
 def _binance(d, spot="binance"):
@@ -713,6 +734,34 @@ def run_test_d(roots, out, reps=20000):
     print("\n".join(L))
 
 
+def run_test_f(roots, out, reps=20000):
+    """Test F: test D's rule triggered by Binance trades, judged once on the first F_N trades."""
+    dirs = _latency_dirs(roots, F_COINS)
+    notes = []
+    t = _per_recording(dirs, F_SINCE, F_SPOT,
+                       lambda mk, sp, sg, bk: gated_trades(mk, sp, sg, bk, lag=F_LAG, theta=F_THETA, z0=F_Z0,
+                                                           tau_lo=F_TAU_LO), ["coin", "market_id"], notes)
+    L = [f"# 检验 F：按公平价跳变筛选的过期报价，币安逐笔成交触发（BTC 5m，GitHub 前向录制）", "",
+         f"事先写死（9 月 30 日约 22:10 UTC，数据还没录）：{F_SINCE} UTC 起开始的 BTC 5m 市场；规则与检验 D 完全相同，"
+         f"只是触发改用回测用的币安 BTCUSDT 逐笔成交（data-stream.binance.vision，交易所时间）：剩 240–{F_TAU_LO} 秒时，"
+         f"与至少一秒前（不早于 {C_REF_AGE:g} 秒）相比涨跌超过 {F_Z0:g}σ 的每一笔币安成交是候选；以那一刻交易所显示的 Up 中间价"
+         f"为原来的概率算公平价；{F_LAG:g} 秒后按卖一买顺势一方，只在 公平价 − 卖一 − taker 费 ≥ {100 * F_THETA:.0f}¢ 时成交，"
+         f"每个市场取第一笔，持有到结算；按触发时间取前 {F_N:,} 笔判定一次，EV > 0 且精确 p < {F_ALPHA} 才算通过。"
+         "数据处理同检验 C、D（含断线检查）。", ""]
+    main_t = t.sort_values("t", kind="stable") if len(t) else t
+    L += [f"录制段 {sum(len(v) for v in dirs.values())} 个，成交 {len(main_t):,} 笔。"]
+    if notes:
+        L += ["", "录制段备注（跳过的和断线检查）：", ""] + [f"- {n}" for n in notes]
+    if len(main_t):
+        L += ["", "| 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---|---|---|---|---|---|", f"| {fmt(main_t, reps)} |"]
+    L += [""] + _judge(out, main_t, F_N, f"检验 F（前 {F_N:,} 笔）：", reps,
+                       lambda first: verdict(first, F_Z0, F_LAG, reps, F_ALPHA).replace(
+                           "过期报价（", f"币安触发、公平价筛选的过期报价（θ={100 * F_THETA:.0f}¢，"))
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def diagnose_d(roots, out):
     """Per-trade look at test D's trades so far (reporting only; the rule and the verdict are
     untouched): the Coinbase move that triggered, the Binance move Polymarket relays (about one
@@ -789,8 +838,11 @@ def main(argv=None):
                     help="test C: export_dir are roots holding recording bundle-<coin>/latency directories")
     ap.add_argument("--test-d", action="store_true", help="test D on the same roots as --pooled")
     ap.add_argument("--diagnose-d", action="store_true", help="per-trade look at test D's trades (report only)")
+    ap.add_argument("--test-f", action="store_true", help="test F (Binance-triggered test D) on the same roots")
     a = ap.parse_args(argv)
-    if a.diagnose_d:
+    if a.test_f:
+        run_test_f(a.export_dir, a.out, a.reps)
+    elif a.diagnose_d:
         diagnose_d(a.export_dir, a.out)
     elif a.test_d:
         run_test_d(a.export_dir, a.out, a.reps)

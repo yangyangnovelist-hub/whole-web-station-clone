@@ -257,6 +257,17 @@ def binance_ticks(records, symbol="btcusdt"):
             yield (ts / 1000 if ts > 10**11 else ts), float(pnt["value"]), int(rec["recv_ms"])
 
 
+def binance_ws_ticks(records, symbol="BTCUSDT"):
+    """(exchange time s, price, recv_ms) of one symbol's recorded Binance aggregated trades."""
+    for rec in records:
+        if rec.get("s") != symbol or rec.get("T") is None or rec.get("p") is None:
+            continue
+        try:
+            yield float(rec["T"]) / 1000, float(rec["p"]), int(rec["recv_ms"])
+        except (ValueError, TypeError):
+            continue
+
+
 def coinbase_ticks(records, product="BTC-USD"):
     """(exchange time s, price, recv_ms) of one product's recorded Coinbase trade prints."""
     from datetime import datetime
@@ -356,13 +367,19 @@ class LatencyFiles:
                     f.write(json.dumps({"event": "COINBASE_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
                                         "price": value}) + "\n")
                     c += 1
+            bw = 0
+            with gzip.open(self.d / "binance_trades.jsonl.gz", "wt") as f:
+                for ts, value, recv_ms in binance_ws_ticks(iter_jsonl(raw_files(src, "binance")), f"{coin.upper()}USDT"):
+                    f.write(json.dumps({"event": "BINANCE_WS_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
+                                        "price": value}) + "\n")
+                    bw += 1
             closes = clob_close_times(iter_jsonl(raw_files(src, "errors")))
             with gzip.open(self.d / "clob_closes.csv.gz", "wt", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["at_s"])
                 w.writerows([f"{x:.3f}"] for x in sorted(closes))
             return {"latency_markets": len(self.up), "latency_books": self.n, "latency_binance": k,
-                    "latency_coinbase": c, "latency_clob_closes": len(closes)}
+                    "latency_coinbase": c, "latency_binance_ws": bw, "latency_clob_closes": len(closes)}
         except Exception as e:
             return {"latency_error": repr(e)}
 
