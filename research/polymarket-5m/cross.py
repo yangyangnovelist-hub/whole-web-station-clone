@@ -253,8 +253,9 @@ def stale(workdir, out, days=None, reps=5000):
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(binance):,} Binance trades, {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
-        except Exception as e:
-            print(f"{name}: failed {e!r}", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
     L = [f"# 币安跳变后 5m 卖一还挂多久（{DS}，逐笔币安、100 ms 盘口，记录机的时钟）", "",
@@ -275,12 +276,23 @@ def stale(workdir, out, days=None, reps=5000):
     print("\n".join(L))
 
 
+def _scalar(s):
+    """Numbers from a column that may hold lists (schema variants) or strings."""
+    import numpy as np
+    import pandas as pd
+    return pd.to_numeric(s.map(lambda v: (v[0] if len(v) else np.nan) if isinstance(v, (list, tuple, np.ndarray)) else v),
+                         errors="coerce")
+
+
 def market_table(mk, rs):
     """One row per market: horizon, window, reference price and (if known) whether Up won."""
     import numpy as np
     import pandas as pd
     mk = mk.copy()
     mk["market_id"] = mk["market_id"].astype(str)
+    for c in ("session_start_ts", "session_end_ts", "chainlink_open_price", "up_won", "outcome_direction"):
+        if c in mk:
+            mk[c] = _scalar(mk[c])
     g = mk.sort_values("session_end_ts").groupby("market_id")
     out = g.agg(slug=("slug", "last"), start=("session_start_ts", "last"), end=("session_end_ts", "last"),
                 k=("chainlink_open_price", lambda x: x.dropna().iloc[-1] if x.notna().any() else np.nan))
@@ -293,6 +305,7 @@ def market_table(mk, rs):
         key = next((c for c in ("market_id", "condition_id", "slug") if c in rs), None)
         col = next((c for c in ("up_won", "outcome_direction", "winner", "winning_outcome") if c in rs), None)
         if key == "market_id" and col:
+            rs[col] = rs[col].map(lambda x: (x[0] if len(x) else None) if isinstance(x, (list, tuple, np.ndarray)) else x)
             v = rs.dropna(subset=[col]).groupby(rs["market_id"].astype(str))[col].last()
             v = v.map(lambda x: 1.0 if str(x).lower() in ("1", "1.0", "up", "true") else
                       0.0 if str(x).lower() in ("0", "0.0", "-1", "-1.0", "down", "false") else np.nan)
@@ -375,10 +388,15 @@ def analyze(workdir, out, days=None):
             b = boxes(feat, mkts)
             b["day"] = name[15:25]
             parts.append(b)
+            if not parts[:-1]:
+                print("resolution columns:", list(rs.columns), "\n", rs.head(3).to_string()[:3000], flush=True)
+                print(mkts["horizon"].value_counts().to_string(), "\nwith reference:", int(mkts["k"].notna().sum()),
+                      "with winner:", int(mkts["up_won"].notna().sum()), flush=True)
             print(f"{name}: {len(mkts)} markets, {len(b)} pairs, "
                   f"cheap pairs {int((b['min_cost'] < 1).sum()) if len(b) else 0}", flush=True)
-        except Exception as e:
-            print(f"{name}: failed {e!r}", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.to_csv(Path(out).with_suffix(".csv"), index=False)
     L = [f"# 同时结束的 5m / 15m / 1h 市场：组合是否便宜到能套利（{DS}）", "",
