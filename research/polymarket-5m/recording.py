@@ -274,6 +274,26 @@ def _num(x):
     return "" if x is None or not np.isfinite(x) else f"{x:g}"
 
 
+def clob_close_times(rows):
+    """Recorder-clock seconds of each CLOB disconnect in an errors log: every "clob" row (the socket
+    closed or failed), plus every "clob-open" (a reconnect) with no "clob" row since the previous
+    one, because a clean close (codes 1000/1001) ends the read loop without raising, and recorders
+    before 2026-09-30 17:30 UTC logged no row for it."""
+    ev = sorted(((float(e["at"]) / 1000, e["where"]) for e in rows
+                 if isinstance(e, dict) and e.get("at") is not None and e.get("where") in ("clob", "clob-open")),
+                key=lambda x: x[0])  # stable: rows of the same millisecond keep the log's order
+    out, is_open = [], False
+    for t, where in ev:
+        if where == "clob":
+            out.append(t)
+            is_open = False
+        else:
+            if is_open:
+                out.append(t)
+            is_open = True
+    return out
+
+
 class LatencyFiles:
     """latency.py's input under <out>/latency: markets and winners, the Up token's exchange-stamped
     top of book (streamed in through `book`), the relayed Binance price, the Coinbase prints and the
@@ -336,8 +356,7 @@ class LatencyFiles:
                     f.write(json.dumps({"event": "COINBASE_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
                                         "price": value}) + "\n")
                     c += 1
-            closes = [float(e["at"]) / 1000 for e in iter_jsonl(raw_files(src, "errors"))
-                      if isinstance(e, dict) and e.get("where") == "clob" and e.get("at") is not None]
+            closes = clob_close_times(iter_jsonl(raw_files(src, "errors")))
             with gzip.open(self.d / "clob_closes.csv.gz", "wt", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["at_s"])

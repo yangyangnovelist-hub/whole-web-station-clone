@@ -227,3 +227,36 @@ def test_book_across_close():
     assert not lt.Book(books, [12.5]).across_close("m", 11.2, 11.5)     # closed after the next update
     assert not lt.Book(books, [11.0]).across_close("m", 11.2, 11.5)     # before the quote was received
     assert lt.Book(books, [13.0]).across_close("m", 12.2, 12.5)         # no update after: open-ended
+
+
+def test_across_close_edges():
+    books = pd.DataFrame({"market_id": ["m", "m", "m", "o"], "ts": [10.0, 11.0, 12.0, 11.6],
+                          "recv": [10.1, 11.1, 12.1, 11.65], "bid": 0.4, "ask": 0.5, "bid_size": 1.0, "ask_size": 1.0})
+    assert lt.Book(books, [11.1]).across_close("m", 11.2, 11.5)      # logged in the same ms as the quote's receipt
+    # another market's update stamped after the order arrived at 11.65, before the close at 11.7:
+    # the socket had delivered the order-time state, so the close does not matter for m
+    assert not lt.Book(books, [11.7]).across_close("m", 11.2, 11.5)
+    assert lt.Book(books, [11.62]).across_close("m", 11.2, 11.5)
+
+
+def test_clob_close_times_count_clean_closes():
+    import recording as rc
+    rows = [{"at": 1000, "where": "clob-open"}, {"at": 5000, "where": "clob-open"},   # a clean close before 5 s
+            {"at": 8000, "where": "clob", "err": "1013"}, {"at": 10000, "where": "clob-open"},
+            {"at": 20000, "where": "clob-open"}, {"at": 21000, "where": "discover"}]
+    assert rc.clob_close_times(rows) == [5.0, 8.0, 20.0]
+    # a reconnect closed again within the same ms (as against a local server): log order decides,
+    # so each close counts once and the next reconnect is not taken for a clean close
+    same = [{"at": 1000, "where": "clob-open"}, {"at": 1001, "where": "clob"}, {"at": 3005, "where": "clob-open"},
+            {"at": 3005, "where": "clob"}, {"at": 5010, "where": "clob-open"}, {"at": 5011, "where": "clob"}]
+    assert rc.clob_close_times(same) == [1.001, 3.005, 5.011]
+
+
+def test_load_closes_reads_a_truncated_log(tmp_path):
+    d = tmp_path / "x" / "bundle-btc" / "latency"
+    d.mkdir(parents=True)
+    (tmp_path / "x" / "raw" / "2026-09-30").mkdir(parents=True)
+    blob = gzip.compress("".join(json.dumps({"at": 1000 * i, "where": "clob"}) + "\n" for i in range(1, 51)).encode())
+    (tmp_path / "x" / "raw" / "2026-09-30" / "errors.jsonl.gz").write_bytes(blob[:-12])  # no gzip trailer
+    got = lt.load_closes(d)
+    assert len(got) >= 40 and got[0] == 1.0

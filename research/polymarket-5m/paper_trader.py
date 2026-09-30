@@ -471,6 +471,8 @@ class LiveTrader:
                             self.on_clob(text, now_ms())
                     finally:
                         pinger.cancel()
+                    # a clean close (1000/1001) ends the loop without raising: log it like the others
+                    self.rec.write("errors", {"at": now_ms(), "where": "clob", "err": f"closed {ws.close_code}"})
             except Exception as e:
                 self.rec.write("errors", {"at": now_ms(), "where": "clob", "err": repr(e)})
             self.ws = None

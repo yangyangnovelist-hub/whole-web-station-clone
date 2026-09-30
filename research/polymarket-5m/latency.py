@@ -104,9 +104,13 @@ sits at its last pre-disconnect quote, so a spot move during the gap looks exact
 ask both tests buy, at a price that was not there. The hygiene above already says an outage must
 not pass for a stale quote; now a candidate is also dropped when the socket closed between
 receiving the quote shown at the trigger and receiving the first update after the order time
-(Book.across_close, with the close times from the recording's errors log). This only removes
-trades that would have been recorded at frozen prices, so it can only lower a spurious pass; it
-applies to every recording, including the one above. The rule itself (C_*, D_*, FAMILY_ALPHA) is
+(Book.across_close, with the close times from the recording's errors log). It removes trades
+recorded at frozen prices, which could only have pushed toward a false pass; it applies to every
+recording, including the one above. After a second review (about 17:30 UTC): clean closes
+(1000/1001), which raise nothing, are logged too and a reconnect with no close logged before it
+counts as one (recording.clob_close_times); the window ends at the first receipt of anything
+stamped after the order time, not at this market's next update, so it does not depend on how the
+market moved after the order; test C's note counts its judged lag only. The rule itself (C_*, D_*, FAMILY_ALPHA) is
 unchanged. The recorder was also changed so it disconnects less: Gamma lookups no longer block the
 event loop, and markets that have settled are dropped from the resubscription list.
 """
@@ -207,7 +211,8 @@ def load_closes(d):
     """Times (recorder clock, s) at which the recorder's CLOB websocket closed, from
     <latency>/clob_closes.csv.gz (recording.LatencyFiles) or, for recordings converted before that
     file existed, the errors log the forward workflow keeps beside the bundle
-    (<x>/raw/<day>/errors.jsonl.gz, rows with where == "clob"). None if neither is there."""
+    (<x>/raw/<day>/errors.jsonl.gz; see recording.clob_close_times). None if neither is there."""
+    from recording import clob_close_times
     d = Path(d)
     f = d / "clob_closes.csv.gz"
     if f.exists():
@@ -215,17 +220,18 @@ def load_closes(d):
     logs = sorted((d.parent.parent / "raw").glob("*/errors.jsonl*"))
     if not logs:
         return None
-    out = []
+    rows = []
     for g in logs:
         with (gzip.open(g, "rt", errors="replace") if g.suffix == ".gz" else open(g, errors="replace")) as fh:
-            for line in fh:
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if e.get("where") == "clob" and e.get("at") is not None:
-                    out.append(float(e["at"]) / 1000)
-    return np.array(sorted(out), dtype=float)
+            try:
+                for line in fh:
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        continue
+            except (EOFError, OSError):  # a killed recorder leaves a gzip stream without its trailer
+                pass
+    return np.array(clob_close_times(rows), dtype=float)
 
 
 SPOT = {"binance": (r"shadow_current\.jsonl\.gz", "BINANCE_AGG_TRADE"),  # which trade feed triggers
@@ -315,11 +321,21 @@ class Book:
             if "recv" in books else {}
         self.closes = None if closes is None else np.sort(np.asarray(closes, dtype=float))
         self.cut = 0  # candidates dropped by across_close
+        if "recv" in books and len(books):  # earliest receipt of any row stamped at or after all_ts[j]
+            o = np.argsort(books["ts"].to_numpy(float), kind="stable")
+            self.all_ts = books["ts"].to_numpy(float)[o]
+            r = books["recv"].to_numpy(float)[o]
+            self.first_recv = np.minimum.accumulate(np.where(np.isfinite(r), r, np.inf)[::-1])[::-1]
+        else:
+            self.all_ts = self.first_recv = np.array([])
 
     def across_close(self, mid, t0, t1):
         """Whether the recorder's CLOB socket closed between receiving the quote shown at t0 and
-        receiving the first update after t1: the book then sat frozen at its pre-disconnect state
-        through the order, and an unchanged ask was not the exchange's (see the module notes)."""
+        the first moment the socket had delivered anything stamped after t1 (this market's next
+        update or any other market's): the book then sat frozen at its pre-disconnect state through
+        the order, and an unchanged ask was not the exchange's (see the module notes). A close in
+        the same millisecond as the quote's receipt counts as after it (the log row is written
+        after the last frame is handled)."""
         if self.closes is None or not len(self.closes) or mid not in self.recv:
             return False
         ts, recv = self.by[mid][0], self.recv[mid]
@@ -328,8 +344,11 @@ class Book:
         if i0 < 0 or not np.isfinite(recv[i0]):
             return False
         r1 = recv[i1] if i1 < len(ts) and np.isfinite(recv[i1]) else np.inf
-        k = np.searchsorted(self.closes, recv[i0], "right")
-        hit = k < len(self.closes) and self.closes[k] <= r1
+        j = np.searchsorted(self.all_ts, t1, "right")
+        if j < len(self.all_ts):
+            r1 = min(r1, self.first_recv[j])
+        k = np.searchsorted(self.closes, recv[i0], "left")
+        hit = k < len(self.closes) and self.closes[k] < r1
         self.cut += int(hit)
         return bool(hit)
 
@@ -565,14 +584,19 @@ def _per_recording(dirs_by_coin, since, spot, make, keys, notes):
                 notes.append(f"{coin} {run}: no markets from {since} with book and spot data")
                 continue
             _, sigma = spot_grid(spot_trades, max_gap=C_MAX_GAP)
-            closes = load_closes(d)
+            try:
+                closes = load_closes(d)
+            except Exception as e:
+                closes = None
+                notes.append(f"{coin} {run}: CLOB disconnect log unreadable ({type(e).__name__}: {e})")
             book = Book(books, closes)
             t = make(markets, spot_trades, sigma, book)
             if closes is None:
                 notes.append(f"{coin} {run}: no CLOB disconnect log, so no candidate was checked against one")
             elif book.cut:
                 notes.append(f"{coin} {run}: {book.cut} candidates dropped because the CLOB socket closed "
-                             f"between the quote and the order ({len(closes)} disconnects in the recording)")
+                             f"between the quote and the order ({len(closes)} disconnects in the recording; "
+                             f"test C counts its judged lag only)")
             t["coin"], t["run"] = coin, run
             out.append(t)
     if not out:
@@ -608,11 +632,15 @@ def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,), notes=
 
     def make(markets, spot_trades, sigma, book):
         trig = triggers(markets, spot_trades, sigma, z, max_ref_age=C_REF_AGE)
-        parts = []
+        parts, cut = [], 0
         for lag in lags:
+            book.cut = 0
             t = trade(trig, book, lag, False, alive=C_ALIVE)
+            if lag == C_LAG:
+                cut = book.cut
             t["lag"] = lag
             parts.append(t)
+        book.cut = cut  # the report notes drops at the judged lag, not summed over all lags
         return pd.concat(parts, ignore_index=True)
     return _per_recording(dirs_by_coin, since, spot, make, ["coin", "lag", "market_id"], notes)
 
@@ -646,7 +674,7 @@ def run_pooled(roots, out, reps=20000):
     for coin in C_COINS:
         L.append(f"| {coin} | {len(dirs.get(coin, []))} | {int((main_t['coin'] == coin).sum()) if len(main_t) else 0:,} |")
     if notes:
-        L += ["", "跳过的录制段：", ""] + [f"- {n}" for n in notes]
+        L += ["", "录制段备注（跳过的和断线检查）：", ""] + [f"- {n}" for n in notes]
     L += ["", "| L | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---:|---|---|---|---|---|---|"]
     for lag, g in t.groupby("lag") if len(t) else []:
         L.append(f"| {lag:g} 秒 | {fmt(g, reps)} |")
@@ -674,7 +702,7 @@ def run_test_d(roots, out, reps=20000):
     main_t = t.sort_values("t", kind="stable") if len(t) else t
     L += [f"录制段 {sum(len(v) for v in dirs.values())} 个，成交 {len(main_t):,} 笔。"]
     if notes:
-        L += ["", "跳过的录制段：", ""] + [f"- {n}" for n in notes]
+        L += ["", "录制段备注（跳过的和断线检查）：", ""] + [f"- {n}" for n in notes]
     if len(main_t):
         L += ["", "| 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---|---|---|---|---|---|", f"| {fmt(main_t, reps)} |"]
     L += [""] + _judge(out, main_t, D_N, f"检验 D（前 {D_N:,} 笔）：", reps,
