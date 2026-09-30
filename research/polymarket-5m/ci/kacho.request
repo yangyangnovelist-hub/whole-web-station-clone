@@ -7,7 +7,7 @@
 #       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-09-30 06:50 box arbitrage, last 3 days (rerun after the list-typed field fix)
+requested: 2026-09-30 06:50 box arbitrage and box rules on all 67 days
 mode: cross
-cross: analyze 3
+cross: analyze
 later: 2026-09-28

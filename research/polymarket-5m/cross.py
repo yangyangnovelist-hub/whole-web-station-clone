@@ -316,6 +316,9 @@ def market_table(mk, rs):
     return out.reset_index()
 
 
+THETAS = (0.0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12)
+
+
 def boxes(feat, mkts, fee_rate=0.07):
     """Per pair of markets ending together: snapshots, cheapest box, how often it costs < 1."""
     import numpy as np
@@ -359,7 +362,16 @@ def boxes(feat, mkts, fee_rate=0.07):
                     second = 1 - b["up_won"] if pay_up == (1.0, 0.0) else b["up_won"]
                     pay = first + second
                 pt = persist[persist].index
-                rows.append({
+                rule = {}
+                for th in THETAS:  # first box below 1 + th that is still there 100 ms later, traded then
+                    c = cost < 1 + th
+                    hit = (c & c.shift(1, fill_value=False))
+                    hit = hit[hit].index
+                    if len(hit):
+                        rule[f"cost_{th}"] = float(cost.loc[hit[0]])
+                        rule[f"size_{th}"] = float(size.loc[hit[0]])
+                        rule[f"tau_{th}"] = (a["end"] - hit[0]) / 1000
+                rows.append({**rule,
                     "pair": f"{int(a['horizon'])}m-{int(b['horizon'])}m", "end": end, "gap": abs(b["k"] - a["k"]),
                     "n": int(ok.sum()), "min_cost": float(cost.min()), "min_raw": float(raw.min()),
                     "tau_best": (a["end"] - i_best) / 1000, "size_best": float(size.loc[i_best]),
@@ -415,6 +427,25 @@ def analyze(workdir, out, days=None):
                      f"{100 * (1 - per['persist_cost']).mean() if len(per) else float('nan'):+.2f}¢ × "
                      f"{per['persist_size'].median() if len(per) else float('nan'):.0f} | "
                      f"{(chk['payoff'] >= 1).mean() if len(chk) else float('nan'):.1%}（{len(chk):,} 对） |")
+        import binary as bo
+        L += ["", "## 规则：成本第一次低于 1 + θ 且 100 ms 后仍低于时买一组，持有到结算", "",
+              "每对最多一组，按那一刻的成本（含费）成交，盈亏 = 实际拿回 − 成本。θ = 0 是纯套利。", "",
+              "| 组合 | θ | 组数 | 平均成本 | 拿回 2 的比例 | 每组盈亏 | p | 数量中位 | 每天（按对数折算）赚的钱 × 数量 |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+        ndays = df["day"].nunique()
+        for pair, g in df.groupby("pair"):
+            for th in THETAS:
+                h = g.dropna(subset=[f"cost_{th}", "payoff"])
+                if h.empty:
+                    continue
+                pnl = h["payoff"] - h[f"cost_{th}"]
+                # the box pays 1 for sure; only the extra 1 is random, so test that part
+                pv = bo.fair_price_pvalue((h["payoff"] - 1).to_numpy() - (h[f"cost_{th}"] - 1).clip(lower=0).to_numpy(),
+                                          (h[f"cost_{th}"] - 1).clip(lower=0).to_numpy(), sims=5000) \
+                    if pnl.mean() > 0 and len(h) >= 10 and th > 0 else float("nan")
+                L.append(f"| {pair} | {th:g} | {len(h):,} | {h[f'cost_{th}'].mean():.3f} | {(h['payoff'] >= 2).mean():.1%} | "
+                         f"{100 * pnl.mean():+.2f}¢ | {pv:.4f} | {h[f'size_{th}'].median():.0f} | "
+                         f"${(pnl * h[f'size_{th}']).sum() / ndays:,.0f} |")
         L += ["", "按天（100 ms 后仍便宜的对数）：", "",
               "| 日期 | " + " | ".join(sorted(df["pair"].unique())) + " |", "|---|" + "---:|" * df["pair"].nunique()]
         for day, g in df.groupby("day"):
