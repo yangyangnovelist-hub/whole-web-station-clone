@@ -189,3 +189,44 @@ def test_open_trades_price_the_twap_reference():
     up = o[o["side"] == "Up"]
     assert len(up) == len(cross.OPEN_THETAS) and (up["p_up"] > 0.9).all() and (up["price"] == 0.60).all()
     assert (o["side"] == "Up").all()
+
+
+def test_http_file_reads_parquet_by_ranges(monkeypatch):
+    """HttpFile serves pyarrow the footer and one row group through Range requests only."""
+    import urllib.request
+    df = pd.DataFrame({"ts_ms": np.arange(3000, dtype=np.int64), "x": np.arange(3000) * 0.5})
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), buf, row_group_size=1000)
+    blob = buf.getvalue()
+    asked = []
+
+    class Resp(io.BytesIO):
+        status = 200
+
+        def __init__(self, data, headers=None):
+            super().__init__(data)
+            self.headers = headers or {}
+
+        def geturl(self):
+            return "https://cdn.example/file"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=None):
+        if req.get_method() == "HEAD":
+            return Resp(b"", {"Content-Length": str(len(blob))})
+        a, b = map(int, req.headers["Range"].split("=")[1].split("-"))
+        asked.append((a, b))
+        return Resp(blob[a:b + 1])
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    pf, raw = cross.remote_parquet("https://hf.example/x.parquet")
+    rg = cross._rg_range(pf, "ts_ms")
+    assert [(n, lo, hi) for _, n, lo, hi in rg] == [(1000, 0, 999), (1000, 1000, 1999), (1000, 2000, 2999)]
+    t = pf.read_row_group(2).to_pandas()
+    assert t["ts_ms"].tolist() == list(range(2000, 3000)) and t["x"].iloc[-1] == 1499.5
+    assert raw.fetched <= 2 * len(blob) and all(b < len(blob) for _, b in asked)

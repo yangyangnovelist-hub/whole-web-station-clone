@@ -1030,6 +1030,149 @@ def cards(out, ids=CARD_IDS):
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
+class HttpFile(io.RawIOBase):
+    """Read-only, seekable view of a remote file through HTTP range requests, so pyarrow can read
+    a parquet footer and single row groups of a multi-GB file without downloading it."""
+
+    def __init__(self, url, timeout=120):
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "research"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            self.url, self.size = r.geturl(), int(r.headers["Content-Length"])
+        self.pos, self.timeout, self.fetched = 0, timeout, 0
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, off, whence=0):
+        self.pos = off if whence == 0 else self.pos + off if whence == 1 else self.size + off
+        return self.pos
+
+    def readinto(self, b):
+        n = min(len(b), self.size - self.pos)
+        if n <= 0:
+            return 0
+        req = urllib.request.Request(self.url, headers={"User-Agent": "research",
+                                                        "Range": f"bytes={self.pos}-{self.pos + n - 1}"})
+        for i in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    data = r.read()
+                break
+            except Exception:
+                if i == 3:
+                    raise
+        b[:len(data)] = data
+        self.pos += len(data)
+        self.fetched += len(data)
+        return len(data)
+
+
+def remote_parquet(url):
+    """(pyarrow ParquetFile, the HttpFile under it) for a parquet file on a web server."""
+    import pyarrow.parquet as pq
+    raw = HttpFile(url)
+    return pq.ParquetFile(io.BufferedReader(raw, buffer_size=1 << 20)), raw
+
+
+def _rg_range(pf, col):
+    """(row group, rows, min, max) of one column from the parquet statistics."""
+    i = pf.schema_arrow.get_field_index(col)
+    out = []
+    for g in range(pf.metadata.num_row_groups):
+        st = pf.metadata.row_group(g).column(i).statistics
+        out.append((g, pf.metadata.row_group(g).num_rows, st.min if st is not None and st.has_min_max else None,
+                    st.max if st is not None and st.has_min_max else None))
+    return out
+
+
+ALI = "aliplayer1/polymarket-crypto-updown"
+UNSEEN_FROM = 1788048000  # 2026-08-30 00:00 UTC: after the whodisidk archives every rule here was chosen on
+
+
+def probe_ali(out, ds=ALI):
+    """What aliplayer1's crypto up/down dataset holds for BTC 5m after 2026-08-29: files and sizes,
+    the time range of every row group of the order-book, spot and trade tables, a sample of the
+    newest rows, the update rate, and whether Binance's public trade archive is reachable."""
+    import json
+    import pandas as pd
+    base = f"https://huggingface.co/datasets/{ds}/resolve/main/"
+    ms = lambda v: "" if v is None else f"{pd.Timestamp(int(v), unit='ms'):%Y-%m-%d %H:%M:%S}"
+    L = [f"# 数据探查：{ds}（BTC 5m，8 月 29 日之后）", ""]
+    meta = json.loads(_get(f"https://huggingface.co/api/datasets/{ds}?blobs=true"))
+    files = [(f["rfilename"], f.get("size") or 0) for f in meta.get("siblings", [])]
+    keep = [f for f in files if "crypto=BTC" in f[0] or "spot" in f[0] or f[0].endswith(("markets.parquet", ".json"))
+            or "heartbeat" in f[0]]
+    L += [f"共 {len(files):,} 个文件；和 BTC、现货、市场表有关的 {len(keep)} 个：", "", "```"]
+    L += [f"{n}  {sz:,}" for n, sz in sorted(keep)][:400] + ["```", ""]
+    try:
+        mk = pd.read_parquet(io.BytesIO(_get(base + "data/markets.parquet", 600)))
+        b5 = mk[(mk["crypto"] == "BTC") & (mk["timeframe"] == "5-minute")].copy()
+        b5["day"] = pd.to_datetime(b5["end_ts"], unit="s").dt.strftime("%Y-%m")
+        L += ["## markets.parquet（BTC 5m）", "", "```", b5.groupby("day").agg(
+            n=("market_id", "size"), resolved=("resolution", lambda r: int((r >= 0).sum())),
+            fee=("fee_rate_bps", lambda f: ",".join(map(str, sorted(set(f.tolist())))))).to_string(), "```", ""]
+        late = b5[b5["end_ts"] > UNSEEN_FROM]
+        L.append(f"8 月 30 日以后结束的 BTC 5m 市场：{len(late):,} 个，已结算 {int((late['resolution'] >= 0).sum()):,} 个，"
+                 f"最后一个结束于 {ms(late['end_ts'].max() * 1000) if len(late) else '-'}。")
+        L.append("")
+    except Exception as e:
+        L += [f"markets.parquet 读取失败：{e}", ""]
+    tables = [n for n, _ in keep if n.endswith(".parquet") and ("timeframe=5-minute" in n or "spot" in n)
+              and "part-ws" not in n]
+    for name in tables:
+        L += [f"## {name}", ""]
+        try:
+            pf, raw = remote_parquet(base + name)
+            cols = pf.schema_arrow.names
+            tcol = "ts_ms" if "ts_ms" in cols else "timestamp_ms" if "timestamp_ms" in cols else "timestamp"
+            rg = _rg_range(pf, tcol)
+            L.append(f"{pf.metadata.num_rows:,} 行，{pf.metadata.num_row_groups} 个 row group，列：{', '.join(cols)}")
+            unit = 1000 if tcol == "timestamp" else 1
+            L += ["", "```"] + [f"rg {g:4d}  {n:>10,} 行  {ms(a * unit if a is not None else None)} → {ms(b * unit if b is not None else None)}"
+                                for g, n, a, b in (rg if len(rg) <= 30 else rg[:5] + rg[-25:])] + ["```", ""]
+            g = max(range(len(rg)), key=lambda k: rg[k][3] or 0)
+            t = pf.read_row_group(g).to_pandas()
+            t = t.sort_values(tcol)
+            span = (t[tcol].max() - t[tcol].min()) / (1000 if unit == 1 else 1)
+            L.append(f"最新的 row group {g}：{len(t):,} 行，{ms(t[tcol].min() * unit)} → {ms(t[tcol].max() * unit)}，"
+                     f"平均每秒 {len(t) / max(span, 1):.1f} 行。")
+            for c in ("market_id", "symbol", "source", "outcome"):
+                if c in t.columns:
+                    L.append(f"`{c}` 取值个数 {t[c].nunique():,}；最多的：{t[c].value_counts().head(6).to_dict()}")
+            if "market_id" in t.columns:
+                one = t[t["market_id"] == t["market_id"].value_counts().index[0]]
+                d = one[tcol].diff().dropna()
+                L.append(f"更新最多的市场：{len(one):,} 行，相邻两行间隔中位 {d.median():.0f}，90% {d.quantile(0.9):.0f}（{tcol} 单位）。")
+            if "symbol" in t.columns:
+                for sym, one in t.groupby("symbol"):
+                    d = one[tcol].diff().dropna()
+                    if len(d):
+                        L.append(f"`{sym}`（{one['source'].iloc[0] if 'source' in one else ''}）：{len(one):,} 行，间隔中位 {d.median():.0f}，90% {d.quantile(0.9):.0f}")
+            L += ["", "```", t.tail(8).to_string(max_colwidth=40)[:3000], "```", ""]
+            L += [f"（这个文件 {raw.size / 1e9:.2f} GB，读了 {raw.fetched / 1e6:.1f} MB）", ""]
+        except Exception:
+            import traceback
+            L += ["```", traceback.format_exc()[-2000:], "```", ""]
+        print(name, "done", flush=True)
+    L += ["## 币安公开逐笔数据（data.binance.vision）", ""]
+    for kind in ("spot", "futures/um"):
+        url = f"https://data.binance.vision/data/{kind}/daily/aggTrades/BTCUSDT/BTCUSDT-aggTrades-2026-09-05.zip"
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "research"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                L.append(f"- {kind}: HTTP {r.status}，{int(r.headers.get('Content-Length', 0)) / 1e6:.0f} MB")
+        except Exception as e:
+            L.append(f"- {kind}: {e}")
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1042,6 +1185,9 @@ def main(argv=None):
     p = sub.add_parser("cards")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-cards.md")
+    p = sub.add_parser("probe-ali")
+    p.add_argument("--workdir", default="/tmp/cross")
+    p.add_argument("--out", default="real/cross-probe-ali.md")
     p = sub.add_parser("probe-trades")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-trades.md")
@@ -1064,6 +1210,8 @@ def main(argv=None):
         datasets(a.out)
     elif a.cmd == "cards":
         cards(a.out)
+    elif a.cmd == "probe-ali":
+        probe_ali(a.out)
     elif a.cmd == "probe-trades":
         probe_trades(a.workdir, a.out)
     elif a.cmd == "analyze":
