@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
-# cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days],
+# cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-09-30 13:50 mispricing just after the open under the TWAP reference, with the snapshot era as placebo
-cmd: openmis
+requested: 2026-09-30 14:45 fair-jump gated stale asks on BTC 15m (60 s TWAP over a 900 s window)
+cmd: gated --horizon 15 --out real/cross-gated-15m.md

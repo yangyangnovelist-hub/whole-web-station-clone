@@ -123,6 +123,32 @@ def test_gated_trades_price_the_jump():
     assert g.loc[g["lag"] == 300, "pnl"].iloc[0] == pytest.approx(1 - 0.50 - 0.07 * 0.25)
 
 
+def test_gated_trades_on_15m_markets():
+    """The same jump in a 15m market 600 s before its end (outside the 5m window): only the
+    15m run trades it, and its fair price is lower than a 5m market's would be 100 s out."""
+    start = E - 900_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 600_000
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m15", "lifecycle_state": "active",
+                         "up_best_bid": 0.49, "up_best_ask": 0.50,
+                         "down_best_bid": 0.49, "down_best_ask": 0.51, "up_ask_size": 25.0, "down_ask_size": 30.0})
+    mkts = pd.DataFrame({"market_id": ["m15"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [15]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_800_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 6.7e-6, len(tt))))
+    price[tt >= t_jump] *= 1.0004  # about 30 sigma of one second, 1.3 of the TWAP still ahead
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    assert cross.gated_trades(feat, mkts, binance, z0=6.0).empty  # horizon 5 by default
+    g = cross.gated_trades(feat, mkts, binance, z0=6.0, horizon=15)
+    assert len(g) and (g["t0"] == t_jump + 150).all() and g["tau"].tolist() == pytest.approx([599.85] * len(g))
+    sg = binance.set_index(binance["trade_ts_ms"] // 1000)["price"].pipe(np.log).groupby(level=0).last().diff() \
+        .rolling(600, min_periods=300).std().loc[t_jump // 1000 - 1]
+    import binary as bo
+    from scipy.stats import norm
+    fair = norm.cdf(np.log(1.0004) / (sg * bo.twap_std_factor(300.15, window=900)))
+    assert g["fair"].iloc[0] == pytest.approx(fair, abs=0.02) and 0.6 < fair < 0.99
+
+
 def test_maker_fill_tagged_by_a_preceding_adverse_move():
     """Binance drops 0.3% half a second before the join order on Up fills at E-70 s: tagged adverse;
     the improve order filled at E-80 s saw no move before it: not adverse."""

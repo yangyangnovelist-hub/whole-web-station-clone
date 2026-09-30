@@ -443,10 +443,12 @@ GATE_THETAS = (0.0, 0.02, 0.04, 0.06, 0.08, 0.12)
 GATE_LAGS = (300, 500)
 
 
-def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15):
-    """Stale-ask sniping gated by the fair-value jump a Binance move implies (5m markets).
+def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15, horizon=5, tau_hi=None):
+    """Stale-ask sniping gated by the fair-value jump a Binance move implies (`horizon`-minute
+    markets, all settled on the 60 s TWAP).
 
-    Every Binance trade (as received) with 240..tau_lo s left whose log price moved more than z0
+    Every Binance trade (as received) with tau_hi..tau_lo s left (tau_hi defaults to all but the
+    first minute: 240 s for 5m, 840 s for 15m) whose log price moved more than z0
     sigma from the last trade at least a second earlier is a candidate. The market's own Up mid
     just before it (the snapshot at receipt) is taken as the prior probability P0; the move shifts
     the expected settlement TWAP by the whole move, so the fair Up price becomes
@@ -467,7 +469,9 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
     last = pd.Series(lp_s, index=tt_s // 1000).groupby(level=0).last()
     grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=10)
     sigma = grid.diff().rolling(600, min_periods=300).std()
-    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    window = 60 * int(horizon)
+    tau_hi = window - 60 if tau_hi is None else tau_hi
+    m5 = mkts[(mkts["horizon"] == horizon) & mkts["up_won"].notna()].set_index("market_id")
     by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
           for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
     rows = []
@@ -478,7 +482,7 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
         fts = f["timestamp_ms"].to_numpy()
         ub, ua = f["up_best_bid"].to_numpy(), f["up_best_ask"].to_numpy()
         da, uas, das = f["down_best_ask"].to_numpy(), f["up_ask_size"].to_numpy(), f["down_ask_size"].to_numpy()
-        a, b = np.searchsorted(rt, [mk["end"] - 240_000, mk["end"] - tau_lo * 1000])
+        a, b = np.searchsorted(rt, [mk["end"] - tau_hi * 1000, mk["end"] - tau_lo * 1000])
         if b <= a:
             continue
         j = np.searchsorted(tt_s, tt[a:b] - 1000, "right") - 1
@@ -494,8 +498,8 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
             if k0 < 0 or t0 - fts[k0] > 1000 or not (np.isfinite(ub[k0]) and np.isfinite(ua[k0])):
                 continue
             p0 = min(max((ub[k0] + ua[k0]) / 2, 0.005), 0.995)
-            t_mkt = (t0 - (mk["end"] - bo.WINDOW_S * 1000)) / 1000
-            fac = float(bo.twap_std_factor(t_mkt)) * sg[i]
+            t_mkt = (t0 - (mk["end"] - window * 1000)) / 1000
+            fac = float(bo.twap_std_factor(t_mkt, window=window)) * sg[i]
             if not (np.isfinite(fac) and fac > 0):
                 continue
             p1 = float(norm.cdf(norm.ppf(p0) + dx[i] / fac))
@@ -521,8 +525,8 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
                                        "won", "pnl"])
 
 
-def gated(workdir, out, days=None, reps=5000):
-    """gated_trades on every day; thresholds are compared on May 25 - Jul 15 and checked on the
+def gated(workdir, out, days=None, reps=5000, horizon=5):
+    """gated_trades on every day (`horizon`-minute markets); thresholds are compared on May 25 - Jul 15 and checked on the
     later days (Jul 16 - Aug 16, taker delay 250 ms; Aug 17 onwards, 50 ms)."""
     import numpy as np
     import pandas as pd
@@ -539,7 +543,7 @@ def gated(workdir, out, days=None, reps=5000):
             feat, mk, rs = read_day(local)
             binance = read_binance(local)
             Path(local).unlink()
-            t = gated_trades(feat, market_table(mk, rs), binance)
+            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon)
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(t):,} gated trades over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
@@ -548,8 +552,8 @@ def gated(workdir, out, days=None, reps=5000):
             print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
-    L = [f"# 按公平价跳变筛选的过期报价（{DS}，5m 市场，记录机时钟）", "",
-         "候选：剩 240–15 秒时，与至少一秒前相比涨跌超过 2σ 的每一笔币安成交（记录机收到时）。以收到那一刻的 Up 中间价为原来的概率 P0，"
+    L = [f"# 按公平价跳变筛选的过期报价（{DS}，{horizon}m 市场，记录机时钟）", "",
+         f"候选：剩 {60 * horizon - 60}–15 秒时，与至少一秒前相比涨跌超过 2σ 的每一笔币安成交（记录机收到时）。以收到那一刻的 Up 中间价为原来的概率 P0，"
          "这次涨跌让结算 TWAP 的期望整体移动，新的公平价 = Φ(Φ⁻¹(P0) + Δx / (σ·TWAP 标准差系数))。L 毫秒后按卖一买顺势一方，"
          "只在 公平价 − 卖一 − taker 费 ≥ θ 时买，每个市场、每组 (L, θ) 只取第一笔，持有到结算。"
          "5 月 25 日–7 月 15 日用来比较门槛，之后的日子只用来核对。探索性质。", ""]
@@ -960,6 +964,8 @@ def main(argv=None):
         p.add_argument("--workdir", default="/tmp/cross")
         p.add_argument("--out", default=default)
         p.add_argument("--dataset", default=DS, help="another dataset of the same layout")
+        if name == "gated":
+            p.add_argument("--horizon", type=int, default=5, choices=(5, 15), help="market length in minutes")
     a = ap.parse_args(argv)
     if getattr(a, "dataset", DS) != DS:
         set_dataset(a.dataset)
@@ -972,7 +978,7 @@ def main(argv=None):
     elif a.cmd == "makers":
         makers(a.workdir, a.out, a.days)
     elif a.cmd == "gated":
-        gated(a.workdir, a.out, a.days)
+        gated(a.workdir, a.out, a.days, horizon=a.horizon)
     elif a.cmd == "openmis":
         openmis(a.workdir, a.out, a.days)
     else:
