@@ -18,6 +18,7 @@ is reachable (the polymarket-kacho workflow, "mode: cross").
     python cross.py stale 10 --workdir /tmp/x                          # stale 5m quotes after Binance moves
     python cross.py gated --workdir /tmp/x                             # ... only when the fair jump is worth it
     python cross.py openmis --workdir /tmp/x                           # mispricing just after the open
+    python cross.py hourly --workdir /tmp/x                            # 1h markets against the Binance candle
     python cross.py datasets                                           # newer datasets on Hugging Face
 
 For every pair of markets ending together (5m-15m, 5m-1h, 15m-1h), at every 100 ms snapshot
@@ -948,6 +949,146 @@ def probe_trades(workdir, out):
     print("\n".join(L))
 
 
+HOUR_WINDOWS = ((1800, 300), (300, 60), (60, 5))
+HOUR_THETAS = (0.02, 0.04, 0.06, 0.08, 0.12)
+
+
+def hourly_trades(feat, mkts, binance, windows=HOUR_WINDOWS, thetas=HOUR_THETAS, lag_ms=300):
+    """1h markets settle on Binance's own 1-hour candle (close >= open), so Binance's price is the
+    settlement variable itself: with K the first Binance trade of the hour and S the last trade
+    received by second t, the fair Up price is the European digital Phi(ln(S/K) / (sigma*sqrt(tau))),
+    sigma the trailing 10 min std of 1 s log returns up to two whole seconds back. Once a second
+    (recorder clock) in each window of seconds left, the side whose fair - ask - fee is largest is
+    bought at its ask lag_ms later if that edge is at least theta (edge measured on the quote shown
+    at t, at most 1 s old); first trade per market, window and theta. Also returns, per market,
+    whether the Binance candle agrees with the official outcome."""
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import norm
+    if binance.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    rt = binance["recv_ts_ms"].to_numpy()
+    tt = binance["trade_ts_ms"].to_numpy()
+    px = binance["price"].to_numpy()
+    order = np.argsort(tt, kind="stable")
+    tt_s, px_s = tt[order], px[order]
+    last = pd.Series(np.log(px_s), index=tt_s // 1000).groupby(level=0).last()
+    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=10)
+    sigma = grid.diff().rolling(600, min_periods=300).std()
+    h1 = mkts[(mkts["horizon"] == 60) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(h1.index)].groupby("market_id")}
+    rows, checks = [], []
+    for mid, mk in h1.iterrows():
+        start, end = int(mk["start"]), int(mk["end"])
+        i0 = np.searchsorted(tt_s, start, "left")
+        i1 = np.searchsorted(tt_s, end, "left") - 1
+        if i0 >= len(tt_s) or i1 < i0 or tt_s[i0] - start > 5000 or end - tt_s[i1] > 5000:
+            continue  # the feed must cover the candle's first and last seconds
+        k, close = px_s[i0], px_s[i1]
+        k_known = rt[order][i0]  # when the recorder had the opening trade
+        checks.append((mid, float(close >= k), float(mk["up_won"])))
+        if mid not in by:
+            continue
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        ua, da = f["up_best_ask"].to_numpy(), f["down_best_ask"].to_numpy()
+        uas, das = f["up_ask_size"].to_numpy(), f["down_ask_size"].to_numpy()
+        won_up = float(mk["up_won"])
+        for hi, lo in windows:
+            t = np.arange(end - hi * 1000, end - lo * 1000 + 1, 1000)
+            t = t[t >= k_known]
+            if not len(t):
+                continue
+            j = np.searchsorted(rt, t, "right") - 1  # last Binance trade received by t
+            ok = j >= 0
+            s = np.where(ok, px[np.maximum(j, 0)], np.nan)
+            sg = sigma.reindex(t // 1000 - 2).to_numpy()  # seconds whose trades have all arrived by t
+            tau = (end - t) / 1000
+            with np.errstate(invalid="ignore", divide="ignore"):
+                fair_up = norm.cdf(np.log(s / k) / (sg * np.sqrt(tau)))
+            q = np.searchsorted(fts, t, "right") - 1
+            fresh = (q >= 0) & (t - fts[np.maximum(q, 0)] <= 1000)
+            a_up, a_dn = ua[np.maximum(q, 0)], da[np.maximum(q, 0)]
+            e_up = fair_up - a_up - 0.07 * a_up * (1 - a_up)
+            e_dn = (1 - fair_up) - a_dn - 0.07 * a_dn * (1 - a_dn)
+            with np.errstate(invalid="ignore"):
+                up = np.where(np.isnan(e_dn), True, np.where(np.isnan(e_up), False, e_up >= e_dn))
+                edge = np.where(up, e_up, e_dn)
+                good = fresh & ok & np.isfinite(edge)
+            for th in thetas:
+                hit = np.flatnonzero(good & (edge >= th))
+                for i in hit:
+                    kk = np.searchsorted(fts, t[i] + lag_ms, "left")
+                    if kk >= len(f) or fts[kk] > t[i] + lag_ms + 1000:
+                        continue
+                    side_up = bool(up[i])
+                    p = ua[kk] if side_up else da[kk]
+                    if not (np.isfinite(p) and 0.02 <= p <= 0.98):
+                        continue
+                    fee = 0.07 * p * (1 - p)
+                    won = won_up if side_up else 1 - won_up
+                    rows.append((mid, f"{hi}-{lo}", th, int(t[i]), tau[i], "Up" if side_up else "Down",
+                                 float(fair_up[i] if side_up else 1 - fair_up[i]), p, uas[kk] if side_up else das[kk],
+                                 fee, won, won - p - fee))
+                    break
+    cols = ["market_id", "window", "theta", "t", "tau", "side", "fair", "price", "size", "fee", "won", "pnl"]
+    return pd.DataFrame(rows, columns=cols), pd.DataFrame(checks, columns=["market_id", "binance_up", "up_won"])
+
+
+def hourly(workdir, out, days=None, reps=5000):
+    """hourly_trades on every day; thresholds and windows are compared on May 25 - Jul 15 and
+    checked on the later days."""
+    import numpy as np
+    import pandas as pd
+    import binary as bo
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts, checks = [], []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            binance = read_binance(local)
+            Path(local).unlink()
+            t, c = hourly_trades(feat, market_table(mk, rs), binance)
+            t["day"] = name[15:25]
+            parts.append(t)
+            checks.append(c)
+            print(f"{name}: {len(t):,} trades, {len(c)} candles checked", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    ck = pd.concat(checks, ignore_index=True).drop_duplicates("market_id") if checks else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# 1 小时市场：按币安 1 小时 K 线算的公平价（{DS}，记录机时钟）", "",
+         "1 小时市场按币安 BTCUSDT 1 小时 K 线的收盘 ≥ 开盘结算，所以公平 Up 价 = Φ(ln(S/K) / (σ√τ))："
+         "K 是这一小时第一笔币安成交，S 是 t 时刻（记录机收到）最后一笔，σ 是之前 10 分钟每秒对数收益的标准差。"
+         "每个剩余时间窗口里每秒看一次，公平价 − 卖一 − taker 费 最大的一方超过 θ 时，300 ms 后按卖一买，"
+         "每个市场、窗口、θ 只取第一笔，持有到结算。5 月 25 日–7 月 15 日比较窗口和门槛，之后只核对。探索性质。", ""]
+    if len(ck):
+        agree = (ck["binance_up"] == ck["up_won"]).mean()
+        L += [f"核对：{len(ck):,} 个 1 小时市场里，币安 K 线（收盘 ≥ 开盘）与官方结果一致的比例 {agree:.1%}。", ""]
+    if df.empty:
+        L.append("没有可用的交易。")
+    else:
+        df["period"] = np.select([df["day"] <= "2026-07-15", df["day"] <= "2026-08-16"],
+                                 ["A 5/25–7/15", "B 7/16–8/16"], "C 8/17–8/29")
+        L += ["| 窗口（剩余秒） | θ | 时段 | 笔数 | 胜率 | 平均价 | 平均公平价 | EV/份 | p | 卖一数量中位 |",
+              "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
+        for (w, th, per), g in df.groupby(["window", "theta", "period"], sort=False):
+            pv = bo.fair_price_pvalue(g["pnl"].to_numpy(), (g["price"] + g["fee"]).to_numpy(), sims=reps) \
+                if len(g) >= 10 and g["pnl"].mean() > 0 else 1.0
+            L.append(f"| {w} | {100 * th:.0f}¢ | {per} | {len(g):,} | {g['won'].mean():.1%} | {g['price'].mean():.3f} | "
+                     f"{g['fair'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} | {g['size'].median():.0f} |")
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 HF_API = "https://huggingface.co/api/datasets?"
 SCAN_QUERIES = ("author=whodisidk", "search=polymarket", "search=updown", "search=up-down", "search=kalshi")
 
@@ -1193,7 +1334,7 @@ def main(argv=None):
     p.add_argument("--out", default="real/cross-probe-trades.md")
     for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md"),
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
-                          ("openmis", "real/cross-open.md")):
+                          ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -1222,6 +1363,8 @@ def main(argv=None):
         gated(a.workdir, a.out, a.days, horizon=a.horizon)
     elif a.cmd == "openmis":
         openmis(a.workdir, a.out, a.days)
+    elif a.cmd == "hourly":
+        hourly(a.workdir, a.out, a.days)
     else:
         stale(a.workdir, a.out, a.days)
 

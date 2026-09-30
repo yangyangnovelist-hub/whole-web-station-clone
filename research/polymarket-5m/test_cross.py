@@ -230,3 +230,35 @@ def test_http_file_reads_parquet_by_ranges(monkeypatch):
     t = pf.read_row_group(2).to_pandas()
     assert t["ts_ms"].tolist() == list(range(2000, 3000)) and t["x"].iloc[-1] == 1499.5
     assert raw.fetched <= 2 * len(blob) and all(b < len(blob) for _, b in asked)
+
+
+def test_hourly_trades_price_against_the_binance_candle():
+    """A 1h market opens at K = 80,000 on Binance and trades around K (no drift) until 230 s before
+    the end, when it jumps 0.5%: fair Up goes from about 0.5 to about 1. The Up ask stays at 0.60
+    until 800 ms after the next second; the first grid second that has received the jump buys Up at
+    0.60 at every threshold in the 300-60 s window, nothing trades earlier, and in the last minute
+    only the 2c threshold still pays for the 0.97 ask. The Binance candle agrees with the outcome."""
+    H = 3_600_000
+    start, end = E - H, E
+    ts = np.arange(start, end, 100)
+    t_jump = end - 230_000
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "h1", "lifecycle_state": "active",
+                         "up_best_bid": 0.45, "up_best_ask": np.where(ts < t_jump + 30_800, 0.60, 0.97),
+                         "down_best_bid": 0.40, "down_best_ask": 0.55, "up_ask_size": 25.0, "down_ask_size": 30.0})
+    mkts = pd.DataFrame({"market_id": ["h1"], "start": [start], "end": [end], "k": [np.nan], "up_won": [1.0],
+                         "horizon": [60]})
+    rng = np.random.default_rng(5)
+    tt = np.arange(start - 1_200_000, end + 5_000, 250)
+    price = 80_000 * np.exp(rng.normal(0, 2e-6, len(tt)))
+    price[np.searchsorted(tt, start)] = 80_000.0
+    price[tt >= t_jump] *= 1.005
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    t, ck = cross.hourly_trades(feat, mkts, binance)
+    assert ck[["binance_up", "up_won"]].values.tolist() == [[1.0, 1.0]]
+    assert not (t["window"] == "1800-300").any()
+    w = t[t["window"] == "300-60"]
+    assert len(w) == len(cross.HOUR_THETAS) and (w["side"] == "Up").all() and (w["price"] == 0.60).all()
+    assert (w["fair"] > 0.99).all() and (w["t"] == end - 229_000).all()
+    assert w["pnl"].iloc[0] == pytest.approx(1 - 0.60 - 0.07 * 0.6 * 0.4)
+    last = t[t["window"] == "60-5"]
+    assert last["theta"].tolist() == [0.02] and last["price"].tolist() == [0.97]
