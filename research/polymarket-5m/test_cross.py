@@ -347,3 +347,18 @@ def test_follow_copies_large_takers_within_a_cent():
     assert (g["side"] == "Down").all() and (g["price"] == 0.50).all() and (g["won"] == 0.0).all()
     far = trades.assign(price=0.45)  # the ask is now 6c above the print: not followed
     assert cross.follow_trades(feat, mkts, far).empty
+
+
+def test_gated_trades_measure_other_takers():
+    """Other takers buy 40 Up at 0.50 between the print's receipt and our order (300 ms), and 30
+    more in the 300 ms after it; a 0.60 buy and a Down buy do not count."""
+    feat, mkts, binance = _gated_fixture(live=True)
+    mkts = mkts.assign(up_token="u", down_token="d")
+    t0 = E - 100_000 + 150
+    trades = pd.DataFrame({"recv_ts_ms": [t0 + 100, t0 + 200, t0 + 250, t0 + 400], "instrument": ["u", "u", "d", "u"],
+                           "price": [0.50, 0.60, 0.40, 0.50], "size": [40.0, 99.0, 50.0, 30.0],
+                           "taker_side": ["buy", "buy", "buy", "buy"]})
+    g = cross.gated_trades(feat, mkts, binance, z0=6.0, trades=trades)
+    r = g[(g["lag"] == 300) & (g["theta"] == 0.12)].iloc[0]
+    assert (r["ask0"], r["price"], r["taken_before"], r["taken_next"]) == (0.50, 0.50, 40.0, 30.0)
+    assert cross.gated_trades(feat, mkts, binance, z0=6.0)["taken_before"].isna().all()

@@ -480,7 +480,7 @@ GATE_LAGS = (300, 500)
 
 
 def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15, horizon=5, tau_hi=None,
-                 health=False):
+                 health=False, trades=None):
     """Stale-ask sniping gated by the fair-value jump a Binance move implies (`horizon`-minute
     markets, all settled on the 60 s TWAP).
 
@@ -492,7 +492,10 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
     Phi(Phi^-1(P0) + dx / (sigma * twap_std_factor(t))). The side of the move is bought at the
     ask L ms after receipt when fair - ask - fee >= theta; the first such trade per market and
     (L, theta) is kept. With `health`, the quote at the print and the fill must be sane rows of a book
-    that changed within HEALTH_ALIVE before the print and after the fill (see book_health)."""
+    that changed within HEALTH_ALIVE before the print and after the fill (see book_health). With
+    Polymarket `trades`, each row also has the competition for that ask: the side's ask and size
+    shown at the print (ask0, size0), and the shares other takers bought of that token at or below
+    the fill price in the lag before our order (taken_before) and in the 300 ms after it (taken_next)."""
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -512,6 +515,19 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
     m5 = mkts[(mkts["horizon"] == horizon) & mkts["up_won"].notna()].set_index("market_id")
     by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
           for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    buys = {}
+    if trades is not None and len(trades):
+        tb = trades[trades["taker_side"] == "buy"]
+        buys = {tok: (g["recv_ts_ms"].to_numpy(), g["price"].to_numpy(float), g["size"].to_numpy(float))
+                for tok, g in tb.groupby("instrument")}
+
+    def taken(tok, lo, hi, px):
+        if tok not in buys:
+            return np.nan
+        r, pr, sz = buys[tok]
+        a_, b_ = np.searchsorted(r, [lo, hi], "right")
+        return float(sz[a_:b_][pr[a_:b_] <= px + 1e-9].sum())
+
     rows = []
     for mid, mk in m5.iterrows():
         if mid not in by:
@@ -564,12 +580,15 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
                     if (lag, th) in done or edge < th:
                         continue
                     done.add((lag, th))
-                    rows.append((mid, lag, th, t0, (mk["end"] - t0) / 1000, p0, fair, px, size, fee, won, won - px - fee))
+                    tok = str(mk["up_token"] if up else mk["down_token"]) if "up_token" in mk else None
+                    rows.append((mid, lag, th, t0, (mk["end"] - t0) / 1000, p0, fair, px, size, fee, won, won - px - fee,
+                                 ua[k0] if up else da[k0], uas[k0] if up else das[k0],
+                                 taken(tok, t0, t0 + lag, px), taken(tok, t0 + lag, t0 + lag + 300, px)))
     return pd.DataFrame(rows, columns=["market_id", "lag", "theta", "t0", "tau", "p0", "fair", "price", "size", "fee",
-                                       "won", "pnl"])
+                                       "won", "pnl", "ask0", "size0", "taken_before", "taken_next"])
 
 
-def gated(workdir, out, days=None, reps=5000, horizon=5, health=False):
+def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=False):
     """gated_trades on every day (`horizon`-minute markets); thresholds are compared on May 25 - Jul 15 and checked on the
     later days (Jul 16 - Aug 16, taker delay 250 ms; Aug 17 onwards, 50 ms)."""
     import numpy as np
@@ -586,8 +605,9 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False):
             local = fetch(name, workdir / name)
             feat, mk, rs = read_day(local)
             binance = read_binance(local)
+            prints = read_poly_trades(local) if compete else None
             Path(local).unlink()
-            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon, health=health)
+            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon, health=health, trades=prints)
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(t):,} gated trades over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
@@ -620,6 +640,16 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False):
             usd = (g["pnl"] * g["size"].clip(upper=500)).sum() / max(ndays, 1)
             L.append(f"| {lag} ms | {100 * th:.0f}¢ | {per} | {len(g):,} | {g['won'].mean():.1%} | {g['price'].mean():.3f} | "
                      f"{g['fair'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} | {g['size'].median():.0f} | ${usd:,.0f} |")
+        if compete and "taken_before" in df:
+            L += ["", "## 抢单：同一价位别人买走了多少（L = 300 ms、θ = 12¢）", "",
+                  "卖一0 / 数量0：触发那一刻看到的卖一和挂单量；前：触发到我们的单到达之间，别的吃单在不高于成交价的价位买走的份数；"
+                  "后：我们到达之后 300 ms 内别人又买走的份数；剩：我们到达时还挂着的份数（回测按这个成交）。中位数。", "",
+                  "| 时段 | 笔数 | 数量0 | 前 | 后 | 剩 | 前 > 0 的比例 | 后 ≥ 剩 的比例 |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+            c = df[(df["lag"] == 300) & (df["theta"] == 0.12)]
+            for per, g in c.groupby("period"):
+                L.append(f"| {per} | {len(g):,} | {g['size0'].median():.0f} | {g['taken_before'].median():.0f} | "
+                         f"{g['taken_next'].median():.0f} | {g['size'].median():.0f} | {(g['taken_before'] > 0).mean():.0%} | "
+                         f"{(g['taken_next'] >= g['size']).mean():.0%} |")
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 
@@ -1650,6 +1680,8 @@ def main(argv=None):
             p.add_argument("--horizon", type=int, default=5, choices=(5, 15), help="market length in minutes")
         if name in ("gated", "hourly"):
             p.add_argument("--health", action="store_true", help="only sane, recently changed book snapshots")
+        if name == "gated":
+            p.add_argument("--compete", action="store_true", help="also measure other takers at the same ask")
     a = ap.parse_args(argv)
     if getattr(a, "dataset", DS) != DS:
         set_dataset(a.dataset)
@@ -1668,7 +1700,7 @@ def main(argv=None):
     elif a.cmd == "makers":
         makers(a.workdir, a.out, a.days)
     elif a.cmd == "gated":
-        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health)
+        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health, compete=a.compete)
     elif a.cmd == "openmis":
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":

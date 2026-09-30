@@ -7,7 +7,7 @@
 #       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-09-30 16:51 BTC 15m gated rule with the book-health filter
+requested: 2026-09-30 19:41 test D's rule with the health filter: how much other takers buy at the same stale ask
 mode: cross
-cross: gated --horizon 15 --health --out real/cross-gated-15m-health.md
+cross: gated --health --compete --out real/cross-gated-compete.md
 later: 2026-09-28
