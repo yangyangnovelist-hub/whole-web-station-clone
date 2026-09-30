@@ -101,3 +101,25 @@ def test_next_test_is_judged_once_on_the_first_n_trades(export, tmp_path, monkey
     monkeypatch.setattr(lt, "NEXT_N", 20)
     lt.run(export, tmp_path / "n.md", reps=200, since="2026-09-01")
     assert "按时间取前 20 笔）：过期报价（z=2，0.4 秒后按卖一买）：20 笔" in (tmp_path / "n.md").read_text()
+
+
+def test_pooled_test_c(export, tmp_path, monkeypatch):
+    """Two coins, each a copy of the fixture with its spot trades as Coinbase prints."""
+    import shutil
+    for coin in ("btc", "eth"):
+        d = tmp_path / "rec" / "1" / "x" / f"bundle-{coin}" / "latency"
+        d.mkdir(parents=True)
+        for f in export.iterdir():
+            if "shadow_current" not in f.name:
+                shutil.copy(f, d / f.name)
+        raw = b"".join(q.read_bytes() for q in sorted(export.glob("shadow_current.jsonl.gz.part-*")))
+        lines = gzip.decompress(raw).decode().replace('"BINANCE_AGG_TRADE"', '"COINBASE_TRADE"')
+        (d / "coinbase_trades.jsonl.gz").write_bytes(gzip.compress(lines.encode()))
+    monkeypatch.setattr(lt, "C_SINCE", "2026-09-01")
+    monkeypatch.setattr(lt, "C_N", 100)
+    lt.run_pooled([tmp_path / "rec"], tmp_path / "c.md", reps=200)
+    assert f"目前 {2 * N} 笔，不到 100 笔，不判定" in (tmp_path / "c.md").read_text()
+    monkeypatch.setattr(lt, "C_N", 40)
+    lt.run_pooled([tmp_path / "rec"], tmp_path / "c.md", reps=200)
+    text = (tmp_path / "c.md").read_text()
+    assert "检验 C（前 40 笔）：过期报价（z=3，0.3 秒后按卖一买）：40 笔" in text and "| btc | 1 |" in text

@@ -561,6 +561,8 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 **结论**：唯一站得住的优势是 5m 市场里币安急动后几百毫秒内的过期卖一，需要低延迟的程序；其余（跨周期组合、排队挂单、长周期市场）不赚钱或太小。为了在新数据上检验这一条，GitHub 录制从 9 月 30 日起记下 Polymarket 转发的币安价格和 Coinbase 逐笔成交（都带交易所时间），盘口用交易所时间戳。
 
+**检验 C**（2026-09-30 09:00 UTC 写死在 `latency.C_*`，那时它的数据还没开始录）：GitHub 前向录制，9 月 30 日 11:00 UTC 起开始的 btc/eth/sol/xrp/doge 5m 市场；各币种自己的 Coinbase 逐笔成交在剩 240–60 秒时第一次相对至少一秒前涨跌超过 3σ，0.3 秒后按交易所时间戳盘口的卖一买顺势一方，付 taker 费，持有到结算；合并后按触发时间取前 3,000 笔判定一次（按每份 +2¢ 估计约有四分之三的把握通过，约三天）。和上面的 2σ/0.4 秒检验一起，两个检验各自要 p < 0.025 才算通过，合计误报率 5%。汇总在 `polymarket-kacho` 的 `mode: latency`（[`real/latency-test-c.md`](real/latency-test-c.md)）。
+
 ## 来源
 
 - 延迟套利与 taker 费：[Finance Magnates：dynamic fees to curb latency arbitrage](https://www.financemagnates.com/cryptocurrency/polymarket-introduces-dynamic-fees-to-curb-latency-arbitrage-in-short-term-crypto-markets/)

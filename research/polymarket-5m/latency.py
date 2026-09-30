@@ -53,6 +53,18 @@ before any of these books were exported: judged once, on the first 700 such trad
 among markets starting from 2026-09-29 20:30 UTC (run with --since "2026-09-29 20:30" on the daily
 exports); with fewer the run reports the count and no verdict, so watching the data arrive cannot
 pick a favourable stopping point.
+
+Test C, fixed 2026-09-30 09:00 UTC, before any of its data was recorded (the Coinbase feed starts
+with the forward run dispatched after 10:00 UTC): on the GitHub forward recordings, 5m markets of
+btc, eth, sol, xrp and doge starting from 2026-09-30 11:00 UTC; trigger on each coin's Coinbase
+trade prints (exchange time) as in `triggers` with z = 3; buy the side of the move at the
+exchange-stamped ask 0.3 s after the triggering print; taker fee; held to settlement. All coins
+pooled, judged once on the first 3,000 trades in trigger-time order (see C_*); fewer give no
+verdict. Why: the May-August study with every Binance trade (cross.py stale, README section 20)
+puts the edge at +2..3c within 300-500 ms, where the sparse Binance feeds used so far (about one
+print a second) cannot see it; 3,000 trades give about three chances in four of passing at +2c.
+With two tests running (the one above and test C), each passes only with p < 0.025 (FAMILY_ALPHA),
+so the chance of a false pass stays 5%.
 """
 from __future__ import annotations
 
@@ -77,6 +89,11 @@ NEXT_Z, NEXT_LAG = 2.0, 0.4  # the next preregistered test, for books after 2026
 NEXT_SINCE, NEXT_N = "2026-09-29 20:30", 700  # judged once, on the first NEXT_N trades from NEXT_SINCE
 ZS = (2.0, 3.0, 4.0)
 TAUS = (240, 60)
+# Test C: Coinbase-triggered, all recorded coins pooled, on the GitHub forward recordings.
+C_SPOT, C_Z, C_LAG, C_N = "coinbase", 3.0, 0.3, 3000
+C_SINCE = "2026-09-30 11:00"
+C_COINS = ("btc", "eth", "sol", "xrp", "doge")
+FAMILY_ALPHA = 0.025  # the next test and test C: two tests, 5% in all
 
 
 def _read(d, pattern):
@@ -288,10 +305,10 @@ def fmt(t, reps):
             f"{p:.4f} | {t['size'].median():.0f}")
 
 
-def verdict(t, z, lag, reps):
+def verdict(t, z, lag, reps, alpha=0.05):
     p = bo.fair_price_pvalue(t["pnl"].to_numpy(), (t["price"] + t["fee"]).to_numpy(), sims=reps) \
         if len(t) >= 10 and t["pnl"].mean() > 0 else 1.0
-    ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < 0.05
+    ok = len(t) >= 10 and t["pnl"].mean() > 0 and p < alpha
     return (f"过期报价（z={z:g}，{lag:g} 秒后按卖一买）：{len(t)} 笔，EV "
             f"{100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，p = {p:.4f} → {'通过' if ok else '没通过'}")
 
@@ -337,7 +354,7 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
             elif len(t) < NEXT_N:
                 verdicts.append(head + f"目前 {len(t)} 笔，不到 {NEXT_N} 笔，不判定")
             else:
-                verdicts.append(head + verdict(t.head(NEXT_N), z, NEXT_LAG, reps))
+                verdicts.append(head + verdict(t.head(NEXT_N), z, NEXT_LAG, reps, FAMILY_ALPHA))
     L += ["## 真实盘口上的吃单规则", "",
           "剩 τ 秒时，强势方卖一在区间内就按卖一买 1 份（盘口 10 秒内有更新才算），付 taker 费，持有到结算。", "",
           "| # | 规则 | 笔数 / 胜率 / 平均价 / EV / p / 卖一挂单量中位 |", "|---:|---|---|"]
@@ -358,6 +375,62 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
     print("\n".join(L))
 
 
+def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,)):
+    """Trades of the stale-quote rule on each coin's own spot feed and book, pooled: one row per
+    (coin, market, lag) with the trigger time `t`."""
+    lo = pd.Timestamp(since, tz="UTC").timestamp()
+    out = []
+    for coin, dirs in sorted(dirs_by_coin.items()):
+        try:
+            books, markets, spot_trades = load(*dirs, spot=spot)
+        except FileNotFoundError:
+            continue
+        markets = markets[markets["start_ts"] >= lo]
+        books = books[books["market_id"].isin(set(markets["market_id"]))]
+        if markets.empty or books.empty:
+            continue
+        _, sigma = spot_grid(spot_trades)
+        trig = triggers(markets, spot_trades, sigma, z)
+        book = Book(books)
+        for lag in lags:
+            t = trade(trig, book, lag, False)
+            t["coin"], t["lag"] = coin, lag
+            out.append(t)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["t", "pnl", "coin", "lag"])
+
+
+def run_pooled(roots, out, reps=20000):
+    """Test C on every <root>/**/bundle-<coin>/latency directory: judged once on the first C_N
+    trades in trigger-time order, pooled over C_COINS; fewer trades give the count, no verdict."""
+    dirs = {}
+    for r in roots:
+        for d in sorted(Path(r).glob("**/bundle-*/latency")):
+            coin = d.parent.name.removeprefix("bundle-")
+            if coin in C_COINS:
+                dirs.setdefault(coin, []).append(d)
+    t = pooled_trades(dirs, C_SINCE, lags=sorted(set(LAGS) | {C_LAG}))
+    L = [f"# 检验 C：{C_SPOT} 触发、{len(C_COINS)} 个币种合并的过期报价（GitHub 前向录制）", "",
+         f"事先写死：{C_SINCE} UTC 起开始的 5m 市场；{C_SPOT} 逐笔成交在剩 240–60 秒时第一次相对至少一秒前涨跌超过 "
+         f"{C_Z:g}σ，{C_LAG:g} 秒后按交易所时间戳盘口的卖一买顺势一方，付 taker 费，持有到结算；"
+         f"各币种合并按触发时间取前 {C_N:,} 笔判定一次，EV > 0 且精确 p < {FAMILY_ALPHA} 才算通过"
+         "（两个预注册检验合计误报率 5%）。", "",
+         "| 币种 | 录制目录 | 触发（按 L = 检验值） |", "|---|---:|---:|"]
+    main_t = t[t["lag"] == C_LAG].sort_values("t", kind="stable") if len(t) else t
+    for coin in C_COINS:
+        L.append(f"| {coin} | {len(dirs.get(coin, []))} | {int((main_t['coin'] == coin).sum()) if len(main_t) else 0:,} |")
+    L += ["", "| L | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---:|---|---|---|---|---|---|"]
+    for lag, g in t.groupby("lag") if len(t) else []:
+        L.append(f"| {lag:g} 秒 | {fmt(g, reps)} |")
+    head = f"检验 C（前 {C_N:,} 笔）："
+    if len(main_t) < C_N:
+        L += ["", head + f"目前 {len(main_t):,} 笔，不到 {C_N:,} 笔，不判定。"]
+    else:
+        L += ["", head + verdict(main_t.head(C_N), C_Z, C_LAG, reps, FAMILY_ALPHA)]
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("export_dir", nargs="+", help="one or more export directories (e.g. the daily ones)")
@@ -367,8 +440,13 @@ def main(argv=None):
     ap.add_argument("--until", help="only markets starting before this UTC date")
     ap.add_argument("--label", default="")
     ap.add_argument("--spot", default="binance", choices=sorted(SPOT), help="trade feed that triggers")
+    ap.add_argument("--pooled", action="store_true",
+                    help="test C: export_dir are roots holding recording bundle-<coin>/latency directories")
     a = ap.parse_args(argv)
-    run(a.export_dir, a.out, a.reps, a.since, a.until, a.label, a.spot)
+    if a.pooled:
+        run_pooled(a.export_dir, a.out, a.reps)
+    else:
+        run(a.export_dir, a.out, a.reps, a.since, a.until, a.label, a.spot)
 
 
 if __name__ == "__main__":

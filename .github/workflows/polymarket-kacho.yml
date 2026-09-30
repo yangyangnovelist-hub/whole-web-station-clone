@@ -96,7 +96,7 @@ jobs:
           done
           python forward.py report --store "$store" --onchain-since 0 --out real/forward-replay.md
 
-      - name: "Latency: the stale-quote test on the forward recordings' exchange-stamped books"
+      - name: "Latency: the stale-quote tests on the forward recordings' exchange-stamped books"
         if: steps.mode.outputs.mode == 'latency'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,12 +108,14 @@ jobs:
           for id in $ids; do
             gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null || continue
             mkdir -p "$rec/$id/x"
-            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" bundle-btc/latency 2>/dev/null || continue
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'bundle-*/latency' 2>/dev/null || continue
+            rm -f "$rec/$id/raw.tgz"
             [ -d "$rec/$id/x/bundle-btc/latency" ] && dirs+=("$rec/$id/x/bundle-btc/latency") && echo "recording-$id has latency files"
           done
           [ ${#dirs[@]} -gt 0 ] || { echo "no recording has latency files yet"; exit 0; }
           python latency.py "${dirs[@]}" --since "2026-09-30 05:00" --out real/latency-github.md \
-            --label "（GitHub 前向录制，2026-09-30 05:00 UTC 起开始的市场）"
+            --label "（GitHub 前向录制，2026-09-30 05:00 UTC 起开始的市场）" || true
+          python latency.py "$rec" --pooled --out real/latency-test-c.md
 
       - name: "Cross: 5m / 15m / 1h markets ending together (cross.py)"
         if: steps.mode.outputs.mode == 'cross'
