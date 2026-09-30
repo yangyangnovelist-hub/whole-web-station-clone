@@ -1226,14 +1226,19 @@ def _spot_state(binance):
     return rt, lp, grid.diff().rolling(600, min_periods=300).std()
 
 
-def fade_trades(feat, mkts, binance, jumps=FADE_JUMPS, thetas=FADE_THETAS, lag_ms=300, quiet=0.5, health=True):
+def fade_trades(feat, mkts, binance, jumps=FADE_JUMPS, thetas=FADE_THETAS, lags=GATE_LAGS + (1000,), quiet=0.5,
+                spot_lag_ms=2000, min_shares=5.0, health=True):
     """The mirror of the gated rule (5m markets): the Polymarket Up mid moves by at least `jump`
     within a second while Binance moves less than `quiet` sigma over the same second, so the move is
     not explained by spot. With the mid a second earlier as the prior and that second's Binance move,
     fair Up = Phi(Phi^-1(P_prev) + dx / (sigma * twap_std_factor(t))); the side the move made cheaper
     is bought at its ask lag_ms later if fair - ask - fee >= theta. Decisions on every snapshot with
-    240..15 s left (recorder clock); first trade per market, jump and theta. With `health`, the three
-    quotes used must be sane and the book must have changed around the signal and the fill."""
+    240..15 s left (recorder clock); first trade per market, lag, jump and theta. Spot must also have
+    been quiet for `spot_lag_ms` before the prior (so the jump is not Polymarket catching up with an
+    earlier spot move), and at least one Binance trade must have arrived within the second. With
+    `health`, the three quotes must be sane, the book must have changed within HEALTH_ALIVE before the
+    prior, and at least once after the signal and by the fill row (so the fill is not a repeated copy
+    of the jump); the ask must show at least `min_shares`."""
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -1262,13 +1267,16 @@ def fade_trades(feat, mkts, binance, jumps=FADE_JUMPS, thetas=FADE_THETAS, lag_m
         ok = (k1 >= 0) & (t - fts[np.maximum(k1, 0)] <= 1500) & sane[k] & sane[np.maximum(k1, 0)]
         dm = mid_up[k] - mid_up[np.maximum(k1, 0)]
         j0, j1 = np.searchsorted(rt, t - 1000, "right") - 1, np.searchsorted(rt, t, "right") - 1
-        dx = np.where((j0 >= 0) & (j1 >= 0), lp[np.maximum(j1, 0)] - lp[np.maximum(j0, 0)], np.nan)
+        dx = np.where((j0 >= 0) & (j1 > j0), lp[np.maximum(j1, 0)] - lp[np.maximum(j0, 0)], np.nan)
+        jq = np.searchsorted(rt, t - 1000 - spot_lag_ms, "right") - 1
+        dxq = np.where(jq >= 0, lp[np.maximum(j1, 0)] - lp[np.maximum(jq, 0)], np.nan)
         sg = sigma.reindex(t // 1000 - 2).to_numpy()
         with np.errstate(invalid="ignore"):
-            cand = np.flatnonzero(ok & (np.abs(dm) >= min(jumps)) & (np.abs(dx) <= quiet * sg) & (sg > 0))
+            cand = np.flatnonzero(ok & (np.abs(dm) >= min(jumps)) & (np.abs(dx) <= quiet * sg)
+                                  & (np.abs(dxq) <= quiet * sg) & (sg > 0))
         done = set()
         for i in cand:
-            if health and not changed_near(changes, t[i], HEALTH_ALIVE[0], 10**12):
+            if health and not changed_near(changes, fts[k1[i]], HEALTH_ALIVE[0], 10**12):
                 continue
             p_prev = min(max(mid_up[k1[i]], 0.005), 0.995)
             t_mkt = (t[i] - (mk["end"] - bo.WINDOW_S * 1000)) / 1000
@@ -1276,37 +1284,43 @@ def fade_trades(feat, mkts, binance, jumps=FADE_JUMPS, thetas=FADE_THETAS, lag_m
             p1 = float(norm.cdf(norm.ppf(p_prev) + dx[i] / fac))
             up = dm[i] < 0  # the move made Up cheaper: buy Up; else buy Down
             fair = p1 if up else 1 - p1
-            kk = np.searchsorted(fts, t[i] + lag_ms, "left")
-            if kk >= len(f) or fts[kk] > t[i] + lag_ms + 1000:
-                continue
-            if health and not (sane[kk] and changed_near(changes, fts[kk], 10**12, HEALTH_ALIVE[1])):
-                continue
-            px = ua[kk] if up else da[kk]
-            if not (np.isfinite(px) and 0.02 <= px <= 0.98):
-                continue
-            fee = 0.07 * px * (1 - px)
             won = float(mk["up_won"] == (1.0 if up else 0.0))
-            for jump in jumps:
-                if abs(dm[i]) < jump:
+            for lag in lags:
+                kk = np.searchsorted(fts, t[i] + lag, "left")
+                if kk >= len(f) or fts[kk] > t[i] + lag + 1000:
                     continue
-                for th in thetas:
-                    if (jump, th) in done or fair - px - fee < th:
+                if health and not (sane[kk] and changed_near(changes, fts[kk], fts[kk] - t[i] - 1, HEALTH_ALIVE[1])):
+                    continue
+                px = ua[kk] if up else da[kk]
+                sz = uas[kk] if up else das[kk]
+                if not (np.isfinite(px) and 0.02 <= px <= 0.98 and np.isfinite(sz) and sz >= min_shares):
+                    continue
+                fee = float(taker_rate(fts[kk])) * px * (1 - px)
+                for jump in jumps:
+                    if abs(dm[i]) < jump:
                         continue
-                    done.add((jump, th))
-                    rows.append((mid, jump, th, int(t[i]), (mk["end"] - t[i]) / 1000, float(dm[i]),
-                                 float(dx[i] / sg[i]), fair, px, uas[kk] if up else das[kk], fee, won, won - px - fee))
-    return pd.DataFrame(rows, columns=["market_id", "jump", "theta", "t", "tau", "dmid", "dx_sigma", "fair", "price",
-                                       "size", "fee", "won", "pnl"])
+                    for th in thetas:
+                        if (lag, jump, th) in done or fair - px - fee < th:
+                            continue
+                        done.add((lag, jump, th))
+                        rows.append((mid, lag, jump, th, int(t[i]), (mk["end"] - t[i]) / 1000, float(dm[i]),
+                                     float(dx[i] / sg[i]), fair, px, sz, fee, won, won - px - fee))
+    return pd.DataFrame(rows, columns=["market_id", "lag", "jump", "theta", "t", "tau", "dmid", "dx_sigma", "fair",
+                                       "price", "size", "fee", "won", "pnl"])
 
 
 FOLLOW_SIZES = (100, 500, 2000)
 
 
-def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lag_ms=300, slip=0.01, health=True):
+def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lags=GATE_LAGS + (1000,), slip=0.01, min_shares=5.0,
+                  health=True):
     """Copy large Polymarket takers (5m markets): a taker print of at least `size` USDC with
     240..15 s left is followed by buying the side it bet on (a buy of a token, or the other token
     after a sell) at that side's ask lag_ms after the print was received, if the ask is at most
-    `slip` above the price the print implies for that side; first trade per market and size."""
+    `slip` above the price the print implies for that side and shows at least `min_shares`; first trade
+    per market, lag and size. With `health`, the quotes must be sane, the book must have changed within
+    HEALTH_ALIVE before the print and at least once after the print and by the fill row (so the fill
+    reflects the print), and the fee is the rate in force (taker_rate)."""
     import numpy as np
     import pandas as pd
     m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
@@ -1316,7 +1330,7 @@ def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lag_ms=300, slip=0.01,
     for mid, mk in m5.iterrows():
         side_of[str(mk["up_token"])] = (mid, "Up")
         side_of[str(mk["down_token"])] = (mid, "Down")
-    tr = trades[trades["instrument"].isin(side_of)]
+    tr = trades[trades["instrument"].isin(side_of) & trades["taker_side"].isin(["buy", "sell"])]
     by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
           for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
     health_of = {}
@@ -1335,28 +1349,30 @@ def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lag_ms=300, slip=0.01,
         fts = f["timestamp_ms"].to_numpy()
         if health and mid not in health_of:
             health_of[mid] = book_health(f)
-        kk = np.searchsorted(fts, t + lag_ms, "left")
-        if kk >= len(f) or fts[kk] > t + lag_ms + 1000:
-            continue
-        if health:
-            sane, changes = health_of[mid]
-            if not (sane[kk] and changed_near(changes, fts[kk], 10**12, HEALTH_ALIVE[1])
-                    and changed_near(changes, t, HEALTH_ALIVE[0], 10**12)):
-                continue
-        px = f["up_best_ask"].to_numpy()[kk] if side == "Up" else f["down_best_ask"].to_numpy()[kk]
-        size = f["up_ask_size"].to_numpy()[kk] if side == "Up" else f["down_ask_size"].to_numpy()[kk]
-        if not (np.isfinite(px) and 0.02 <= px <= 0.98 and px <= implied + slip + 1e-9):
-            continue
-        fee = 0.07 * px * (1 - px)
         won = float(mk["up_won"] == (1.0 if side == "Up" else 0.0))
-        for s_min in sizes:
-            if notional < s_min or (mid, s_min) in done:
+        for lag in lags:
+            kk = np.searchsorted(fts, t + lag, "left")
+            if kk >= len(f) or fts[kk] > t + lag + 1000:
                 continue
-            done.add((mid, s_min))
-            rows.append((mid, s_min, t, (mk["end"] - t) / 1000, side, notional, implied, px, size, fee, won,
-                         won - px - fee))
-    return pd.DataFrame(rows, columns=["market_id", "min_usdc", "t", "tau", "side", "notional", "implied", "price",
-                                       "size", "fee", "won", "pnl"])
+            if health:
+                sane, changes = health_of[mid]
+                if not (sane[kk] and changed_near(changes, t, HEALTH_ALIVE[0], 10**12)
+                        and changed_near(changes, fts[kk], fts[kk] - t - 1, 10**12)):  # moved in (t, fill]
+                    continue
+            px = f["up_best_ask"].to_numpy()[kk] if side == "Up" else f["down_best_ask"].to_numpy()[kk]
+            size = f["up_ask_size"].to_numpy()[kk] if side == "Up" else f["down_ask_size"].to_numpy()[kk]
+            if not (np.isfinite(px) and 0.02 <= px <= 0.98 and px <= implied + slip + 1e-9
+                    and np.isfinite(size) and size >= min_shares):
+                continue
+            fee = float(taker_rate(fts[kk])) * px * (1 - px)
+            for s_min in sizes:
+                if notional < s_min or (mid, lag, s_min) in done:
+                    continue
+                done.add((mid, lag, s_min))
+                rows.append((mid, lag, s_min, t, (mk["end"] - t) / 1000, side, notional, implied, px, size, fee, won,
+                             won - px - fee))
+    return pd.DataFrame(rows, columns=["market_id", "lag", "min_usdc", "t", "tau", "side", "notional", "implied",
+                                       "price", "size", "fee", "won", "pnl"])
 
 
 def _period_table(df, keys, reps, title_cols):
@@ -1377,7 +1393,9 @@ def _period_table(df, keys, reps, title_cols):
 
 
 def fadefollow(kind, workdir, out, days=None, reps=5000, health=True):
-    """fade or follow on every day; parameters compared on May 25 - Jul 15, checked later."""
+    """fade or follow on every day; parameters chosen on May 25 - Jul 15 at 300 ms (highest EV among
+    cells with at least 100 trades) and only checked on the later days and lags."""
+    import numpy as np
     import pandas as pd
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -1406,20 +1424,34 @@ def fadefollow(kind, workdir, out, days=None, reps=5000, health=True):
     if kind == "fade":
         L = [f"# 反向：Polymarket 自己的跳动（{DS}，5m 市场，记录机时钟）", "",
              "候选：剩 240–15 秒时每个快照，Up 中间价一秒内变动 ≥ 跳动幅度，而币安同一秒的涨跌不到 0.5σ（现货没动）。"
-             "以一秒前的中间价为原来的概率，加上这一秒币安的涨跌，算出公平价；买这次跳动变便宜的一方，300 ms 后按卖一，"
+             "以一秒前的中间价为原来的概率，加上这一秒币安的涨跌，算出公平价；买这次跳动变便宜的一方，L 毫秒后按卖一（卖一至少 5 份），"
              "只在 公平价 − 卖一 − taker 费 ≥ θ 时成交；每个市场、每组（跳动幅度, θ）取第一笔，持有到结算。"
              "加盘口健康检查。5 月 25 日–7 月 15 日比较参数，之后只核对。探索性质。", ""]
-        keys, cols = ["jump", "theta"], ["跳动", "θ"]
+        keys, cols = ["lag", "jump", "theta"], ["L（ms）", "跳动", "θ"]
     else:
         L = [f"# 跟随大单（{DS}，5m 市场，记录机时钟）", "",
              "候选：剩 240–15 秒时每一笔金额 ≥ 门槛的 Polymarket 吃单（买某个代币，或卖出后等于买另一个）；"
-             "记录机收到后 300 ms 按同一方向的卖一买，只在卖一不超过这笔成交隐含的价格 1¢ 以上时成交；"
+             "记录机收到后 L 毫秒按同一方向的卖一买，只在卖一不超过这笔成交隐含的价格 1¢ 以上、且至少 5 份时成交；"
              "每个市场、每个门槛取第一笔，持有到结算。加盘口健康检查。5 月 25 日–7 月 15 日比较门槛，之后只核对。探索性质。", ""]
-        keys, cols = ["min_usdc"], ["金额门槛（USDC）"]
+        keys, cols = ["lag", "min_usdc"], ["L（ms）", "金额门槛（USDC）"]
     if df.empty:
         L.append("没有可用的交易。")
     else:
-        L += _period_table(df, keys, reps, cols)
+        pick = [k for k in keys if k != "lag"]
+        d = df.copy()
+        d["period"] = np.where(d["day"] <= "2026-07-15", "A", "later")
+        a = d[(d["period"] == "A") & (d["lag"] == 300)].groupby(pick)["pnl"].agg(["mean", "size"])
+        a = a[a["size"] >= 100]
+        if len(a):
+            best = a["mean"].idxmax()
+            best = best if isinstance(best, tuple) else (best,)
+            sel = df.copy()
+            for k, v in zip(pick, best):
+                sel = sel[sel[k] == v]
+            L += [f"## 在 A 段（300 ms）选出的参数：{'，'.join(f'{c} = {v}' for c, v in zip(cols[1:], best))}"
+                  f"（A 段每份 {100 * a['mean'].max():+.2f}¢）", ""]
+            L += _period_table(sel, ["lag"], reps, ["L（ms）"]) + [""]
+        L += ["## 全部格子（描述用）", ""] + _period_table(df, keys, reps, cols)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 

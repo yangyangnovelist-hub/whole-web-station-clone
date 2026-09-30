@@ -323,11 +323,20 @@ def test_fade_buys_the_side_a_spotless_jump_made_cheap():
     price[tt >= t_jump - 60_000] = price[np.searchsorted(tt, t_jump - 60_000)]  # flat around the jump
     binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
     f = cross.fade_trades(feat, mkts, binance)
+    f = f[f["lag"] == 300]
     assert len(f) == len(cross.FADE_JUMPS) * len(cross.FADE_THETAS)
     assert (f["t"] == t_jump).all() and (f["price"] == 0.36).all() and (f["won"] == 1.0).all()
     assert f["fair"].iloc[0] == pytest.approx(0.50, abs=0.01)
     stalled = feat.assign(up_ask_size=25.0)  # the same prices from a frozen feed: nothing
     assert cross.fade_trades(stalled, mkts, binance).empty
+    # a live book whose jump row is repeated unchanged for 2 s and then reverts (a recorder backlog):
+    # the cheap 0.36 was never shown by a row that arrived after the signal, so it is not bought
+    frozen = (ts >= t_jump) & (ts < t_jump + 2000)
+    rep = feat.copy()
+    rep.loc[frozen, "up_ask_size"] = rep.loc[ts == t_jump, "up_ask_size"].iloc[0]
+    rep.loc[ts >= t_jump + 2000, ["up_best_bid", "up_best_ask", "down_best_bid", "down_best_ask"]] = [0.49, 0.51, 0.49, 0.51]
+    g = cross.fade_trades(rep, mkts, binance)
+    assert not ((g["price"] == 0.36) & (g["t"] < t_jump + 2000)).any()
 
 
 def test_follow_copies_large_takers_within_a_cent():
@@ -339,14 +348,24 @@ def test_follow_copies_large_takers_within_a_cent():
     trades = pd.DataFrame({"recv_ts_ms": [t_print - 5_000, t_print], "instrument": ["u", "u"], "price": [0.50, 0.50],
                            "size": [100.0, 5000.0], "taker_side": ["buy", "buy"]})
     f = cross.follow_trades(feat, mkts, trades)
+    f = f[f["lag"] == 300]
     assert f["min_usdc"].tolist() == list(cross.FOLLOW_SIZES) and (f["t"] == t_print).all()
     assert (f["side"] == "Up").all() and (f["price"] == 0.51).all()
     assert f["pnl"].iloc[0] == pytest.approx(1 - 0.51 - 0.07 * 0.51 * 0.49)
     sold = trades.assign(taker_side="sell", price=0.48)  # selling Up at 0.48 bets on Down at 0.52: Down ask 0.50
     g = cross.follow_trades(feat, mkts, sold)
+    g = g[g["lag"] == 300]
     assert (g["side"] == "Down").all() and (g["price"] == 0.50).all() and (g["won"] == 0.0).all()
     far = trades.assign(price=0.45)  # the ask is now 6c above the print: not followed
     assert cross.follow_trades(feat, mkts, far).empty
+    # a book that did not change between the print and the fill has not caught up with it: not followed
+    still = _live_book(ts, E + 1, (0.49, 0.50, 0.49, 0.51), (0.49, 0.50, 0.49, 0.51))  # tops never move
+    still.loc[(ts >= t_print) & (ts < t_print + 1300), "up_ask_size"] = 25.0          # nor sizes after the print
+    assert cross.follow_trades(still, mkts, trades.iloc[1:]).query("lag == 300").empty
+    live = _live_book(ts, E + 1, (0.49, 0.50, 0.49, 0.51), (0.49, 0.50, 0.49, 0.51))
+    assert len(cross.follow_trades(live, mkts, trades.iloc[1:]).query("lag == 300")) == 3  # control
+    dust = feat.assign(up_ask_size=np.where(ts >= t_print + 200, 2.0 + (np.arange(len(ts)) % 2), 25.0))
+    assert cross.follow_trades(dust, mkts, trades.iloc[1:]).empty  # fewer than 5 shares at the ask
 
 
 def test_gated_trades_measure_other_takers():
