@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days]).
-requested: 2026-09-30 stale 5m quotes against every Binance trade, all days
+requested: 2026-09-30 07:15 stale quotes on 5m, 15m and 1h markets against every Binance trade, all days
 cmd: stale

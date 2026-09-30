@@ -76,6 +76,6 @@ def test_stale_quote_timing():
     price[tt >= t_jump] *= 1.004
     binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
     t = cross.stale_trades(feat, mkts, binance, zs=(6.0,), lags=(0, 200, 500))
-    assert list(t["t0"].unique()) == [t_jump + 150]
+    assert list(t["t0"].unique()) == [t_jump + 150] and set(t["horizon"]) == {5}
     assert dict(zip(t["lag"], t["price"])) == {0: 0.50, 200: 0.50, 500: 0.70}
     assert t["still"].tolist() == [True, True, False]

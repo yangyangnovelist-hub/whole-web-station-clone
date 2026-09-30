@@ -178,8 +178,9 @@ def read_binance(path):
     return b.sort_values("recv_ts_ms", kind="stable").reset_index(drop=True)
 
 
-def stale_trades(feat, mkts, binance, zs=(2.0, 3.0, 4.0), lags=(0, 100, 200, 300, 500, 1000, 2000, 5000)):
-    """For each 5m market: the first Binance trade (as received) in the 240..60 s-left window whose
+def stale_trades(feat, mkts, binance, zs=(2.0, 3.0, 4.0), lags=(0, 100, 200, 300, 500, 1000, 2000, 5000),
+                 horizons=(5, 15, 60)):
+    """For each market (5m, 15m, 1h): the first Binance trade (as received) in the 240..60 s-left window whose
     price moved more than z sigma from the last trade at least a second earlier; buy that side at
     the ask of the first snapshot at or after receipt + L. Everything in the recorder's clock."""
     import numpy as np
@@ -195,7 +196,7 @@ def stale_trades(feat, mkts, binance, zs=(2.0, 3.0, 4.0), lags=(0, 100, 200, 300
     last = pd.Series(lp_s, index=sec).groupby(level=0).last()
     grid = last.reindex(range(int(sec[0]), int(sec[-1]) + 1)).ffill()
     sigma = grid.diff().rolling(600, min_periods=300).std()
-    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    m5 = mkts[mkts["horizon"].isin(horizons) & mkts["up_won"].notna()].set_index("market_id")
     by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
           for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
     rows = []
@@ -229,8 +230,9 @@ def stale_trades(feat, mkts, binance, zs=(2.0, 3.0, 4.0), lags=(0, 100, 200, 300
                     continue
                 won = float(mk["up_won"] == (1.0 if up else 0.0))
                 fee = 0.07 * p * (1 - p)
-                rows.append((mid, z, lag, t0, won, p, fee, won - p - fee, size, p <= a0 + 1e-9))
-    return pd.DataFrame(rows, columns=["market_id", "z", "lag", "t0", "won", "price", "fee", "pnl", "size", "still"])
+                rows.append((mid, int(mk["horizon"]), z, lag, t0, won, p, fee, won - p - fee, size, p <= a0 + 1e-9))
+    return pd.DataFrame(rows, columns=["market_id", "horizon", "z", "lag", "t0", "won", "price", "fee", "pnl", "size",
+                                       "still"])
 
 
 def stale(workdir, out, days=None, reps=5000):
@@ -258,13 +260,13 @@ def stale(workdir, out, days=None, reps=5000):
             print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
-    L = [f"# 币安跳变后 5m 卖一还挂多久（{DS}，逐笔币安、100 ms 盘口，记录机的时钟）", "",
+    L = [f"# 币安跳变后 5m / 15m / 1h 的卖一还挂多久（{DS}，逐笔币安、100 ms 盘口，记录机的时钟）", "",
          f"{len(arcs)} 个日档。触发：窗口剩 240–60 秒时，第一笔与至少一秒前最后一笔相比涨跌超过 zσ 的币安成交，"
          "以记录机收到它的时刻为 0；L 毫秒后按那一刻快照里的卖一买顺势一方，付 taker 费，持有到结算。探索性质。", ""]
     if df.empty:
         L.append("没有可用的数据。")
-    for z, g in df.groupby("z") if not df.empty else []:
-        L += [f"## z = {z:g}（{g['market_id'].nunique():,} 个市场触发）", "",
+    for (hz, z), g in df.groupby(["horizon", "z"]) if not df.empty else []:
+        L += [f"## {hz}m 市场，z = {z:g}（{g['market_id'].nunique():,} 个市场触发）", "",
               "| L | 笔数 | 胜率 | 平均价 | EV/份 | p | 卖一数量中位 | 卖一没动的比例 |", "|---:|---:|---:|---:|---:|---:|---:|---:|"]
         for lag, h in g.groupby("lag"):
             pv = bo.fair_price_pvalue(h["pnl"].to_numpy(), (h["price"] + h["fee"]).to_numpy(), sims=reps) \
