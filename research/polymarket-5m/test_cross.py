@@ -100,3 +100,24 @@ def test_maker_queue_fills():
     assert fav.loc["join", "pnl"] == pytest.approx(0.40)
     dog = o[o["which"] == "dog"]
     assert len(dog) == 2 and not dog["filled"].any()  # nobody sold Down
+
+
+def test_gated_trades_price_the_jump():
+    """A +0.4% Binance jump at E-100 s makes the fair Up price about 1; the ask is 0.50 until
+    400 ms after receipt, then 0.70. Every threshold qualifies at both lags, at the ask then."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.49, "up_best_ask": np.where(ts < t_jump + 150 + 400, 0.50, 0.70),
+                         "down_best_bid": 0.49, "down_best_ask": 0.51, "up_ask_size": 25.0, "down_ask_size": 30.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    price[tt >= t_jump] *= 1.004
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    g = cross.gated_trades(feat, mkts, binance, z0=6.0)
+    assert len(g) == len(cross.GATE_LAGS) * len(cross.GATE_THETAS) and (g["t0"] == t_jump + 150).all()
+    assert (g["fair"] > 0.99).all() and dict(zip(g["lag"], g["price"])) == {300: 0.50, 500: 0.70}
+    assert g.loc[g["lag"] == 300, "pnl"].iloc[0] == pytest.approx(1 - 0.50 - 0.07 * 0.25)
