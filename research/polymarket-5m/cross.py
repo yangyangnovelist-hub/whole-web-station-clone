@@ -264,7 +264,7 @@ def read_poly_trades(path):
 MAKER_TAUS = (240, 180, 120, 90, 60, 45, 30)
 
 
-def maker_orders(feat, mkts, trades, taus=MAKER_TAUS, latency_ms=200, cancel_s=10):
+def maker_orders(feat, mkts, trades, taus=MAKER_TAUS, latency_ms=200, cancel_s=10, binance=None, tag_z=1.5):
     """Resting buy orders in 5m markets, filled by a queue model on the real depth and prints.
 
     At `tau` seconds left the order reaches the book `latency_ms` after the decision, on the
@@ -273,7 +273,9 @@ def maker_orders(feat, mkts, trades, taus=MAKER_TAUS, latency_ms=200, cancel_s=1
     the ask). It fills once sells printed at its price exceed the size that was ahead of it, or
     as soon as any sell prints below its price; cancellations ahead of it are never counted, so
     fills come late rather than early. Unfilled orders are cancelled `cancel_s` before the close.
-    A fill pays no fee and is held to settlement."""
+    A fill pays no fee and is held to settlement. With `binance`, each fill is tagged `adverse`
+    when Binance moved at least tag_z sigma against the order between 1 s and 0.1 s before the
+    fill print (recorder clock): a maker who cancels on such moves would have avoided it."""
     import numpy as np
     import pandas as pd
     m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
@@ -282,6 +284,25 @@ def maker_orders(feat, mkts, trades, taus=MAKER_TAUS, latency_ms=200, cancel_s=1
     tr = {tok: (g["recv_ts_ms"].to_numpy(), g["price"].to_numpy(float), g["size"].to_numpy(float),
                 (g["taker_side"] == "sell").to_numpy())
           for tok, g in trades.groupby("instrument")}
+    if binance is not None and len(binance):
+        b_rt = binance["recv_ts_ms"].to_numpy()
+        b_lp = np.log(binance["price"].to_numpy())
+        last = pd.Series(b_lp, index=binance["trade_ts_ms"].to_numpy() // 1000).groupby(level=0).last()
+        b_grid = last.reindex(range(int(last.index.min()), int(last.index.max()) + 1)).ffill(limit=10)
+        b_sig = b_grid.diff().rolling(600, min_periods=300).std()
+
+    def adverse(fill_ms, up):
+        """Binance move against a buy of Up (down) or of Down (up) over the second before a fill."""
+        if binance is None or not len(binance):
+            return np.nan
+        i0, i1 = np.searchsorted(b_rt, [fill_ms - 1000, fill_ms - 100], "right")
+        if i1 - i0 < 2:
+            return np.nan
+        sg = b_sig.get(int(fill_ms // 1000) - 1, np.nan)
+        if not np.isfinite(sg) or sg <= 0:
+            return np.nan
+        move = (b_lp[i1 - 1] - b_lp[i0]) / sg
+        return float((-move if up else move) >= tag_z)
     rows = []
     for mid, mk in m5.iterrows():
         if mid not in by or mk.get("up_token") is None:
@@ -323,9 +344,10 @@ def maker_orders(feat, mkts, trades, taus=MAKER_TAUS, latency_ms=200, cancel_s=1
                     if cands:
                         fill_t = min(cands)
                     rows.append((mid, mk["end"], tau, which, mode, price, ahead, np.isfinite(fill_t),
-                                 (fill_t - ta) / 1000 if np.isfinite(fill_t) else np.nan, won, won - price))
+                                 (fill_t - ta) / 1000 if np.isfinite(fill_t) else np.nan, won, won - price,
+                                 adverse(fill_t, up) if np.isfinite(fill_t) else np.nan))
     return pd.DataFrame(rows, columns=["market_id", "end", "tau", "which", "mode", "price", "ahead", "filled",
-                                       "fill_s", "won", "pnl"])
+                                       "fill_s", "won", "pnl", "adverse"])
 
 
 BANDS = (0.0, 0.1, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
@@ -348,8 +370,9 @@ def makers(workdir, out, days=None, reps=5000):
             local = fetch(name, workdir / name)
             feat, mk, rs = read_day(local)
             trades = read_poly_trades(local)
+            binance = read_binance(local)
             Path(local).unlink()
-            o = maker_orders(feat, market_table(mk, rs), trades)
+            o = maker_orders(feat, market_table(mk, rs), trades, binance=binance)
             o["day"] = name[15:25]
             parts.append(o)
             print(f"{name}: {len(trades):,} Polymarket prints, {o['market_id'].nunique() if len(o) else 0} markets, "
@@ -385,6 +408,21 @@ def makers(workdir, out, days=None, reps=5000):
             L.append(f"| {key[0]} | {key[1]} | {key[2]} | {key[3]} | {len(g):,} | {g['filled'].mean():.0%} | "
                      f"{fl['won'].mean():.1%} | {fl['price'].mean():.3f} | {100 * fl['pnl'].mean():+.2f}¢ | "
                      f"{100 * fl['pnl'].sum() / len(g):+.2f}¢ | {100 * ea:+.2f}¢ | {100 * eb:+.2f}¢ |")
+        # Stage A of the cancel-on-move idea: fills with and without an adverse Binance move in the
+        # second before them, maker rebate (0.2 x 0.07 x p(1-p), an upper bound) added. Fixed before
+        # the run: if the untagged fills still lose 1c or more per share, cancel-on-move is dropped.
+        fl = df[df["filled"]].copy()
+        fl["rebate"] = 0.2 * 0.07 * fl["price"] * (1 - fl["price"])
+        L += ["", "## 撤单能躲开多少：成交前一秒币安是否已经往不利方向动了 ≥ 1.5σ（加挂单返佣，返佣是上限）", "",
+              "| 挂法 | 成交前一秒有不利跳动 | 成交 | 每份盈亏（含返佣） | 胜率 | 平均价 |", "|---|---|---:|---:|---:|---:|"]
+        for (mode, tag), g in fl.dropna(subset=["adverse"]).groupby(["mode", "adverse"]):
+            L.append(f"| {mode} | {'有' if tag else '没有'} | {len(g):,} | {100 * (g['pnl'] + g['rebate']).mean():+.2f}¢ | "
+                     f"{g['won'].mean():.1%} | {g['price'].mean():.3f} |")
+        untagged = fl[fl["adverse"] == 0]
+        cells = untagged.groupby(["mode", "which", "tau", "band"], observed=True).filter(lambda g: len(g) >= 1000)
+        ev = 100 * (cells["pnl"] + cells["rebate"]).mean() if len(cells) else float("nan")
+        L += ["", f"事先定的放弃线：成交 ≥ 1,000 笔的格子里，没有不利跳动的成交合计每份 {ev:+.2f}¢ → "
+                  f"{'≤ −1¢，放弃“价格一动就撤单”的挂单' if not ev > -1 else '> −1¢，值得做第二步（撤单规则的模拟）'}。"]
         chosen = sorted([x for x in summary if len(x[2][x[2]["half"] == "A"]) >= 30 and x[3] > 0],
                         key=lambda x: -x[3])[:10]
         L += ["", f"## 前一半选出的 {len(chosen)} 个格子在后一半的检验（Bonferroni ÷ {max(len(chosen), 1)}）", "",

@@ -121,3 +121,25 @@ def test_gated_trades_price_the_jump():
     assert len(g) == len(cross.GATE_LAGS) * len(cross.GATE_THETAS) and (g["t0"] == t_jump + 150).all()
     assert (g["fair"] > 0.99).all() and dict(zip(g["lag"], g["price"])) == {300: 0.50, 500: 0.70}
     assert g.loc[g["lag"] == 300, "pnl"].iloc[0] == pytest.approx(1 - 0.50 - 0.07 * 0.25)
+
+
+def test_maker_fill_tagged_by_a_preceding_adverse_move():
+    """Binance drops 0.3% half a second before the join order on Up fills at E-70 s: tagged adverse;
+    the improve order filled at E-80 s saw no move before it: not adverse."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.60, "up_best_ask": 0.62, "down_best_bid": 0.38, "down_best_ask": 0.40,
+                         "up_ask_size": 20.0, "down_ask_size": 20.0, "up_bid_size": 100.0, "down_bid_size": 50.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0],
+                         "horizon": [5], "up_token": ["u"], "down_token": ["d"]})
+    trades = pd.DataFrame({"recv_ts_ms": [E - 80_000, E - 70_000], "instrument": ["u", "u"], "price": [0.60, 0.60],
+                           "size": [60.0, 50.0], "taker_side": ["sell", "sell"]})
+    rng = np.random.default_rng(1)
+    tt = np.arange(E - 1_200_000, E, 100)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 2e-6, len(tt))))
+    price[tt >= E - 70_500] *= 0.997
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 50, "price": price})
+    o = cross.maker_orders(feat, mkts, trades, taus=(90,), binance=binance)
+    fav = o[o["which"] == "fav"].set_index("mode")
+    assert fav.loc["join", "adverse"] == 1.0 and fav.loc["improve", "adverse"] == 0.0
