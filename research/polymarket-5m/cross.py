@@ -994,6 +994,42 @@ def datasets(out, queries=SCAN_QUERIES):
     print("\n".join(L))
 
 
+CARD_IDS = ("Sigrex/polymarket_btc_up_down_5m_251218_260909", "Sigrex/polymarket_btc_up_down_multihorizon",
+            "Sigrex/polymarket_btc_up_down_15m_250913_260908", "Houroux/polymarket-l2-history",
+            "trentmkelly/polymarket_historical_data", "marketlens/polymarket-btc-5m-l2-depth",
+            "aliplayer1/polymarket-crypto-updown", "THULab/polymarket_crypto_5m_15m",
+            "DineshKumar8399/polymarket-orderbook-dataset", "Mevboters/polymarket-arbitrage-trading-dataset",
+            "TimeSeventeen/Polymarket-v1", "TimeSeventeen/Polymarket-v2", "Joseph3222/polymarket-orderbook",
+            "polyorderbooks/polymarket-crypto-updown-orderbooks-l2", "Lazy108/binance-polymarket-orderflow")
+
+
+def cards(out, ids=CARD_IDS):
+    """Card, file list and sizes of candidate datasets, to see which hold sub-second BTC 5m books
+    after 2026-08-29."""
+    import json
+    L = ["# 候选数据集的说明和文件列表", ""]
+    for i in ids:
+        L += [f"## [{i}](https://huggingface.co/datasets/{i})", ""]
+        try:
+            meta = json.loads(_get(f"https://huggingface.co/api/datasets/{i}?blobs=true"))
+            files = [(f.get("rfilename", ""), f.get("size") or 0) for f in meta.get("siblings", [])]
+            total = sum(sz for _, sz in files)
+            L.append(f"{len(files):,} 个文件，共 {total / 1e9:.2f} GB，最后修改 {meta.get('lastModified', '')[:16]}。")
+            names = sorted(files)
+            show = names if len(names) <= 40 else names[:20] + [("…", 0)] + names[-20:]
+            L += ["", "```"] + [f"{n}  {sz:,}" for n, sz in show] + ["```"]
+        except Exception as e:
+            L.append(f"文件列表读取失败：{e}")
+        try:
+            card = _get(f"https://huggingface.co/datasets/{i}/resolve/main/README.md", 30).decode("utf-8", "replace")
+            L += ["", "<details><summary>README.md</summary>", "", "```", card[:6000], "```", "</details>"]
+        except Exception as e:
+            L.append(f"README 读取失败：{e}")
+        L.append("")
+        print(f"{i}: done", flush=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1003,6 +1039,9 @@ def main(argv=None):
     p = sub.add_parser("datasets")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-datasets.md")
+    p = sub.add_parser("cards")
+    p.add_argument("--workdir", default="/tmp/cross")
+    p.add_argument("--out", default="real/cross-cards.md")
     p = sub.add_parser("probe-trades")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-trades.md")
@@ -1023,6 +1062,8 @@ def main(argv=None):
         probe(a.workdir, a.out)
     elif a.cmd == "datasets":
         datasets(a.out)
+    elif a.cmd == "cards":
+        cards(a.out)
     elif a.cmd == "probe-trades":
         probe_trades(a.workdir, a.out)
     elif a.cmd == "analyze":
