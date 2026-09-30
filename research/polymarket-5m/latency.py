@@ -114,7 +114,7 @@ market moved after the order; test C's note counts its judged lag only. The rule
 unchanged. The recorder was also changed so it disconnects less: Gamma lookups no longer block the
 event loop, and markets that have settled are dropped from the resubscription list.
 
-Test F, fixed 2026-09-30 about 22:10 UTC, before any of its data was recorded (see F_*): test D's
+Test F, fixed 2026-09-30 about 21:40 UTC (commit f537fad at 21:42), before any of its data was recorded (see F_*): test D's
 first 39 live trades won 26% at an average price of 0.384 (-14.2c a share). A per-trade look
 (latency.py --diagnose-d, real/latency-test-d-diagnose.md) shows why: in nearly every trade the Up
 mid had already moved toward the side bought in the two seconds before the Coinbase print, so
@@ -165,7 +165,7 @@ C_MAX_GAP, C_REF_AGE, C_ALIVE = 10, 5.0, (30.0, 10.0)
 D_SPOT, D_Z0, D_LAG, D_THETA, D_N = "coinbase", 2.0, 0.3, 0.12, 1200
 D_SINCE, D_TAU_LO = "2026-09-30 14:00", 15
 D_COINS = ("btc",)
-# Test F (fixed 2026-09-30 about 22:10 UTC, before any of its data was recorded): test D's rule with
+# Test F (fixed 2026-09-30 21:42 UTC, before any of its data was recorded): test D's rule with
 # the trigger it was chosen on, Binance BTCUSDT trades (data-stream.binance.vision), not Coinbase.
 F_SPOT, F_Z0, F_LAG, F_THETA, F_N = "binancews", 2.0, 0.3, 0.12, 1200
 F_SINCE, F_TAU_LO = "2026-09-30 23:00", 15
@@ -742,7 +742,7 @@ def run_test_f(roots, out, reps=20000):
                        lambda mk, sp, sg, bk: gated_trades(mk, sp, sg, bk, lag=F_LAG, theta=F_THETA, z0=F_Z0,
                                                            tau_lo=F_TAU_LO), ["coin", "market_id"], notes)
     L = [f"# 检验 F：按公平价跳变筛选的过期报价，币安逐笔成交触发（BTC 5m，GitHub 前向录制）", "",
-         f"事先写死（9 月 30 日约 22:10 UTC，数据还没录）：{F_SINCE} UTC 起开始的 BTC 5m 市场；规则与检验 D 完全相同，"
+         f"事先写死（9 月 30 日 21:42 UTC，数据还没录）：{F_SINCE} UTC 起开始的 BTC 5m 市场；规则与检验 D 完全相同，"
          f"只是触发改用回测用的币安 BTCUSDT 逐笔成交（data-stream.binance.vision，交易所时间）：剩 240–{F_TAU_LO} 秒时，"
          f"与至少一秒前（不早于 {C_REF_AGE:g} 秒）相比涨跌超过 {F_Z0:g}σ 的每一笔币安成交是候选；以那一刻交易所显示的 Up 中间价"
          f"为原来的概率算公平价；{F_LAG:g} 秒后按卖一买顺势一方，只在 公平价 − 卖一 − taker 费 ≥ {100 * F_THETA:.0f}¢ 时成交，"
