@@ -35,6 +35,12 @@ DS = "whodisidk/polymarket-btc-updown-exchange-data"
 BASE = f"https://huggingface.co/datasets/{DS}/resolve/main/"
 
 
+def set_dataset(ds):
+    """Use another dataset of the same layout (e.g. whodisidk/polymarket-eth-updown-exchange-data)."""
+    global DS, BASE
+    DS, BASE = ds, f"https://huggingface.co/datasets/{ds}/resolve/main/"
+
+
 def fetch(name, dest=None):
     req = urllib.request.Request(BASE + name, headers={"User-Agent": "research"})
     with urllib.request.urlopen(req, timeout=600) as r:
@@ -402,7 +408,7 @@ def stale(workdir, out, days=None, reps=5000):
     arcs = archives(fetch("MANIFEST.txt").decode())
     if days:
         arcs = arcs[-int(days):]
-    parts = []
+    parts, delays = [], []
     for name, _ in arcs:
         try:
             local = fetch(name, workdir / name)
@@ -412,6 +418,10 @@ def stale(workdir, out, days=None, reps=5000):
             t = stale_trades(feat, market_table(mk, rs), binance)
             t["day"] = name[15:25]
             parts.append(t)
+            if len(binance):
+                q = np.nanpercentile(binance["recv_ts_ms"] - binance["trade_ts_ms"], [10, 50, 90])
+                delays.append(q)
+                print(f"  Binance trade -> recorder: p10 {q[0]:.0f} ms, median {q[1]:.0f} ms, p90 {q[2]:.0f} ms", flush=True)
             print(f"{name}: {len(binance):,} Binance trades, {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
         except Exception:
             import traceback
@@ -421,6 +431,9 @@ def stale(workdir, out, days=None, reps=5000):
     L = [f"# 币安跳变后 5m / 15m / 1h 的卖一还挂多久（{DS}，逐笔币安、100 ms 盘口，记录机的时钟）", "",
          f"{len(arcs)} 个日档。触发：窗口剩 240–60 秒时，第一笔与至少一秒前最后一笔相比涨跌超过 zσ 的币安成交，"
          "以记录机收到它的时刻为 0；L 毫秒后按那一刻快照里的卖一买顺势一方，付 taker 费，持有到结算。探索性质。", ""]
+    if delays:
+        q = np.median(np.array(delays), axis=0)
+        L += [f"记录机收到币安成交的延迟（各日分位数的中位）：p10 {q[0]:.0f} ms，中位 {q[1]:.0f} ms，p90 {q[2]:.0f} ms。", ""]
     if df.empty:
         L.append("没有可用的数据。")
     for (hz, z), g in df.groupby(["horizon", "z"]) if not df.empty else []:
@@ -666,7 +679,10 @@ def main(argv=None):
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
         p.add_argument("--out", default=default)
+        p.add_argument("--dataset", default=DS, help="another dataset of the same layout")
     a = ap.parse_args(argv)
+    if getattr(a, "dataset", DS) != DS:
+        set_dataset(a.dataset)
     if a.cmd == "probe":
         probe(a.workdir, a.out)
     elif a.cmd == "probe-trades":
