@@ -73,6 +73,17 @@ with a quarter of BTC's size at the ask, so pooling coins would dilute a BTC eff
 now BTC only, judged once on the first 1,500 trades (about six days), with p < 0.05. The
 2-sigma / 0.4 s test above is withdrawn: it triggers on Binance feeds of about one print a second,
 which the May-August study shows cannot see an edge that lives within half a second.
+
+Implementation fixes to test C, 2026-09-30 about 12:00 UTC, before any of its data was converted
+(its first recording ends about 15:15 UTC), after an adversarial review of the code path: each
+recording is processed on its own, since pooling them carried prices and zero returns across the
+45-60 min gaps between runs and made the first print of a run a trigger against a stale price; the
+spot grid leaves gaps of more than C_MAX_GAP s empty and the reference print must be at most
+C_REF_AGE s old; a trade needs the book feed running around the order time (C_ALIVE), so an outage
+of the recording cannot pass for a stale exchange quote; a market recorded in two runs keeps its
+earlier trigger; damaged recordings are listed and skipped; the verdict, once reached, is written to
+real/latency-test-c.verdict.md with the recordings behind it and never recomputed. The rule itself
+(C_SPOT, C_Z, C_LAG, C_N, C_SINCE, C_COINS, FAMILY_ALPHA) is unchanged.
 """
 from __future__ import annotations
 
@@ -102,6 +113,11 @@ C_SPOT, C_Z, C_LAG, C_N = "coinbase", 3.0, 0.3, 1500
 C_SINCE = "2026-09-30 11:00"
 C_COINS = ("btc",)  # revised 09:40 UTC from all five coins, before any of the test's data existed
 FAMILY_ALPHA = 0.05  # test C alone: the 2-sigma / 0.4 s test above was withdrawn at 09:40 UTC
+# Test C data hygiene, fixed 2026-09-30 before any of its data was converted (see module notes):
+# each recording is processed on its own; the spot grid does not carry prices across gaps of more
+# than C_MAX_GAP s; the reference print is at most C_REF_AGE s old; a trade needs the book feed
+# running (an update within C_ALIVE[0] s before and C_ALIVE[1] s after the order time).
+C_MAX_GAP, C_REF_AGE, C_ALIVE = 10, 5.0, (30.0, 10.0)
 
 
 def _read(d, pattern):
@@ -195,16 +211,18 @@ def load(*dirs, spot="binance"):
     return books, markets, binance.reset_index(drop=True)
 
 
-def spot_grid(binance):
-    """Last Binance log price at each whole second and the trailing 10 min std of 1 s returns."""
+def spot_grid(binance, max_gap=None):
+    """Last Binance log price at each whole second and the trailing 10 min std of 1 s returns.
+    With `max_gap`, seconds more than that far from the last print stay empty instead of carrying
+    it forward, so an outage does not count as a run of zero returns."""
     sec = np.floor(binance["trade_ts"].to_numpy()).astype("int64")
     last = pd.Series(np.log(binance["price"].to_numpy()), index=sec).groupby(level=0).last()
-    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill()
+    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=max_gap)
     sigma = grid.diff().rolling(600, min_periods=300).std()
     return grid, sigma
 
 
-def triggers(markets, binance, sigma, z):
+def triggers(markets, binance, sigma, z, max_ref_age=None):
     """First Binance move above z sigma in each market's 240..60 s window: (market, t, side, winner).
 
     A move is a trade whose log price differs from the last trade at least one second earlier by more
@@ -221,6 +239,8 @@ def triggers(markets, binance, sigma, z):
             continue
         j = np.searchsorted(ts, ts[a:b] - 1.0, "right") - 1
         ref = np.where(j >= 0, lp[np.maximum(j, 0)], np.nan)
+        if max_ref_age is not None:  # the reference print must be recent, not from before a gap
+            ref = np.where(ts[a:b] - ts[np.maximum(j, 0)] <= max_ref_age, ref, np.nan)
         sg = sigma.reindex(np.floor(ts[a:b]).astype("int64") - 1).to_numpy()
         with np.errstate(invalid="ignore"):
             hit = np.abs(lp[a:b] - ref) > z * sg
@@ -246,6 +266,15 @@ class Book:
             return None
         return v[i]
 
+    def alive(self, mid, t, before, after):
+        """Whether the recorded book updated within `before` s up to t and within `after` s after
+        it, i.e. the feed was running, so an unchanged ask at t is the exchange's and not a gap."""
+        if mid not in self.by:
+            return False
+        ts = self.by[mid][0]
+        i = np.searchsorted(ts, t, "right")
+        return i > 0 and t - ts[i - 1] <= before and i < len(ts) and ts[i] - t <= after
+
     def side_ask(self, mid, t, side):
         r = self.at(mid, t)
         if r is None:
@@ -265,9 +294,13 @@ class Book:
         return float(ts[i + moved[0]] - t0) if len(moved) and np.isfinite(a0) else np.nan
 
 
-def trade(trig, book, lag, stale_only):
+def trade(trig, book, lag, stale_only, alive=None):
+    """Buy the side of each trigger at the ask `lag` s later; with `alive=(before, after)` only
+    where the book feed was running around that moment (see Book.alive)."""
     rows = []
     for r in trig.itertuples():
+        if alive is not None and not book.alive(r.market_id, r.t + lag, *alive):
+            continue
         a0 = book.side_ask(r.market_id, r.t, r.side)[0]
         p, size = book.side_ask(r.market_id, r.t + lag, r.side)
         if not (np.isfinite(p) and 0.02 <= p <= 0.98):
@@ -276,8 +309,8 @@ def trade(trig, book, lag, stale_only):
             continue
         won = float(r.winner == r.side)
         fee = float(bo.taker_fee(p))
-        rows.append((won, p, fee, won - p - fee, size, r.t))
-    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t"])
+        rows.append((won, p, fee, won - p - fee, size, r.t, r.market_id))
+    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t", "market_id"])
 
 
 # Taker rules that only need the book: (name, tau, lo, hi); ids as in strategy_zoo.
@@ -383,57 +416,83 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
     print("\n".join(L))
 
 
-def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,)):
-    """Trades of the stale-quote rule on each coin's own spot feed and book, pooled: one row per
-    (coin, market, lag) with the trigger time `t`."""
+def pooled_trades(dirs_by_coin, since, spot=C_SPOT, z=C_Z, lags=(C_LAG,), notes=None):
+    """Trades of the stale-quote rule, each recording (directory) on its own spot feed and book,
+    pooled over recordings and coins; a market recorded twice keeps its earlier trigger. One row
+    per (coin, market, lag) with the trigger time `t` and the recording `run`."""
     lo = pd.Timestamp(since, tz="UTC").timestamp()
+    notes = [] if notes is None else notes
     out = []
     for coin, dirs in sorted(dirs_by_coin.items()):
-        try:
-            books, markets, spot_trades = load(*dirs, spot=spot)
-        except FileNotFoundError:
-            continue
-        markets = markets[markets["start_ts"] >= lo]
-        books = books[books["market_id"].isin(set(markets["market_id"]))]
-        if markets.empty or books.empty:
-            continue
-        _, sigma = spot_grid(spot_trades)
-        trig = triggers(markets, spot_trades, sigma, z)
-        book = Book(books)
-        for lag in lags:
-            t = trade(trig, book, lag, False)
-            t["coin"], t["lag"] = coin, lag
-            out.append(t)
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["t", "pnl", "coin", "lag"])
+        for d in dirs:
+            run = Path(d).parent.parent.parent.name  # <rec>/<run id>/x/bundle-<coin>/latency
+            try:
+                books, markets, spot_trades = load(d, spot=spot)
+            except Exception as e:  # a missing or damaged recording is noted and skipped
+                notes.append(f"{coin} {run}: skipped ({type(e).__name__}: {e})")
+                continue
+            markets = markets[markets["start_ts"] >= lo]
+            books = books[books["market_id"].isin(set(markets["market_id"]))]
+            if markets.empty or books.empty or len(spot_trades) < 2:
+                notes.append(f"{coin} {run}: no markets from {since} with book and spot data")
+                continue
+            _, sigma = spot_grid(spot_trades, max_gap=C_MAX_GAP)
+            trig = triggers(markets, spot_trades, sigma, z, max_ref_age=C_REF_AGE)
+            book = Book(books)
+            for lag in lags:
+                t = trade(trig, book, lag, False, alive=C_ALIVE)
+                t["coin"], t["lag"], t["run"] = coin, lag, run
+                out.append(t)
+    if not out:
+        return pd.DataFrame(columns=["t", "pnl", "coin", "lag", "run", "market_id"])
+    t = pd.concat(out, ignore_index=True).sort_values("t", kind="stable")
+    return t.drop_duplicates(["coin", "lag", "market_id"], keep="first").reset_index(drop=True)
 
 
 def run_pooled(roots, out, reps=20000):
     """Test C on every <root>/**/bundle-<coin>/latency directory: judged once on the first C_N
-    trades in trigger-time order, pooled over C_COINS; fewer trades give the count, no verdict."""
+    trades in trigger-time order, pooled over C_COINS; fewer trades give the count, no verdict.
+    Once a verdict is written to <out>.verdict.md it is kept and never recomputed."""
     dirs = {}
     for r in roots:
         for d in sorted(Path(r).glob("**/bundle-*/latency")):
             coin = d.parent.name.removeprefix("bundle-")
             if coin in C_COINS:
                 dirs.setdefault(coin, []).append(d)
-    t = pooled_trades(dirs, C_SINCE, lags=sorted(set(LAGS) | {C_LAG}))
-    L = [f"# 检验 C：{C_SPOT} 触发、{len(C_COINS)} 个币种合并的过期报价（GitHub 前向录制）", "",
+    notes = []
+    t = pooled_trades(dirs, C_SINCE, lags=sorted(set(LAGS) | {C_LAG}), notes=notes)
+    coins = "、".join(C_COINS)
+    L = [f"# 检验 C：{C_SPOT} 触发的过期报价（{coins}，GitHub 前向录制）", "",
          f"事先写死：{C_SINCE} UTC 起开始的 5m 市场；{C_SPOT} 逐笔成交在剩 240–60 秒时第一次相对至少一秒前涨跌超过 "
          f"{C_Z:g}σ，{C_LAG:g} 秒后按交易所时间戳盘口的卖一买顺势一方，付 taker 费，持有到结算；"
-         f"各币种合并按触发时间取前 {C_N:,} 笔判定一次，EV > 0 且精确 p < {FAMILY_ALPHA} 才算通过"
-         "（两个预注册检验合计误报率 5%）。", "",
-         "| 币种 | 录制目录 | 触发（按 L = 检验值） |", "|---|---:|---:|"]
+         f"按触发时间取前 {C_N:,} 笔判定一次，EV > 0 且精确 p < {FAMILY_ALPHA} 才算通过。"
+         f"每段录制单独计算（σ 不跨越 {C_MAX_GAP} 秒以上的空档，参考价不早于 {C_REF_AGE:g} 秒），"
+         f"下单时刻前 {C_ALIVE[0]:g} 秒内和后 {C_ALIVE[1]:g} 秒内盘口都要有更新。", "",
+         "| 币种 | 录制段 | 触发（按 L = 检验值） |", "|---|---:|---:|"]
     main_t = t[t["lag"] == C_LAG].sort_values("t", kind="stable") if len(t) else t
     for coin in C_COINS:
         L.append(f"| {coin} | {len(dirs.get(coin, []))} | {int((main_t['coin'] == coin).sum()) if len(main_t) else 0:,} |")
+    if notes:
+        L += ["", "跳过的录制段：", ""] + [f"- {n}" for n in notes]
     L += ["", "| L | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---:|---|---|---|---|---|---|"]
     for lag, g in t.groupby("lag") if len(t) else []:
         L.append(f"| {lag:g} 秒 | {fmt(g, reps)} |")
     head = f"检验 C（前 {C_N:,} 笔）："
-    if len(main_t) < C_N:
+    pinned = Path(out).with_suffix(".verdict.md")
+    if pinned.exists():
+        L += ["", pinned.read_text(encoding="utf-8").strip() + "（已判定，不再重算）"]
+    elif len(main_t) < C_N:
         L += ["", head + f"目前 {len(main_t):,} 笔，不到 {C_N:,} 笔，不判定。"]
     else:
-        L += ["", head + verdict(main_t.head(C_N), C_Z, C_LAG, reps, FAMILY_ALPHA)]
+        first = main_t.head(C_N)
+        v = head + verdict(first, C_Z, C_LAG, reps, FAMILY_ALPHA)
+        runs = sorted(first["run"].unique())
+        pinned.parent.mkdir(parents=True, exist_ok=True)
+        pinned.write_text(v + f"（录制段 {len(runs)} 个：{', '.join(map(str, runs))}；"
+                          f"最后一笔触发于 {pd.to_datetime(first['t'].max(), unit='s', utc=True):%Y-%m-%d %H:%M} UTC）\n",
+                          encoding="utf-8")
+        first.to_csv(Path(out).with_suffix(".trades.csv"), index=False)
+        L += ["", pinned.read_text(encoding="utf-8").strip()]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))

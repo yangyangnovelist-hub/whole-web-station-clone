@@ -104,24 +104,73 @@ def test_next_test_is_judged_once_on_the_first_n_trades(export, tmp_path, monkey
     assert "按时间取前 20 笔，只作描述）：过期报价（z=2，0.4 秒后按卖一买）：20 笔" in text and "（已撤销，不判定）" in text
 
 
+def _latency_dir(d, export, spot_lines, starts, book_step=1.0):
+    """A recording directory like recording.LatencyFiles writes: the fixture's markets, a book
+    that updates every `book_step` s (ask 0.50 until start+100.4, then 0.70) and Coinbase prints."""
+    import shutil
+    d.mkdir(parents=True)
+    for f in export.iterdir():
+        if "shadow_current" not in f.name and "poly_probability" not in f.name:
+            shutil.copy(f, d / f.name)
+    rows = []
+    for i, s0 in enumerate(starts):
+        for t in list(np.arange(s0, s0 + 300, book_step)) + [s0 + 100.4]:
+            a = 0.50 if t < s0 + 100.4 else 0.70
+            rows.append({"market_id": f"m{i}", "source_ts": t, "receive_ts": t + 0.01, "best_bid": a - 0.01,
+                         "best_ask": a, "bids_json": f"[[{a - 0.01:.2f}, 40.0]]", "asks_json": f"[[{a:.2f}, 25.0]]"})
+    pd.DataFrame(rows).sort_values("source_ts").to_csv(d / "runtime_1000.poly_probability_observations_v1.csv.gz",
+                                                        index=False, compression="gzip")
+    (d / "coinbase_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(spot_lines) + "\n").encode()))
+
+
+def _coinbase_lines(export, lo=None, hi=None):
+    raw = b"".join(q.read_bytes() for q in sorted(export.glob("shadow_current.jsonl.gz.part-*")))
+    out = []
+    for line in gzip.decompress(raw).decode().splitlines():
+        e = json.loads(line)
+        if (lo is None or e["trade_ts"] >= lo) and (hi is None or e["trade_ts"] < hi):
+            out.append(line.replace('"BINANCE_AGG_TRADE"', '"COINBASE_TRADE"'))
+    return out
+
+
 def test_pooled_test_c(export, tmp_path, monkeypatch):
     """Two coins, each a copy of the fixture with its spot trades as Coinbase prints."""
-    import shutil
+    starts = [S0 + 300 * i for i in range(N)]
     for coin in ("btc", "eth"):
-        d = tmp_path / "rec" / "1" / "x" / f"bundle-{coin}" / "latency"
-        d.mkdir(parents=True)
-        for f in export.iterdir():
-            if "shadow_current" not in f.name:
-                shutil.copy(f, d / f.name)
-        raw = b"".join(q.read_bytes() for q in sorted(export.glob("shadow_current.jsonl.gz.part-*")))
-        lines = gzip.decompress(raw).decode().replace('"BINANCE_AGG_TRADE"', '"COINBASE_TRADE"')
-        (d / "coinbase_trades.jsonl.gz").write_bytes(gzip.compress(lines.encode()))
+        _latency_dir(tmp_path / "rec" / "1" / "x" / f"bundle-{coin}" / "latency", export, _coinbase_lines(export), starts)
     monkeypatch.setattr(lt, "C_SINCE", "2026-09-01")
     monkeypatch.setattr(lt, "C_COINS", ("btc", "eth"))
     monkeypatch.setattr(lt, "C_N", 100)
-    lt.run_pooled([tmp_path / "rec"], tmp_path / "c.md", reps=200)
-    assert f"目前 {2 * N} 笔，不到 100 笔，不判定" in (tmp_path / "c.md").read_text()
+    out = tmp_path / "real" / "c.md"
+    lt.run_pooled([tmp_path / "rec"], out, reps=200)
+    assert f"目前 {2 * N} 笔，不到 100 笔，不判定" in out.read_text()
     monkeypatch.setattr(lt, "C_N", 40)
-    lt.run_pooled([tmp_path / "rec"], tmp_path / "c.md", reps=200)
-    text = (tmp_path / "c.md").read_text()
+    lt.run_pooled([tmp_path / "rec"], out, reps=200)
+    text = out.read_text()
     assert "检验 C（前 40 笔）：过期报价（z=3，0.3 秒后按卖一买）：40 笔" in text and "| btc | 1 |" in text
+    assert out.with_suffix(".verdict.md").exists() and len(pd.read_csv(out.with_suffix(".trades.csv"))) == 40
+    monkeypatch.setattr(lt, "C_N", 45)  # a later run keeps the pinned verdict
+    lt.run_pooled([tmp_path / "rec"], out, reps=200)
+    assert "（已判定，不再重算）" in out.read_text() and "前 40 笔" in out.read_text()
+
+
+def test_test_c_does_not_trigger_across_recording_gaps(export, tmp_path, monkeypatch):
+    """Run 2 starts 20 min after run 1 ends and 30 s into a market: its first print must not be
+    a trigger against run 1's last price, and a book that stopped updating must not fill."""
+    starts = [S0 + 300 * i for i in range(N)]
+    cut = S0 + 300 * 10
+    lines = _coinbase_lines(export)
+    first = [ln for ln in lines if json.loads(ln)["trade_ts"] < cut]
+    second = [ln for ln in lines if json.loads(ln)["trade_ts"] >= cut + 1270]
+    _latency_dir(tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency", export, first, starts[:10])
+    _latency_dir(tmp_path / "rec" / "2" / "x" / "bundle-btc" / "latency", export, second, starts)
+    monkeypatch.setattr(lt, "C_SINCE", "2026-09-01")
+    dirs = {"btc": sorted((tmp_path / "rec").glob("*/x/bundle-btc/latency"))}
+    t = lt.pooled_trades(dirs, "2026-09-01")
+    run2_start = cut + 1270
+    assert not ((t["t"] >= run2_start) & (t["t"] < run2_start + 1)).any()  # no trigger on run 2's first print
+    assert set(t["run"]) == {"1", "2"} and t["market_id"].is_unique
+    # the same data with a book that updates only every 60 s: nothing is traded
+    shutil_dir = tmp_path / "sparse" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(shutil_dir, export, lines, starts, book_step=60.0)
+    assert lt.pooled_trades({"btc": [shutil_dir]}, "2026-09-01").empty

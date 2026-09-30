@@ -196,11 +196,12 @@ def _levels(d):
 def book_events(records):
     """Yield ("bba" | "book" | "trade" | "xtop", row) from recorded CLOB messages in arrival order.
     "xtop" rows carry the top of book and first-level sizes whenever they change, stamped with the
-    exchange's message time (messages without one are left out of them)."""
+    exchange time of the message that made the change (one row per message, not per websocket
+    frame; messages without a time are left out of them)."""
     ladders, last_top, pending, last_x = {}, {}, {}, {}
     for rec in records:
         ms, msg = int(rec["recv_ms"]), rec.get("msg")
-        touched, stamp = [], {}
+        touched = []
         for m in msg if isinstance(msg, list) else [msg]:
             if not isinstance(m, dict):
                 continue
@@ -208,20 +209,24 @@ def book_events(records):
             if et == "last_trade_price":
                 yield "trade", {"asset_id": m["asset_id"], "recv_ms": ms,
                                 "event_ts_ms": int(m.get("timestamp") or ms), "payload": m}
-            elif et == "book":
-                touched.append(m["asset_id"])
-                stamp[m["asset_id"]] = m.get("timestamp")
+                continue
+            if et == "book":
+                toks = [m["asset_id"]]
             elif et == "price_change":
-                for pc in m.get("price_changes", []):
-                    touched.append(pc["asset_id"])
-                    stamp[pc["asset_id"]] = m.get("timestamp")
-        pt.apply_clob_message(ladders, msg, ms)
+                toks = list(dict.fromkeys(pc["asset_id"] for pc in m.get("price_changes", [])))
+            else:
+                continue
+            pt.apply_clob_message(ladders, m, ms)
+            touched += toks
+            stamp = m.get("timestamp")
+            for tok in toks:
+                lad = ladders[tok]
+                x = (lad.bid, lad.ask, lad.size_at("bid", lad.bid), lad.size_at("ask", lad.ask))
+                if stamp and x != last_x.get(tok):
+                    last_x[tok] = x
+                    yield "xtop", {"asset_id": tok, "ts": int(stamp) / 1000, "recv_ms": ms, "top": x}
         for tok in dict.fromkeys(touched):
             lad = ladders[tok]
-            x = (lad.bid, lad.ask, lad.size_at("bid", lad.bid), lad.size_at("ask", lad.ask))
-            if stamp.get(tok) and x != last_x.get(tok):
-                last_x[tok] = x
-                yield "xtop", {"asset_id": tok, "ts": int(stamp[tok]) / 1000, "recv_ms": ms, "top": x}
             top = (_top(lad.bid), _top(lad.ask))
             if top != last_top.get(tok):
                 last_top[tok] = top

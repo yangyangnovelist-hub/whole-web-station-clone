@@ -214,3 +214,16 @@ def test_latency_files_use_exchange_time(tmp_path):
     book_ = lt.Book(books)
     assert list(lt.trade(trig, book_, 0.2, False)["price"]) == [0.50]
     assert list(lt.trade(trig, book_, 1.0, False)["price"]) == [0.70]
+
+
+def test_xtop_rows_are_stamped_per_message():
+    """One websocket frame with two price changes stamped 100 ms apart gives two rows, each with
+    its own exchange time, rather than one row stamped with the frame's last time."""
+    frame = [{**book("u", 0.40, 0.60), "timestamp": "1000000"},
+             {"event_type": "price_change", "timestamp": "1000100", "price_changes": [
+                 {"asset_id": "u", "price": "0.55", "size": "10", "side": "SELL"}]},
+             {"event_type": "price_change", "timestamp": "1000200", "price_changes": [
+                 {"asset_id": "u", "price": "0.45", "size": "5", "side": "BUY"}]}]
+    rows = [r for k, r in rc.book_events([{"recv_ms": 1_000_300, "msg": frame}]) if k == "xtop"]
+    assert [r["ts"] for r in rows] == [1000.0, 1000.1, 1000.2]
+    assert [r["top"][:2] for r in rows] == [(0.40, 0.60), (0.40, 0.55), (0.45, 0.55)]

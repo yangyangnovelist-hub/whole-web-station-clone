@@ -203,7 +203,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-*.md real/cross-* 2>/dev/null || true
+          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-* real/cross-* 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
