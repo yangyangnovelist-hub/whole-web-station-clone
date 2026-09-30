@@ -41,6 +41,7 @@ RTDS_WS = "wss://ws-live-data.polymarket.com"
 # Chainlink stream, the Binance prices Polymarket relays (for latency.py's stale-quote test).
 RTDS_SUBS = {"rtds": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}],
              "rtds-binance": [{"topic": "crypto_prices", "type": "update", "filters": ""}]}
+COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"  # public trade prints, exchange-stamped
 SLUG = "{coin}-updown-5m-{start}"
 COINS = ("btc", "eth", "sol", "xrp", "doge")  # the coins with 5m Up/Down series
 NAN = float("nan")
@@ -316,6 +317,13 @@ class LiveTrader:
                 and "value" in payload:
             self.last_btc = (payload.get("timestamp"), float(payload["value"]))
 
+    def on_coinbase(self, text, recv_ms):
+        """Coinbase trade prints (a dense spot feed reachable from US runners), kept compact."""
+        msg = json.loads(text)
+        if msg.get("type") in ("match", "last_match"):
+            self.rec.write("coinbase", {"recv_ms": recv_ms, "p": msg.get("product_id"), "t": msg.get("time"),
+                                        "px": msg.get("price"), "sz": msg.get("size"), "side": msg.get("side")})
+
     def top(self, token):
         lad = self.ladders.get(token, Ladder())
         return (lad.bid, lad.ask, lad.size_at("ask", lad.ask), lad.size_at("bid", lad.bid))
@@ -449,6 +457,20 @@ class LiveTrader:
                 self.rec.write("errors", {"at": now_ms(), "where": stream, "err": repr(e)})
             await asyncio.sleep(2)
 
+    async def coinbase_loop(self):
+        import websockets
+        sub = {"type": "subscribe", "channels": ["matches"],
+               "product_ids": [f"{c.upper()}-USD" for c in self.coins]}
+        while True:
+            try:
+                async with websockets.connect(COINBASE_WS, ping_interval=20, max_size=None) as ws:
+                    await ws.send(json.dumps(sub))
+                    async for text in ws:
+                        self.on_coinbase(text, now_ms())
+            except Exception as e:
+                self.rec.write("errors", {"at": now_ms(), "where": "coinbase", "err": repr(e)})
+            await asyncio.sleep(2)
+
     @staticmethod
     async def _ping(ws, word, every):
         while True:
@@ -485,7 +507,7 @@ class LiveTrader:
                                                         "err": repr(ctx.get("exception") or ctx.get("message"))}))
         tasks = [asyncio.create_task(c) for c in
                  (self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
-                  self.scheduler(), self.reporter())]
+                  self.coinbase_loop(), self.scheduler(), self.reporter())]
         try:
             await asyncio.sleep(hours * 3600)
         finally:

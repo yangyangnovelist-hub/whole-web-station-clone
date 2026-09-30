@@ -192,12 +192,20 @@ def test_latency_files_use_exchange_time(tmp_path):
         price *= np.exp(rng.normal(0, 1e-5)) * (1.004 if s == S0 + 100 else 1.0)
         trader.on_rtds(json.dumps({"topic": "crypto_prices", "type": "update", "payload": {
             "symbol": "btcusdt", "timestamp": s * 1000 + 50, "value": price}}), s * 1000 + 350, "rtds-binance")
+    for s in range(S0 + 90, S0 + 110):  # Coinbase prints, exchange time as ISO text
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(s)) + ".250000Z"
+        trader.on_coinbase(json.dumps({"type": "match", "product_id": "BTC-USD", "time": stamp,
+                                       "price": "80000.5", "size": "0.01", "side": "sell"}), s * 1000 + 400)
+    trader.on_coinbase(json.dumps({"type": "subscriptions", "channels": []}), S0 * 1000)
     for t_ms, ask in ((S0 * 1000, 0.50), ((S0 + 100) * 1000 + 400, 0.70)):
         trader.on_clob(json.dumps([{**book(f"up{S0}", ask - 0.01, ask), "timestamp": str(t_ms)}]), t_ms + 200)
     trader.rec.close()
     assert (tmp_path / "raw").glob("*/rtds-binance.jsonl.gz")
     counts = rc.build(tmp_path, tmp_path / "bundle")
     assert counts["latency_markets"] == 1 and counts["latency_books"] == 2 and counts["latency_binance"] == 1200
+    assert counts["latency_coinbase"] == 20
+    cb = lt.load(tmp_path / "bundle" / "latency", spot="coinbase")[2]
+    assert cb["trade_ts"].iloc[0] == pytest.approx(S0 + 90.25) and cb["receive_ts"].iloc[0] == pytest.approx(S0 + 90.4)
     books, markets, binance = lt.load(tmp_path / "bundle" / "latency")
     assert list(books["ts"]) == [S0, S0 + 100.4] and list(markets["winner"]) == ["Up"]
     grid, sigma = lt.spot_grid(binance)

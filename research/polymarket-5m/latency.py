@@ -130,15 +130,20 @@ def load_books(d):
     return books.sort_values(["market_id", "ts"], kind="stable").reset_index(drop=True)
 
 
-def _binance(d):
+SPOT = {"binance": (r"shadow_current\.jsonl\.gz", "BINANCE_AGG_TRADE"),  # which trade feed triggers
+        "coinbase": (r"coinbase_trades\.jsonl\.gz", "COINBASE_TRADE")}
+
+
+def _binance(d, spot="binance"):
+    pattern, event = SPOT[spot]
     try:
-        _, raw = _read(d, r"shadow_current\.jsonl\.gz")
+        _, raw = _read(d, pattern)
     except FileNotFoundError:
         return []
     rows = []
     with gzip.open(io.BytesIO(raw), "rt", errors="replace") as f:
         for line in f:
-            if '"BINANCE_AGG_TRADE"' not in line:
+            if f'"{event}"' not in line:
                 continue
             try:
                 e = json.loads(line)
@@ -148,9 +153,9 @@ def _binance(d):
     return rows
 
 
-def load(*dirs):
-    """Books, markets and Binance trades of one or more export directories (e.g. the daily
-    exports), with rows that appear in several of them kept once."""
+def load(*dirs, spot="binance"):
+    """Books, markets and spot trades (Binance by default, or Coinbase) of one or more export
+    directories (e.g. the daily exports), with rows that appear in several of them kept once."""
     dirs = [Path(d) for d in dirs]
     books = pd.concat([load_books(d) for d in dirs], ignore_index=True)
     if len(dirs) > 1:
@@ -158,9 +163,9 @@ def load(*dirs):
     reg = pd.concat([read_table(d, r"market_registry\.csv", ["market_id", "start_ts"]) for d in dirs])
     out = pd.concat([read_table(d, r"market_outcomes\.csv", ["market_id", "winner"]) for d in dirs])
     markets = reg.drop_duplicates("market_id").merge(out.drop_duplicates("market_id"), on="market_id")
-    rows = [r for d in dirs for r in _binance(d)]
+    rows = [r for d in dirs for r in _binance(d, spot)]
     if not rows:
-        raise FileNotFoundError(f"no BINANCE_AGG_TRADE events under {', '.join(map(str, dirs))}")
+        raise FileNotFoundError(f"no {SPOT[spot][1]} events under {', '.join(map(str, dirs))}")
     binance = pd.DataFrame(rows, columns=["trade_ts", "receive_ts", "price"]).drop_duplicates().sort_values("trade_ts")
     return books, markets, binance.reset_index(drop=True)
 
@@ -291,9 +296,9 @@ def verdict(t, z, lag, reps):
             f"{100 * t['pnl'].mean() if len(t) else float('nan'):+.2f}¢，p = {p:.4f} → {'通过' if ok else '没通过'}")
 
 
-def run(d, out, reps=20000, since=None, until=None, label=""):
+def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
     dirs = [d] if isinstance(d, (str, Path)) else list(d)
-    books, markets, binance = load(*dirs)
+    books, markets, binance = load(*dirs, spot=spot)
     if since or until:
         lo = pd.Timestamp(since or "2000-01-01", tz="UTC").timestamp()
         hi = pd.Timestamp(until or "2100-01-01", tz="UTC").timestamp()
@@ -361,8 +366,9 @@ def main(argv=None):
     ap.add_argument("--since", help="only markets starting on/after this UTC date")
     ap.add_argument("--until", help="only markets starting before this UTC date")
     ap.add_argument("--label", default="")
+    ap.add_argument("--spot", default="binance", choices=sorted(SPOT), help="trade feed that triggers")
     a = ap.parse_args(argv)
-    run(a.export_dir, a.out, a.reps, a.since, a.until, a.label)
+    run(a.export_dir, a.out, a.reps, a.since, a.until, a.label, a.spot)
 
 
 if __name__ == "__main__":

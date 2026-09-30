@@ -23,7 +23,8 @@ strategy can be re-tested on data recorded after it was chosen:
 - under latency/, the files latency.py reads (as in the Dublin exports): the
   Up token's top of book and first-level sizes stamped with the exchange's own
   message time, markets and winners, and Polymarket's relay of the Binance
-  <coin>usdt price (RTDS crypto_prices) with its own timestamp.
+  <coin>usdt price (RTDS crypto_prices) with its own timestamp, and the Coinbase <COIN>-USD
+  trade prints with their exchange time (coinbase_trades.jsonl.gz).
 
 All recorded days go into one bundle, so the forward sample keeps growing.
 """
@@ -251,6 +252,19 @@ def binance_ticks(records, symbol="btcusdt"):
             yield (ts / 1000 if ts > 10**11 else ts), float(pnt["value"]), int(rec["recv_ms"])
 
 
+def coinbase_ticks(records, product="BTC-USD"):
+    """(exchange time s, price, recv_ms) of one product's recorded Coinbase trade prints."""
+    from datetime import datetime
+    for rec in records:
+        if rec.get("p") != product or rec.get("t") is None or rec.get("px") is None:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(rec["t"]).replace("Z", "+00:00")).timestamp()
+            yield ts, float(rec["px"]), int(rec["recv_ms"])
+        except (ValueError, TypeError):
+            continue
+
+
 def _num(x):
     return "" if x is None or not np.isfinite(x) else f"{x:g}"
 
@@ -310,7 +324,14 @@ class LatencyFiles:
                     f.write(json.dumps({"event": "BINANCE_AGG_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
                                         "price": value}) + "\n")
                     k += 1
-            return {"latency_markets": len(self.up), "latency_books": self.n, "latency_binance": k}
+            c = 0
+            with gzip.open(self.d / "coinbase_trades.jsonl.gz", "wt") as f:
+                for ts, value, recv_ms in coinbase_ticks(iter_jsonl(raw_files(src, "coinbase")), f"{coin.upper()}-USD"):
+                    f.write(json.dumps({"event": "COINBASE_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
+                                        "price": value}) + "\n")
+                    c += 1
+            return {"latency_markets": len(self.up), "latency_books": self.n, "latency_binance": k,
+                    "latency_coinbase": c}
         except Exception as e:
             return {"latency_error": repr(e)}
 
