@@ -18,6 +18,7 @@ is reachable (the polymarket-kacho workflow, "mode: cross").
     python cross.py stale 10 --workdir /tmp/x                          # stale 5m quotes after Binance moves
     python cross.py gated --workdir /tmp/x                             # ... only when the fair jump is worth it
     python cross.py openmis --workdir /tmp/x                           # mispricing just after the open
+    python cross.py datasets                                           # newer datasets on Hugging Face
 
 For every pair of markets ending together (5m-15m, 5m-1h, 15m-1h), at every 100 ms snapshot
 while both trade, the cost of the box that pays at least 1 (Up on the lower reference, Down on
@@ -947,12 +948,61 @@ def probe_trades(workdir, out):
     print("\n".join(L))
 
 
+HF_API = "https://huggingface.co/api/datasets?"
+SCAN_QUERIES = ("author=whodisidk", "search=polymarket", "search=updown", "search=up-down", "search=kalshi")
+
+
+def _get(url, timeout=60):
+    req = urllib.request.Request(url, headers={"User-Agent": "research"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def datasets(out, queries=SCAN_QUERIES):
+    """Hugging Face datasets that may hold Polymarket up/down books after 2026-08-29 (data no rule
+    here was chosen on): id, last change, the date range and archive count the card states, and
+    whether the card mentions order books."""
+    import json
+    seen, rows = set(), []
+    for q in queries:
+        try:
+            items = json.loads(_get(HF_API + q + "&limit=200&sort=lastModified&direction=-1"))
+        except Exception as e:
+            print(f"{q}: {e}", flush=True)
+            continue
+        for it in items:
+            i = it.get("id", "")
+            if i in seen:
+                continue
+            seen.add(i)
+            try:
+                card = _get(f"https://huggingface.co/datasets/{i}/resolve/main/README.md", 30).decode("utf-8", "replace")
+            except Exception:
+                card = ""
+            rng = re.search(r"date range[^*]*\*\*([^*]+)\*\*", card, re.I)
+            n = re.search(r"\*\*(\d+) daily archives\*\*", card)
+            books = bool(re.search(r"order.?book|books?_100ms|100 ?ms|best_ask|bid/ask", card, re.I))
+            rows.append((it.get("lastModified", "")[:16], i, rng.group(1).strip() if rng else "",
+                         n.group(1) if n else "", "是" if books else "", it.get("downloads", "")))
+            print(rows[-1], flush=True)
+    rows.sort(reverse=True)
+    L = ["# Hugging Face 上可能有 8 月 29 日之后 Polymarket 涨跌盘口的数据集", "",
+         "查询：" + "，".join(f"`{q}`" for q in queries) + "。按最后修改时间排列；日期范围和日档数取自数据集说明。", "",
+         "| 最后修改 | 数据集 | 说明里的日期范围 | 日档数 | 说明提到盘口 | 下载 |", "|---|---|---|---:|---|---:|"]
+    L += [f"| {r[0]} | [{r[1]}](https://huggingface.co/datasets/{r[1]}) | {r[2]} | {r[3]} | {r[4]} | {r[5]} |" for r in rows]
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("probe")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe.md")
+    p = sub.add_parser("datasets")
+    p.add_argument("--workdir", default="/tmp/cross")
+    p.add_argument("--out", default="real/cross-datasets.md")
     p = sub.add_parser("probe-trades")
     p.add_argument("--workdir", default="/tmp/cross")
     p.add_argument("--out", default="real/cross-probe-trades.md")
@@ -971,6 +1021,8 @@ def main(argv=None):
         set_dataset(a.dataset)
     if a.cmd == "probe":
         probe(a.workdir, a.out)
+    elif a.cmd == "datasets":
+        datasets(a.out)
     elif a.cmd == "probe-trades":
         probe_trades(a.workdir, a.out)
     elif a.cmd == "analyze":

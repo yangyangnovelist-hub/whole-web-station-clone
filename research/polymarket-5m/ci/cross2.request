@@ -1,0 +1,4 @@
+# Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
+# beside ci/cross.request): "cmd:" is the cross.py command, as there.
+requested: 2026-09-30 14:55 Hugging Face datasets with up/down books after Aug 29 (unseen data for the gated rule)
+cmd: datasets
