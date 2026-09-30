@@ -113,3 +113,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run polymarket-forward.yml --ref "${{ github.ref_name }}"
+
+      - name: Tests C and D and a WeChat Work report (polymarket-shadow)
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run polymarket-shadow.yml --ref "${{ github.ref_name }}"
