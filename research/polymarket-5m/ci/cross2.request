@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
 # beside ci/cross.request): "cmd:" is the cross.py command, as there.
-requested: 2026-09-30 14:55 aliplayer1 BTC 5m books after Aug 29: coverage, update rate, Binance archive reachability
-cmd: probe-ali
+requested: 2026-09-30 15:05 fair-jump gated stale asks on SOL 5m (does test D's mechanism carry over)
+cmd: gated --dataset whodisidk/polymarket-sol-updown-exchange-data --out real/cross-gated-sol.md
