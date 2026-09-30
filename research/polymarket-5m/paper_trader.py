@@ -219,6 +219,16 @@ def fetch_json(url, timeout=10):
         return json.loads(r.read().decode())
 
 
+def _prefetched(fetched, slug, fetch):
+    """The Gamma record of `slug` from a prefetched map (re-raising a failed lookup), else looked up."""
+    if fetched is not None and slug in fetched:
+        m = fetched[slug]
+        if isinstance(m, Exception):
+            raise m
+        return m
+    return fetch_market(fetch, slug)
+
+
 def parse_gamma_market(m):
     """Tokens, window and (if resolved) outcome from one Gamma market object."""
     outcomes = json.loads(m["outcomes"]) if isinstance(m.get("outcomes"), str) else m.get("outcomes") or []
@@ -336,15 +346,23 @@ class LiveTrader:
             self.pending.append(record)
         return record
 
-    def resolve_pending(self):
+    def due_orders(self, now=None):
+        now = time.time() if now is None else now
+        return [o["slug"] for o in self.pending if now >= max(o["end"] + 30, o.get("retry_at", 0))]
+
+    def resolve_pending(self, fetched=None):
+        """Settle paper orders whose market Gamma reports resolved. `fetched` maps slugs to Gamma
+        records (or the exception the lookup raised) fetched off the event loop; other slugs are
+        looked up here."""
         still, now = [], time.time()
         for order in self.pending:
-            if now < max(order["end"] + 30, order.get("retry_at", 0)):
+            if now < max(order["end"] + 30, order.get("retry_at", 0)) or (fetched is not None and
+                                                                          order["slug"] not in fetched):
                 still.append(order)
                 continue
             order["retry_at"] = now + 20
             try:
-                m = fetch_market(self.fetch, order["slug"])
+                m = _prefetched(fetched, order["slug"], self.fetch)
                 up_won = parse_gamma_market(m)["up_won"] if m else None
             except Exception as e:  # network hiccup: try again later
                 self.rec.write("errors", {"at": now_ms(), "where": "resolve", "err": repr(e)})
@@ -358,15 +376,20 @@ class LiveTrader:
             self._append_ledger(done)
         self.pending = still
 
-    def record_outcomes(self):
+    def due_outcomes(self, now=None):
+        now = time.time() if now is None else now
+        return [slug for slug, mk in self.markets.items() if now >= mk["end"] + 60 and now >= mk.get("retry_at", 0)]
+
+    def record_outcomes(self, fetched=None):
         """Save the resolved Gamma record of every market seen, traded or not, so the
-        recording is a complete dataset (recording.py), then forget the market."""
+        recording is a complete dataset (recording.py), then forget the market and leave its
+        tokens out of later (re)subscriptions. `fetched` as in resolve_pending."""
         now = time.time()
         for slug, mk in list(self.markets.items()):
-            if now < mk["end"] + 60 or now < mk.get("retry_at", 0):
+            if now < mk["end"] + 60 or now < mk.get("retry_at", 0) or (fetched is not None and slug not in fetched):
                 continue
             try:
-                m = fetch_market(self.fetch, slug)
+                m = _prefetched(fetched, slug, self.fetch)
                 resolved = m is not None and parse_gamma_market(m)["up_won"] is not None
             except Exception as e:
                 self.rec.write("errors", {"at": now_ms(), "where": "outcome", "slug": slug, "err": repr(e)})
@@ -375,6 +398,7 @@ class LiveTrader:
                 self.rec.write("markets", m)
             if resolved or now > mk["end"] + 3600:
                 del self.markets[slug]
+                self.subscribed.difference_update((mk["up_token"], mk["down_token"]))
             else:
                 mk["retry_at"] = now + 30
 
@@ -389,6 +413,17 @@ class LiveTrader:
             w.writerow(row)
 
     # -- network loops --
+    async def _fetch_markets(self, slugs):
+        """Gamma records of several slugs, looked up in worker threads so the websocket readers
+        keep draining their sockets (a blocked event loop gets the CLOB feed closed as a slow
+        consumer); a failed lookup maps to its exception."""
+        async def one(slug):
+            try:
+                return slug, await asyncio.to_thread(fetch_market, self.fetch, slug)
+            except Exception as e:
+                return slug, e
+        return dict(await asyncio.gather(*(one(s) for s in slugs))) if slugs else {}
+
     async def discover(self):
         while True:
             start = int(time.time()) // bo.WINDOW_S * bo.WINDOW_S
@@ -398,13 +433,13 @@ class LiveTrader:
                     if slug in self.markets:
                         continue
                     try:
-                        found = self.fetch(GAMMA.format(slug=slug))
+                        found = await asyncio.to_thread(self.fetch, GAMMA.format(slug=slug))
                         if found:
                             await self.add_market(found[0], coin)
                     except Exception as e:
                         self.rec.write("errors", {"at": now_ms(), "where": "discover", "slug": slug,
                                                   "err": repr(e)})
-            self.record_outcomes()
+            self.record_outcomes(await self._fetch_markets(self.due_outcomes()))
             await asyncio.sleep(10)
 
     async def add_market(self, gamma_market, coin):
@@ -429,6 +464,7 @@ class LiveTrader:
                     self.ws = ws
                     await ws.send(json.dumps({"assets_ids": sorted(self.subscribed), "type": "market",
                                               "custom_feature_enabled": True}))
+                    self.rec.write("errors", {"at": now_ms(), "where": "clob-open", "tokens": len(self.subscribed)})
                     pinger = asyncio.create_task(self._ping(ws, "PING", 10))
                     try:
                         async for text in ws:
@@ -491,8 +527,16 @@ class LiveTrader:
                         side = rec.get("side", "-")
                         print(f"{time.strftime('%H:%M:%S')} {mk['slug']} τ={tau}s {side} ask={rec.get('ask')} "
                               f"{rec.get('skip') or 'PAPER BUY %.0f' % rec['shares']}", flush=True)
-            self.resolve_pending()
             await asyncio.sleep(0.25)
+
+    async def resolver(self, every=5):
+        """Settle paper orders on a loop of its own, so a slow Gamma lookup never delays the
+        scheduler past a decision time."""
+        while True:
+            due = self.due_orders()
+            if due:
+                self.resolve_pending(await self._fetch_markets(due))
+            await asyncio.sleep(every)
 
     async def reporter(self, every=3600):
         while True:
@@ -507,7 +551,7 @@ class LiveTrader:
                                                         "err": repr(ctx.get("exception") or ctx.get("message"))}))
         tasks = [asyncio.create_task(c) for c in
                  (self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
-                  self.coinbase_loop(), self.scheduler(), self.reporter())]
+                  self.coinbase_loop(), self.scheduler(), self.resolver(), self.reporter())]
         try:
             await asyncio.sleep(hours * 3600)
         finally:

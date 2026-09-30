@@ -227,3 +227,39 @@ def test_xtop_rows_are_stamped_per_message():
     rows = [r for k, r in rc.book_events([{"recv_ms": 1_000_300, "msg": frame}]) if k == "xtop"]
     assert [r["ts"] for r in rows] == [1000.0, 1000.1, 1000.2]
     assert [r["top"][:2] for r in rows] == [(0.40, 0.60), (0.40, 0.55), (0.45, 0.55)]
+
+
+def test_record_outcomes_uses_prefetched_records_and_unsubscribes(tmp_path):
+    """With lookups done off the event loop, record_outcomes only uses what was fetched (a failed
+    lookup is retried later, a slug not fetched waits), and a resolved market's tokens leave the
+    resubscription list."""
+    now = int(time.time())
+    a, b, c = (now // 300 * 300 - 600 - 300 * i for i in range(3))
+    calls = []
+    trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: calls.append(url) or [])
+    for s in (a, b, c):
+        mk = pt.parse_gamma_market(gamma(s))
+        trader.markets[mk["slug"]] = mk
+        trader.subscribed.update((mk["up_token"], mk["down_token"]))
+    assert sorted(trader.due_outcomes()) == sorted(f"btc-updown-5m-{s}" for s in (a, b, c))
+    trader.record_outcomes({f"btc-updown-5m-{a}": gamma(a, True), f"btc-updown-5m-{b}": TimeoutError("gamma")})
+    trader.rec.close()
+    assert not calls
+    assert f"btc-updown-5m-{a}" not in trader.markets and not {f"up{a}", f"dn{a}"} & trader.subscribed
+    assert trader.markets[f"btc-updown-5m-{b}"]["retry_at"] > now and f"up{b}" in trader.subscribed
+    assert "retry_at" not in trader.markets[f"btc-updown-5m-{c}"]
+
+
+def test_latency_files_keep_the_clob_disconnects(recorded, tmp_path):
+    import gzip as gz
+    import shutil
+    out = tmp_path / "paper"
+    shutil.copytree(recorded[0], out)  # the fixture is shared: add the disconnects to a copy
+    day = sorted((out / "raw").iterdir())[0]
+    with gz.open(day / "errors.jsonl.gz", "at") as f:
+        f.write(json.dumps({"at": S0 * 1000 + 150_250, "where": "clob", "err": "ConnectionClosedError(1013)"}) + "\n")
+        f.write(json.dumps({"at": S0 * 1000 + 152_900, "where": "clob-open", "tokens": 4}) + "\n")
+    counts = rc.build(out, tmp_path / "bundle")
+    assert counts["latency_clob_closes"] == 1
+    import latency as lt
+    assert lt.load_closes(tmp_path / "bundle" / "latency").tolist() == [S0 + 150.25]

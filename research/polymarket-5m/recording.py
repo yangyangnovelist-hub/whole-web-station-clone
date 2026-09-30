@@ -276,7 +276,8 @@ def _num(x):
 
 class LatencyFiles:
     """latency.py's input under <out>/latency: markets and winners, the Up token's exchange-stamped
-    top of book (streamed in through `book`) and the relayed Binance price (written on `close`).
+    top of book (streamed in through `book`), the relayed Binance price, the Coinbase prints and the
+    times the CLOB websocket closed (written on `close`).
     Any failure only disables these files; the bundle itself is unaffected."""
 
     def __init__(self, out, markets):
@@ -335,8 +336,14 @@ class LatencyFiles:
                     f.write(json.dumps({"event": "COINBASE_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
                                         "price": value}) + "\n")
                     c += 1
+            closes = [float(e["at"]) / 1000 for e in iter_jsonl(raw_files(src, "errors"))
+                      if isinstance(e, dict) and e.get("where") == "clob" and e.get("at") is not None]
+            with gzip.open(self.d / "clob_closes.csv.gz", "wt", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["at_s"])
+                w.writerows([f"{x:.3f}"] for x in sorted(closes))
             return {"latency_markets": len(self.up), "latency_books": self.n, "latency_binance": k,
-                    "latency_coinbase": c}
+                    "latency_coinbase": c, "latency_clob_closes": len(closes)}
         except Exception as e:
             return {"latency_error": repr(e)}
 

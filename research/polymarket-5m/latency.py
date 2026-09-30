@@ -94,6 +94,21 @@ BTC 5m markets from 2026-09-30 14:00 UTC on the GitHub forward recordings, Coinb
 0.3 s, theta = 12c, first 1,200 trades, same data hygiene as test C. With tests C and D both
 running, each passes only with p < 0.025 (FAMILY_ALPHA); test C's threshold moved from 0.05 to
 0.025 at the same time, still before any of its data was converted.
+
+Implementation fix to tests C and D, 2026-09-30 about 17:00 UTC, found by an adversarial audit of
+the live pipeline after the first recording with their data (run 36704245701: test C 47 trades,
+test D 9, neither near its N). The recorder's CLOB websocket closed five times between 14:33 and
+14:37 UTC (mostly code 1013, "slow consumer"), and C_ALIVE, which only asks for some book update
+within 30 s before and 10 s after the order, does not notice a gap of a few seconds: the book then
+sits at its last pre-disconnect quote, so a spot move during the gap looks exactly like the stale
+ask both tests buy, at a price that was not there. The hygiene above already says an outage must
+not pass for a stale quote; now a candidate is also dropped when the socket closed between
+receiving the quote shown at the trigger and receiving the first update after the order time
+(Book.across_close, with the close times from the recording's errors log). This only removes
+trades that would have been recorded at frozen prices, so it can only lower a spurious pass; it
+applies to every recording, including the one above. The rule itself (C_*, D_*, FAMILY_ALPHA) is
+unchanged. The recorder was also changed so it disconnects less: Gamma lookups no longer block the
+event loop, and markets that have settled are dropped from the resubscription list.
 """
 from __future__ import annotations
 
@@ -167,22 +182,50 @@ def load_books(d):
     base, raw = _read(d, r"poly_probability_observations_v1\.csv")
     codec = "zstd" if base.endswith(".zst") else "gzip" if base.endswith(".gz") else None
     stream = pa.CompressedInputStream(pa.BufferReader(raw), codec) if codec else pa.BufferReader(raw)
-    cols = ["market_id", "source_ts", "best_bid", "best_ask", "bids_json", "asks_json"]
+    cols = ["market_id", "source_ts", "receive_ts", "best_bid", "best_ask", "bids_json", "asks_json"]
     reader = pacsv.open_csv(stream, read_options=pacsv.ReadOptions(block_size=64 << 20),
-                            convert_options=pacsv.ConvertOptions(include_columns=cols, column_types={
-                                "market_id": pa.string(), "source_ts": pa.float64(), "best_bid": pa.float64(),
-                                "best_ask": pa.float64(), "bids_json": pa.string(), "asks_json": pa.string()}))
+                            convert_options=pacsv.ConvertOptions(include_columns=cols, include_missing_columns=True,
+                                                                 column_types={
+                                "market_id": pa.string(), "source_ts": pa.float64(), "receive_ts": pa.float64(),
+                                "best_bid": pa.float64(), "best_ask": pa.float64(), "bids_json": pa.string(),
+                                "asks_json": pa.string()}))
     pat = r"^\[\[\s*(?P<p>[0-9.eE+-]+)\s*,\s*(?P<s>[0-9.eE+-]+)"
     parts = []
     for batch in reader:
         size = {k: pc.cast(pc.struct_field(pc.extract_regex(batch.column(c), pat), [1]), pa.float64())
                 for k, c in (("bid_size", "bids_json"), ("ask_size", "asks_json"))}
         parts.append(pa.table({"market_id": pc.dictionary_encode(batch.column("market_id")),
-                               "ts": batch.column("source_ts"), "bid": batch.column("best_bid"),
+                               "ts": batch.column("source_ts"), "recv": batch.column("receive_ts"),
+                               "bid": batch.column("best_bid"),
                                "ask": batch.column("best_ask"), **size}))
     books = pa.concat_tables(parts, promote_options="permissive").to_pandas()
     books["market_id"] = books["market_id"].astype(str)
     return books.sort_values(["market_id", "ts"], kind="stable").reset_index(drop=True)
+
+
+def load_closes(d):
+    """Times (recorder clock, s) at which the recorder's CLOB websocket closed, from
+    <latency>/clob_closes.csv.gz (recording.LatencyFiles) or, for recordings converted before that
+    file existed, the errors log the forward workflow keeps beside the bundle
+    (<x>/raw/<day>/errors.jsonl.gz, rows with where == "clob"). None if neither is there."""
+    d = Path(d)
+    f = d / "clob_closes.csv.gz"
+    if f.exists():
+        return pd.read_csv(f)["at_s"].to_numpy(dtype=float)
+    logs = sorted((d.parent.parent / "raw").glob("*/errors.jsonl*"))
+    if not logs:
+        return None
+    out = []
+    for g in logs:
+        with (gzip.open(g, "rt", errors="replace") if g.suffix == ".gz" else open(g, errors="replace")) as fh:
+            for line in fh:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("where") == "clob" and e.get("at") is not None:
+                    out.append(float(e["at"]) / 1000)
+    return np.array(sorted(out), dtype=float)
 
 
 SPOT = {"binance": (r"shadow_current\.jsonl\.gz", "BINANCE_AGG_TRADE"),  # which trade feed triggers
@@ -265,9 +308,30 @@ def triggers(markets, binance, sigma, z, max_ref_age=None):
 
 
 class Book:
-    def __init__(self, books):
+    def __init__(self, books, closes=None):
         self.by = {mid: (g["ts"].to_numpy(), g[["bid", "ask", "bid_size", "ask_size"]].to_numpy())
                    for mid, g in books.groupby("market_id", sort=False)}
+        self.recv = {mid: g["recv"].to_numpy(dtype=float) for mid, g in books.groupby("market_id", sort=False)} \
+            if "recv" in books else {}
+        self.closes = None if closes is None else np.sort(np.asarray(closes, dtype=float))
+        self.cut = 0  # candidates dropped by across_close
+
+    def across_close(self, mid, t0, t1):
+        """Whether the recorder's CLOB socket closed between receiving the quote shown at t0 and
+        receiving the first update after t1: the book then sat frozen at its pre-disconnect state
+        through the order, and an unchanged ask was not the exchange's (see the module notes)."""
+        if self.closes is None or not len(self.closes) or mid not in self.recv:
+            return False
+        ts, recv = self.by[mid][0], self.recv[mid]
+        i0 = np.searchsorted(ts, t0, "right") - 1
+        i1 = np.searchsorted(ts, t1, "right")
+        if i0 < 0 or not np.isfinite(recv[i0]):
+            return False
+        r1 = recv[i1] if i1 < len(ts) and np.isfinite(recv[i1]) else np.inf
+        k = np.searchsorted(self.closes, recv[i0], "right")
+        hit = k < len(self.closes) and self.closes[k] <= r1
+        self.cut += int(hit)
+        return bool(hit)
 
     def at(self, mid, t, max_age=None):
         """(bid, ask, bid_size, ask_size) of the Up token as the exchange showed it at time t
@@ -314,6 +378,8 @@ def trade(trig, book, lag, stale_only, alive=None):
     rows = []
     for r in trig.itertuples():
         if alive is not None and not book.alive(r.market_id, r.t + lag, *alive):
+            continue
+        if book.across_close(r.market_id, r.t, r.t + lag):
             continue
         a0 = book.side_ask(r.market_id, r.t, r.side)[0]
         p, size = book.side_ask(r.market_id, r.t + lag, r.side)
@@ -466,7 +532,7 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
             p1 = float(norm.cdf(norm.ppf(p0) + dx[i] / fac))
             fair = p1 if up else 1 - p1
             side = "Up" if up else "Down"
-            if not book.alive(m.market_id, t0 + lag, *C_ALIVE):
+            if not book.alive(m.market_id, t0 + lag, *C_ALIVE) or book.across_close(m.market_id, t0, t0 + lag):
                 continue
             px, size = book.side_ask(m.market_id, t0 + lag, side)
             if not (np.isfinite(px) and 0.02 <= px <= 0.98):
@@ -499,7 +565,14 @@ def _per_recording(dirs_by_coin, since, spot, make, keys, notes):
                 notes.append(f"{coin} {run}: no markets from {since} with book and spot data")
                 continue
             _, sigma = spot_grid(spot_trades, max_gap=C_MAX_GAP)
-            t = make(markets, spot_trades, sigma, Book(books))
+            closes = load_closes(d)
+            book = Book(books, closes)
+            t = make(markets, spot_trades, sigma, book)
+            if closes is None:
+                notes.append(f"{coin} {run}: no CLOB disconnect log, so no candidate was checked against one")
+            elif book.cut:
+                notes.append(f"{coin} {run}: {book.cut} candidates dropped because the CLOB socket closed "
+                             f"between the quote and the order ({len(closes)} disconnects in the recording)")
             t["coin"], t["run"] = coin, run
             out.append(t)
     if not out:

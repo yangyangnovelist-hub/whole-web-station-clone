@@ -51,6 +51,8 @@ jobs:
             gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null || continue
             mkdir -p "$rec/$id/x"
             tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'bundle-*/latency' 2>/dev/null || continue
+            # the CLOB disconnect log (latency.load_closes); recordings without one are just not checked
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'raw/*/errors.jsonl*' 2>/dev/null || true
             rm -f "$rec/$id/raw.tgz"
           done
           ls -d "$rec"/*/x/bundle-btc/latency 2>/dev/null | wc -l

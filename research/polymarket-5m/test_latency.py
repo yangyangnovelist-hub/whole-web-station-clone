@@ -192,3 +192,38 @@ def test_test_d_trades_only_jumps_worth_the_threshold(export, tmp_path, monkeypa
     out = tmp_path / "real" / "d.md"
     lt.run_test_d([tmp_path / "rec"], out, reps=200)
     assert "检验 D（前 20 笔）：公平价筛选的过期报价（θ=12¢，z=2，0.3 秒后按卖一买）：20 笔" in out.read_text()
+
+
+def test_candidates_across_a_clob_disconnect_are_dropped(export, tmp_path):
+    """The recorder's socket closes at start+100.2 in the first market, after the quote shown at the
+    jump was received and before the first update after the order: the frozen 0.50 ask is not
+    bought there (a later print, seen once the book has moved to 0.70, may still trade). The other
+    markets trade as before, and a close outside those two receipts changes nothing."""
+    starts = [S0 + 300 * i for i in range(N)]
+    x = tmp_path / "rec" / "1" / "x"
+    _latency_dir(x / "bundle-btc" / "latency", export, _coinbase_lines(export), starts)
+    (x / "raw" / "2026-09-30").mkdir(parents=True)
+    rows = [{"at": int((starts[0] + 100.2) * 1000), "where": "clob", "err": "ConnectionClosedError(1013)"},
+            {"at": int((starts[1] + 50.5) * 1000), "where": "clob", "err": "ConnectionClosedError(None)"},
+            {"at": int((starts[2] + 100.2) * 1000), "where": "discover", "err": "timeout"}]
+    (x / "raw" / "2026-09-30" / "errors.jsonl.gz").write_bytes(
+        gzip.compress("".join(json.dumps(r) + "\n" for r in rows).encode()))
+    dirs = lt._latency_dirs([tmp_path / "rec"], ("btc",))
+    notes = []
+    t = lt._per_recording(dirs, "2026-09-01", "coinbase", lambda mk, sp, sg, bk: lt.gated_trades(mk, sp, sg, bk),
+                          ["coin", "market_id"], notes)
+    first = t[t["market_id"] == "m0"]
+    assert (first["price"] != 0.50).all()
+    rest = t[t["market_id"] != "m0"]
+    assert len(rest) == N - 1 and (rest["price"] == 0.50).all()
+    assert any("dropped because the CLOB socket closed" in n and "(2 disconnects" in n for n in notes)
+
+
+def test_book_across_close():
+    books = pd.DataFrame({"market_id": "m", "ts": [10.0, 11.0, 12.0], "recv": [10.1, 11.1, 12.1],
+                          "bid": 0.4, "ask": 0.5, "bid_size": 1.0, "ask_size": 1.0})
+    assert not lt.Book(books).across_close("m", 11.2, 11.5)             # no log: nothing dropped
+    assert lt.Book(books, [11.6]).across_close("m", 11.2, 11.5)         # closed between 11.1 and 12.1
+    assert not lt.Book(books, [12.5]).across_close("m", 11.2, 11.5)     # closed after the next update
+    assert not lt.Book(books, [11.0]).across_close("m", 11.2, 11.5)     # before the quote was received
+    assert lt.Book(books, [13.0]).across_close("m", 12.2, 12.5)         # no update after: open-ended
