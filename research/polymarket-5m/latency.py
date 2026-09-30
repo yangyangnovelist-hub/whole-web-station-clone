@@ -12,13 +12,20 @@ shadow-t1-20260914-20260916/), which holds, split into parts:
   Binance BTCUSDT perpetual trades with their exchange time (trade_ts) and the time Dublin
   received them (receive_ts).
 
-Triggers: the first second in each market's window with 240 >= tau >= 60 at which the
-Binance price moved more than z sigma over the previous second (sigma: std of 1 s log returns
-over the preceding 10 minutes). A trader who reacts `L` seconds after the move (Binance
-exchange time) buys the side of the move at the ask the exchange shows at that moment (the
-last book update stamped at or before it), pays the taker fee and holds to settlement. Two
-versions: at whatever the ask is ("market"), or only if it is still at or below the ask
-shown at the move ("stale limit"). One trade per market.
+Triggers: the first Binance trade in each market's window with 240 >= tau >= 60 whose price
+moved more than z sigma from the last trade at least one second earlier (sigma: std of 1 s log
+returns over the preceding 10 minutes, up to the previous whole second). A trader who reacts `L`
+seconds after that trade (Binance exchange time) buys the side of the move at the ask the
+exchange shows at that moment (the last book update stamped at or before it), pays the taker fee
+and holds to settlement. Two versions: at whatever the ask is ("market"), or only if it is still
+at or below the ask shown at the move ("stale limit"). One trade per market.
+
+Correction, 2026-09-30 01:40 UTC: until then a trigger's time was the start of the second whose
+last trade made the move, so a reaction L < 1 s after it could use prices the trader would only
+see up to a second later. That look-ahead produced most of the "edge that decays with latency"
+reported for 09-26..29 (+4.9c at 0 s, +2.0c at 0.5 s for z = 3). Measured from the trade itself,
+09-26..29 gives z = 3: +2.8c at 0 s, +0.7c at 0.4 s, +0.5c at 0.5 s (p = 0.38); z = 2: +3.9c at
+0 s, then a flat +1.7..2.1c from 0.4 s to 30 s. What is left does not depend on speed.
 
 09-14..16 lies inside the September range already explored on chain, so this is for
 understanding the mechanism and its time scale, not a pass/fail test.
@@ -35,7 +42,13 @@ p = 0.065, with the edge falling from +4.9c at 0 s to zero at 1 s.
 
 Next test, fixed 2026-09-29 (commit f92f5f7, 21:14 UTC) after that result and before any later data: on Dublin
 books recorded after 2026-09-29 20:30 UTC, z = 2 and a 0.4 s reaction at the ask of that moment
-pass with EV > 0 and exact p < 0.05 (see NEXT_*). Stopping rule, fixed 2026-09-29 21:40 UTC
+pass with EV > 0 and exact p < 0.05 (see NEXT_*). Its triggers are the corrected ones above
+(fixed 2026-09-30 01:40 UTC, before any data after 20:30 was exported or looked at); with them
+09-26..29 gave +2.1c (p = 0.052) at these settings, so a pass is far from certain. Second
+source, fixed at the same time: the GitHub forward recordings from 2026-09-30 05:00 UTC
+(`recording.py` writes <bundle>/latency/ with the Up token's exchange-stamped book and
+Polymarket's relay of the Binance price). The same test, judged on whichever source first holds
+NEXT_N trades from NEXT_SINCE (the GitHub one from 05:00); the other is reported, not judged. Stopping rule, fixed 2026-09-29 21:40 UTC
 before any of these books were exported: judged once, on the first 700 such trades in time order
 among markets starting from 2026-09-29 20:30 UTC (run with --since "2026-09-29 20:30" on the daily
 exports); with fewer the run reports the count and no verdict, so watching the data arrive cannot
@@ -161,18 +174,29 @@ def spot_grid(binance):
     return grid, sigma
 
 
-def triggers(markets, grid, sigma, z):
-    """First 1 s Binance move above z sigma in each market's 240..60 s window: (market, t, side)."""
+def triggers(markets, binance, sigma, z):
+    """First Binance move above z sigma in each market's 240..60 s window: (market, t, side, winner).
+
+    A move is a trade whose log price differs from the last trade at least one second earlier by more
+    than z times sigma (sigma of the per-second series up to the previous whole second), and `t` is
+    that trade's own exchange time, so everything the trigger uses is known at t. (Before
+    2026-09-30 01:40 UTC, t was the start of the second whose last trade made the move, which let a
+    trade at t + L see prices up to a second later; see the module notes.)"""
+    ts = binance["trade_ts"].to_numpy()
+    lp = np.log(binance["price"].to_numpy())
     out = []
     for m in markets.itertuples():
-        secs = np.arange(m.start_ts + bo.WINDOW_S - TAUS[0], m.start_ts + bo.WINDOW_S - TAUS[1] + 1)
-        now, prev = grid.reindex(secs).to_numpy(), grid.reindex(secs - 1).to_numpy()
-        sg = sigma.reindex(secs - 1).to_numpy()
+        a, b = np.searchsorted(ts, [m.start_ts + bo.WINDOW_S - TAUS[0], m.start_ts + bo.WINDOW_S - TAUS[1] + 1])
+        if b <= a:
+            continue
+        j = np.searchsorted(ts, ts[a:b] - 1.0, "right") - 1
+        ref = np.where(j >= 0, lp[np.maximum(j, 0)], np.nan)
+        sg = sigma.reindex(np.floor(ts[a:b]).astype("int64") - 1).to_numpy()
         with np.errstate(invalid="ignore"):
-            hit = np.abs(now - prev) > z * sg
+            hit = np.abs(lp[a:b] - ref) > z * sg
         if hit.any():
             i = int(np.argmax(hit))
-            out.append((m.market_id, float(secs[i]), "Up" if now[i] > prev[i] else "Down", m.winner))
+            out.append((m.market_id, float(ts[a + i]), "Up" if lp[a + i] > ref[i] else "Down", m.winner))
     return pd.DataFrame(out, columns=["market_id", "t", "side", "winner"])
 
 
@@ -286,7 +310,7 @@ def run(d, out, reps=20000, since=None, until=None, label=""):
          f"99% {1000 * delay[0.99]:.0f} ms。", ""]
     verdicts = []
     for z in ZS:
-        trig = triggers(markets, grid, sigma, z)
+        trig = triggers(markets, binance, sigma, z)
         react = np.array([book.reaction(r.market_id, r.t, r.side) for r in trig.itertuples()])
         ok = np.isfinite(react)
         q = np.nanpercentile(react, [25, 50, 75, 90]) if ok.any() else [np.nan] * 4

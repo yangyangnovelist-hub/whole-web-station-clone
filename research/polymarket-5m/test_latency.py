@@ -53,9 +53,9 @@ def export(tmp_path_factory):
 def test_triggers_and_reaction(export):
     books, markets, binance = lt.load(export)
     grid, sigma = lt.spot_grid(binance)
-    trig = lt.triggers(markets, grid, sigma, 3.0)
+    trig = lt.triggers(markets, binance, sigma, 3.0)
     assert len(trig) == N and (trig["side"] == "Up").all()
-    assert (trig["t"] == [S0 + 300 * i + 100 for i in range(N)]).all()
+    assert np.allclose(trig["t"], [S0 + 300 * i + 100.05 for i in range(N)])  # the trade's own time
     book = lt.Book(books)
     assert book.reaction("m0", S0 + 100, "Up") == pytest.approx(0.4)
 
@@ -63,7 +63,7 @@ def test_triggers_and_reaction(export):
 def test_lag_decides_the_price(export):
     books, markets, binance = lt.load(export)
     grid, sigma = lt.spot_grid(binance)
-    trig = lt.triggers(markets, grid, sigma, 3.0)
+    trig = lt.triggers(markets, binance, sigma, 3.0)
     book = lt.Book(books)
     fast, slow = lt.trade(trig, book, 0.2, False), lt.trade(trig, book, 1.0, False)
     assert (fast["price"] == 0.50).all() and (slow["price"] == 0.70).all()

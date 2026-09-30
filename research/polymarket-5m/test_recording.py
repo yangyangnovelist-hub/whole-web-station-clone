@@ -175,3 +175,34 @@ def test_two_coins_record_and_build_separately(tmp_path):
     assert c_btc["markets"] == c_eth["markets"] == 1 and c_btc["book"] == c_eth["book"] == 1
     assert next((tmp_path / "b-eth").rglob("ETHUSD-prices-*.csv.gz"))
     assert rd.load_markets(tmp_path / "b-eth")["strike"].iloc[0] == pytest.approx(3_000.0)
+
+
+def test_latency_files_use_exchange_time(tmp_path):
+    """The Up ask is 0.50 until the exchange stamps 0.70 at start+100.4; messages arrive 0.2 s later.
+    latency.py must see the exchange's times and Polymarket's relay of Binance."""
+    import latency as lt
+    trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: [])
+    mk = gamma(S0, up_won=True)
+    trader.rec.write("markets", mk)
+    trader.markets[mk["slug"]] = pt.parse_gamma_market(mk)
+    trader.token_coin.update({f"up{S0}": "btc", f"dn{S0}": "btc"})
+    rng = np.random.default_rng(8)
+    price = 80_000.0
+    for s in range(S0 - 900, S0 + 300):
+        price *= np.exp(rng.normal(0, 1e-5)) * (1.004 if s == S0 + 100 else 1.0)
+        trader.on_rtds(json.dumps({"topic": "crypto_prices", "type": "update", "payload": {
+            "symbol": "btcusdt", "timestamp": s * 1000 + 50, "value": price}}), s * 1000 + 350, "rtds-binance")
+    for t_ms, ask in ((S0 * 1000, 0.50), ((S0 + 100) * 1000 + 400, 0.70)):
+        trader.on_clob(json.dumps([{**book(f"up{S0}", ask - 0.01, ask), "timestamp": str(t_ms)}]), t_ms + 200)
+    trader.rec.close()
+    assert (tmp_path / "raw").glob("*/rtds-binance.jsonl.gz")
+    counts = rc.build(tmp_path, tmp_path / "bundle")
+    assert counts["latency_markets"] == 1 and counts["latency_books"] == 2 and counts["latency_binance"] == 1200
+    books, markets, binance = lt.load(tmp_path / "bundle" / "latency")
+    assert list(books["ts"]) == [S0, S0 + 100.4] and list(markets["winner"]) == ["Up"]
+    grid, sigma = lt.spot_grid(binance)
+    trig = lt.triggers(markets, binance, sigma, 3.0)
+    assert list(trig["t"]) == [pytest.approx(S0 + 100.05)]
+    book_ = lt.Book(books)
+    assert list(lt.trade(trig, book_, 0.2, False)["price"]) == [0.50]
+    assert list(lt.trade(trig, book_, 1.0, False)["price"]) == [0.70]

@@ -37,6 +37,10 @@ GAMMA = "https://gamma-api.polymarket.com/markets?slug={slug}"
 GAMMA_CLOSED = GAMMA + "&closed=true"
 CLOB_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 RTDS_WS = "wss://ws-live-data.polymarket.com"
+# Chainlink (settlement) and, on a connection of its own so a rejected subscription cannot cost the
+# Chainlink stream, the Binance prices Polymarket relays (for latency.py's stale-quote test).
+RTDS_SUBS = {"rtds": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}],
+             "rtds-binance": [{"topic": "crypto_prices", "type": "update", "filters": ""}]}
 SLUG = "{coin}-updown-5m-{start}"
 COINS = ("btc", "eth", "sol", "xrp", "doge")  # the coins with 5m Up/Down series
 NAN = float("nan")
@@ -302,13 +306,14 @@ class LiveTrader:
                 self.rec.write(f"clob-{coin}", {"recv_ms": recv_ms, "msg": events})
         apply_clob_message(self.ladders, msg, recv_ms)
 
-    def on_rtds(self, text, recv_ms):
+    def on_rtds(self, text, recv_ms, stream="rtds"):
         if not text or text in ("pong", "PONG"):
             return
         msg = json.loads(text)
-        self.rec.write("rtds", {"recv_ms": recv_ms, "msg": msg})
+        self.rec.write(stream, {"recv_ms": recv_ms, "msg": msg})
         payload = msg.get("payload") or {}
-        if "btc" in str(payload.get("symbol", "")).lower() and "value" in payload:
+        if msg.get("topic") == "crypto_prices_chainlink" and "btc" in str(payload.get("symbol", "")).lower() \
+                and "value" in payload:
             self.last_btc = (payload.get("timestamp"), float(payload["value"]))
 
     def top(self, token):
@@ -427,9 +432,9 @@ class LiveTrader:
             self.ws = None
             await asyncio.sleep(2)
 
-    async def rtds_loop(self):
+    async def rtds_loop(self, stream="rtds"):
         import websockets
-        sub = {"action": "subscribe", "subscriptions": [{"topic": "crypto_prices_chainlink", "type": "*", "filters": ""}]}
+        sub = {"action": "subscribe", "subscriptions": RTDS_SUBS[stream]}
         while True:
             try:
                 async with websockets.connect(RTDS_WS, ping_interval=None, max_size=None) as ws:
@@ -437,11 +442,11 @@ class LiveTrader:
                     pinger = asyncio.create_task(self._ping(ws, "ping", 5))
                     try:
                         async for text in ws:
-                            self.on_rtds(text, now_ms())
+                            self.on_rtds(text, now_ms(), stream)
                     finally:
                         pinger.cancel()
             except Exception as e:
-                self.rec.write("errors", {"at": now_ms(), "where": "rtds", "err": repr(e)})
+                self.rec.write("errors", {"at": now_ms(), "where": stream, "err": repr(e)})
             await asyncio.sleep(2)
 
     @staticmethod
@@ -479,7 +484,8 @@ class LiveTrader:
             lambda loop, ctx: self.rec.write("errors", {"at": now_ms(), "where": "loop",
                                                         "err": repr(ctx.get("exception") or ctx.get("message"))}))
         tasks = [asyncio.create_task(c) for c in
-                 (self.discover(), self.clob_loop(), self.rtds_loop(), self.scheduler(), self.reporter())]
+                 (self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
+                  self.scheduler(), self.reporter())]
         try:
             await asyncio.sleep(hours * 3600)
         finally:

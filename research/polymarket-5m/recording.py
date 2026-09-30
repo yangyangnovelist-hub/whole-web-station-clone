@@ -19,7 +19,11 @@ strategy can be re-tested on data recorded after it was chosen:
 - markets with the official outcome from the latest Gamma snapshot. Gamma
   does not publish the price to beat, so the strike is the mean of the
   recorded Chainlink prices over the 60 seconds ending at the open, the same
-  approximation that reproduced 265 of 266 outcomes on the sample day.
+  approximation that reproduced 265 of 266 outcomes on the sample day;
+- under latency/, the files latency.py reads (as in the Dublin exports): the
+  Up token's top of book and first-level sizes stamped with the exchange's own
+  message time, markets and winners, and Polymarket's relay of the Binance
+  <coin>usdt price (RTDS crypto_prices) with its own timestamp.
 
 All recorded days go into one bundle, so the forward sample keeps growing.
 """
@@ -189,11 +193,13 @@ def _levels(d):
 
 
 def book_events(records):
-    """Yield ("bba" | "book" | "trade", row) from recorded CLOB messages in arrival order."""
-    ladders, last_top, pending = {}, {}, {}
+    """Yield ("bba" | "book" | "trade" | "xtop", row) from recorded CLOB messages in arrival order.
+    "xtop" rows carry the top of book and first-level sizes whenever they change, stamped with the
+    exchange's message time (messages without one are left out of them)."""
+    ladders, last_top, pending, last_x = {}, {}, {}, {}
     for rec in records:
         ms, msg = int(rec["recv_ms"]), rec.get("msg")
-        touched = []
+        touched, stamp = [], {}
         for m in msg if isinstance(msg, list) else [msg]:
             if not isinstance(m, dict):
                 continue
@@ -203,11 +209,18 @@ def book_events(records):
                                 "event_ts_ms": int(m.get("timestamp") or ms), "payload": m}
             elif et == "book":
                 touched.append(m["asset_id"])
+                stamp[m["asset_id"]] = m.get("timestamp")
             elif et == "price_change":
-                touched += [pc["asset_id"] for pc in m.get("price_changes", [])]
+                for pc in m.get("price_changes", []):
+                    touched.append(pc["asset_id"])
+                    stamp[pc["asset_id"]] = m.get("timestamp")
         pt.apply_clob_message(ladders, msg, ms)
         for tok in dict.fromkeys(touched):
             lad = ladders[tok]
+            x = (lad.bid, lad.ask, lad.size_at("bid", lad.bid), lad.size_at("ask", lad.ask))
+            if stamp.get(tok) and x != last_x.get(tok):
+                last_x[tok] = x
+                yield "xtop", {"asset_id": tok, "ts": int(stamp[tok]) / 1000, "recv_ms": ms, "top": x}
             top = (_top(lad.bid), _top(lad.ask))
             if top != last_top.get(tok):
                 last_top[tok] = top
@@ -219,6 +232,87 @@ def book_events(records):
             pending[tok] = {"asset_id": tok, "recv_ms": ms,
                             "payload": {"bids": _levels(lad.bids), "asks": _levels(lad.asks)}}
     yield from (("book", row) for row in pending.values())
+
+
+def binance_ticks(records, symbol="btcusdt"):
+    """(ts, value, recv_ms) of Polymarket's relay of one Binance symbol (RTDS crypto_prices)."""
+    for rec in records:
+        msg = rec.get("msg") or {}
+        if msg.get("topic") != "crypto_prices":
+            continue
+        payload = msg.get("payload") or {}
+        if str(payload.get("symbol", "")).lower() != symbol:
+            continue
+        points = payload.get("data") if isinstance(payload.get("data"), list) else [payload]
+        for pnt in points:
+            if pnt.get("value") is None or pnt.get("timestamp") is None:
+                continue
+            ts = float(pnt["timestamp"])
+            yield (ts / 1000 if ts > 10**11 else ts), float(pnt["value"]), int(rec["recv_ms"])
+
+
+def _num(x):
+    return "" if x is None or not np.isfinite(x) else f"{x:g}"
+
+
+class LatencyFiles:
+    """latency.py's input under <out>/latency: markets and winners, the Up token's exchange-stamped
+    top of book (streamed in through `book`) and the relayed Binance price (written on `close`).
+    Any failure only disables these files; the bundle itself is unaffected."""
+
+    def __init__(self, out, markets):
+        self.d, self.error, self.n = Path(out) / "latency", None, 0
+        try:
+            self.d.mkdir(parents=True, exist_ok=True)
+            self.up, reg, won = {}, [], []
+            for m in markets:
+                try:
+                    mk = pt.parse_gamma_market(m["raw"])
+                except (ValueError, KeyError):
+                    continue
+                self.up[mk["up_token"]] = m["slug"]
+                reg.append((m["slug"], mk["start"]))
+                if mk["up_won"] is not None:
+                    won.append((m["slug"], "Up" if mk["up_won"] else "Down"))
+            for name, header, rows in (("market_registry", ("market_id", "start_ts"), reg),
+                                       ("market_outcomes", ("market_id", "winner"), won)):
+                with gzip.open(self.d / f"runtime_1000.{name}.csv.gz", "wt", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(header)
+                    w.writerows(rows)
+            self.f = gzip.open(self.d / "runtime_1000.poly_probability_observations_v1.csv.gz", "wt", newline="")
+            self.w = csv.writer(self.f)
+            self.w.writerow(["market_id", "source_ts", "receive_ts", "best_bid", "best_ask", "bids_json", "asks_json"])
+        except Exception as e:
+            self.error = repr(e)
+
+    def book(self, row):
+        slug = None if self.error else self.up.get(row["asset_id"])
+        if slug is None:
+            return
+        try:
+            bid, ask, bid_size, ask_size = row["top"]
+            self.w.writerow([slug, f"{row['ts']:.3f}", f"{row['recv_ms'] / 1000:.3f}", _num(bid), _num(ask),
+                             f"[[{_num(bid)}, {_num(bid_size)}]]" if np.isfinite(bid) else "[]",
+                             f"[[{_num(ask)}, {_num(ask_size)}]]" if np.isfinite(ask) else "[]"])
+            self.n += 1
+        except Exception as e:
+            self.error = repr(e)
+
+    def close(self, src, coin):
+        if self.error:
+            return {"latency_error": self.error}
+        try:
+            self.f.close()
+            k = 0
+            with gzip.open(self.d / "shadow_current.jsonl.gz", "wt") as f:
+                for ts, value, recv_ms in binance_ticks(iter_jsonl(raw_files(src, "rtds-binance")), f"{coin}usdt"):
+                    f.write(json.dumps({"event": "BINANCE_AGG_TRADE", "trade_ts": ts, "receive_ts": recv_ms / 1000,
+                                        "price": value}) + "\n")
+                    k += 1
+            return {"latency_markets": len(self.up), "latency_books": self.n, "latency_binance": k}
+        except Exception as e:
+            return {"latency_error": repr(e)}
 
 
 def build(src, out, coin="btc"):
@@ -261,13 +355,18 @@ def build(src, out, coin="btc"):
               "resolved": sum(m["resolved"] for m in markets),
               "with_strike": sum(m["strike_value"] is not None for m in markets)}
     files = {k: gzip.open(paths[k], "wt") for k in ("bba", "book", "trade")}
+    lat = LatencyFiles(out, markets)
     try:
         for kind, row in book_events(iter_jsonl(clob_files(src, coin))):
+            if kind == "xtop":
+                lat.book(row)
+                continue
             files[kind].write(json.dumps(row, separators=(",", ":")) + "\n")
             counts[kind] = counts.get(kind, 0) + 1
     finally:
         for f in files.values():
             f.close()
+    counts.update(lat.close(src, coin))
     return counts
 
 
