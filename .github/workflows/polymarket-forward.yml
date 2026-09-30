@@ -75,7 +75,7 @@ jobs:
             b="$RUNNER_TEMP/paper/bundle-$c"
             echo "== $c"
             python recording.py "$RUNNER_TEMP/paper" --coin "$c" --out "$b" || continue
-            python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 --reps 2000 \
+            python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
               --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv" || continue
             python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
           done

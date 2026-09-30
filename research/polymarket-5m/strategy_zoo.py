@@ -371,11 +371,12 @@ class Strategy:
     fn: Callable
 
 
-def maker_queue(tau, which, lo, hi):
+def maker_queue(tau, which, lo, hi, cancel_tau=0):
     """Join the best bid of one side at the back of its queue. Filled once sells at that price
     add up to more than the size shown ahead of us when we joined, or a sell prints below it.
     Cancels ahead of us are assumed not to happen (they would only move us up), so this is
-    between the queue-front average and the trade-through rule."""
+    between the queue-front average and the trade-through rule. Unfilled orders are cancelled
+    `cancel_tau` seconds before the close."""
     def f(m):
         t = bo.WINDOW_S - tau
         r = m.at(t)
@@ -391,7 +392,7 @@ def maker_queue(tau, which, lo, hi):
         ahead = sum(sz for px, sz in snap[0] if abs(px - bid) < 1e-9)
         if not in_band(bid, lo, hi):
             return None
-        g = m.prints(token, (m.start + t) * 1000, m.end * 1000)
+        g = m.prints(token, (m.start + t) * 1000, (m.end - cancel_tau) * 1000)
         if g is None or g.empty:
             return None
         sells = g[g["side"] == "SELL"]
@@ -462,7 +463,11 @@ ONCHAIN = {103: Strategy("强势方 τ=90 [0.60,0.80]", "L 九月链上", late_f
            # same day (before 18:00 UTC) after the on-chain tester showed trade-through fills lose.
            107: Strategy("排队挂单买强势方 τ=45 买一 [0.60,0.80]", "L 九月链上", maker_queue(45, "favourite", 0.60, 0.80)),
            108: Strategy("排队挂单买弱势方 τ=90 买一 [0.02,0.10]", "L 九月链上", maker_queue(90, "longshot", 0.02, 0.10))}
-EXTRA = {**STALE, **ONCHAIN}
+# Chosen on the May-August 100 ms books (cross.py makers: the one cell positive in both halves among
+# about 140), so only data recorded after it was added can test it (forward.py, judged once).
+MAY_AUG = {109: Strategy("排队挂单买弱势方 τ=30 买一 [0.01,0.10] 收盘前 10 秒撤单", "M 5–8 月",
+                         maker_queue(30, "longshot", 0.01, 0.10, cancel_tau=10))}
+EXTRA = {**STALE, **ONCHAIN, **MAY_AUG}
 
 
 # ----------------------------------------------------------------- evaluation

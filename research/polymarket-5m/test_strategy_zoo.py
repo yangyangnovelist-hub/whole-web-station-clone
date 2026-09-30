@@ -108,7 +108,7 @@ def test_maker_bid_respects_its_price_band(markets):
     m0 = markets[0]
     assert sz.maker_bid(240, "favourite", 0.60, 0.80)(m0) is None  # the 0.50 bid is outside the band
     assert sz.maker_bid(240, "favourite", 0.45, 0.55)(m0)["price"] == 0.50
-    assert set(sz.EXTRA) == {101, 102, 103, 104, 105, 106, 107, 108}
+    assert set(sz.EXTRA) == {101, 102, 103, 104, 105, 106, 107, 108, 109}
 
 
 def test_queue_maker_waits_for_the_size_ahead():
@@ -127,6 +127,9 @@ def test_queue_maker_waits_for_the_size_ahead():
     assert rule(market([(at(260), "SELL", 20.0, 0.69), (at(270), "SELL", 15.0, 0.69)]))["price"] == 0.69
     assert rule(market([(at(260), "SELL", 1.0, 0.68)]))["kind"] == "maker"           # traded through
     assert rule(market([(at(260), "BUY", 50.0, 0.69)])) is None                       # buys do not fill a bid
+    late = sz.maker_queue(45, "favourite", 0.60, 0.80, cancel_tau=10)                 # cancelled at t=290
+    assert late(market([(at(292), "SELL", 1.0, 0.68)])) is None
+    assert late(market([(at(288), "SELL", 1.0, 0.68)]))["price"] == 0.69
 
 
 def test_markets_without_a_recorded_strike_still_trade(tmp_path):

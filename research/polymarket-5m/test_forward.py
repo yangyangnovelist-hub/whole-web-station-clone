@@ -64,3 +64,19 @@ def test_report_can_replay_the_onchain_rules_on_older_markets(tmp_path):
     fw.add(tmp_path / "a.csv", bundle, store)
     text = fw.report(store, reps=100, onchain_since=0)
     assert "这里是重放" in text and "| 107 |" in text and "| 108 |" in text
+
+
+def test_report_judges_109_once_on_its_first_fills(tmp_path, monkeypatch):
+    import forward as fw
+    start = fw.M109_ADDED
+    rows = [{"id": 109, "slug": f"btc-updown-5m-{start + 300 * i}", "start": start + 300 * i, "side": "Down",
+             "price": 0.05, "fee": 0.0, "won": i % 10 == 0, "pnl": (1.0 if i % 10 == 0 else 0.0) - 0.05,
+             "t": 270, "kind": "maker"} for i in range(30)]
+    rows.append({**rows[0], "slug": "btc-updown-5m-1", "start": start - 300})  # before #109 was added
+    pd.DataFrame(rows).to_csv(tmp_path / "trades.csv", index=False)
+    pd.DataFrame({"slug": [r["slug"] for r in rows], "start": [r["start"] for r in rows]}).to_csv(
+        tmp_path / "markets.csv", index=False)
+    monkeypatch.setattr(fw, "M109_N", 50)
+    assert "成交 30 笔" in fw.report(tmp_path, reps=200) and "不到 50 笔，不判定" in fw.report(tmp_path, reps=200)
+    monkeypatch.setattr(fw, "M109_N", 20)
+    assert "前 20 笔：胜率 10.0%，平均价 0.050，每份 +5.00¢" in fw.report(tmp_path, reps=200)

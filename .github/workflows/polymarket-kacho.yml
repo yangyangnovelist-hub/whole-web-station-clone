@@ -89,7 +89,7 @@ jobs:
             for b in "$x"/bundle-*; do
               [ -d "$b" ] || continue
               t="$d/trades-$(basename "$b").csv"
-              python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 --reps 2000 \
+              python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
                 --out "$d/zoo-$(basename "$b").md" --trades-out "$t" || { echo "$b: zoo failed"; continue; }
               python forward.py add "$t" --markets "$b" --store "$store" || true
             done

@@ -23,6 +23,7 @@ import strategy_zoo as sz
 
 HERE = Path(__file__).parent
 ONCHAIN_ADDED = 1_790_704_800  # 2026-09-29 18:00 UTC: the first recording run that evaluates #103-#106
+M109_ADDED, M109_N = 1790784000, 2000  # 2026-09-30 16:00 UTC; #109 is judged once on its first 2,000 fills
 STORE = HERE / "forward"
 TRADE_COLS = ["id", "slug", "start", "side", "price", "fee", "won", "pnl", "t", "kind"]
 
@@ -95,7 +96,32 @@ def report(store=STORE, reps=20000, onchain_since=None):
                "这里是重放：数据在规则定下之前录的，但它们（9 月 28–29 日）没有参与规则的设计（设计只用了 9 月 1–25 日的链上成交）。")
             + "6 条一起按 Bonferroni 校正：原始 p < {alpha:.4f} 且 EV > 0 才算通过。#105/#106 的挂单只在之后有更低的成交价时才算成交；#107/#108 按排队顺序，以挂单价卖出的量超过挂单时排在前面的量才算成交。"
             "\n\n数据：纸面交易录制，{n_mk} 个 5 分钟市场，60 秒 TWAP 结算。")) + "\n"
+    text += "\n---\n\n" + report_109(extra, markets, reps)
     return text
+
+
+def report_109(trades, markets, reps=20000):
+    """#109, preregistered 2026-09-30 before any data it is judged on: markets starting from
+    M109_ADDED, all recorded coins pooled, judged once on the first M109_N fills by market start;
+    passes with EV > 0 and exact p < 0.05 (null: win probability = price; makers pay no fee)."""
+    import binary as bo
+    t = trades[(trades["id"] == 109) & (trades["start"] >= M109_ADDED)].sort_values(["start", "slug"], kind="stable")
+    n_mk = int((markets["start"] >= M109_ADDED).sum())
+    head = (f"# #109 的前向检验（5–8 月数据选出，只用 {pd.Timestamp(M109_ADDED, unit='s'):%Y-%m-%d %H:%M} UTC 以后的数据）\n\n"
+            "剩 30 秒时，在弱势方买一（0.01–0.10）排到队尾挂 1 份买单；以挂单价卖出的量超过排在前面的量、或有更低价卖出才算成交；"
+            f"收盘前 10 秒未成交就撤单；不付手续费，持有到结算。各币种合并，按市场开始时间取前 {M109_N:,} 笔成交判定一次，"
+            f"EV > 0 且精确 p < 0.05 才算通过。\n\n数据：{n_mk:,} 个市场。\n\n")
+    if t.empty:
+        return head + "还没有成交。\n"
+    line = (f"成交 {len(t):,} 笔，胜率 {t['won'].mean():.1%}，平均价 {t['price'].mean():.3f}，"
+            f"每份 {100 * t['pnl'].mean():+.2f}¢")
+    if len(t) < M109_N:
+        return head + line + f"。不到 {M109_N:,} 笔，不判定。\n"
+    first = t.head(M109_N)
+    p = bo.fair_price_pvalue(first["pnl"].to_numpy(), first["price"].to_numpy(), sims=reps) if first["pnl"].mean() > 0 else 1.0
+    ok = first["pnl"].mean() > 0 and p < 0.05
+    return head + (f"前 {M109_N:,} 笔：胜率 {first['won'].mean():.1%}，平均价 {first['price'].mean():.3f}，"
+                   f"每份 {100 * first['pnl'].mean():+.2f}¢，p = {p:.4f} → {'通过' if ok else '没通过'}。\n")
 
 
 def main(argv=None):
