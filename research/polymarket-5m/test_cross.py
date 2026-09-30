@@ -253,7 +253,7 @@ def test_hourly_trades_price_against_the_binance_candle():
     price[np.searchsorted(tt, start)] = 80_000.0
     price[tt >= t_jump] *= 1.005
     binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
-    t, ck = cross.hourly_trades(feat, mkts, binance)
+    t, ck = cross.hourly_trades(feat, mkts, binance, lags=(300,))
     assert ck[["binance_up", "up_won"]].values.tolist() == [[1.0, 1.0]]
     assert not (t["window"] == "1800-300").any()
     w = t[t["window"] == "300-60"]
@@ -262,3 +262,39 @@ def test_hourly_trades_price_against_the_binance_candle():
     assert w["pnl"].iloc[0] == pytest.approx(1 - 0.60 - 0.07 * 0.6 * 0.4)
     last = t[t["window"] == "60-5"]
     assert last["theta"].tolist() == [0.02] and last["price"].tolist() == [0.97]
+
+
+
+def _gated_fixture(live):
+    """The gated jump fixture; with `live` the Up ask size ticks every 100 ms, as a running feed
+    does, otherwise the book repeats one state (a stalled recorder) apart from the ask change."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    size = 25.0 + (np.arange(len(ts)) % 7 if live else 0)
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.49, "up_best_ask": np.where(ts < t_jump + 150 + 400, 0.50, 0.70),
+                         "down_best_bid": 0.49, "down_best_ask": 0.51, "up_ask_size": size, "down_ask_size": 30.0,
+                         "up_bid_size": 10.0, "down_bid_size": 10.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    price[tt >= t_jump] *= 1.004
+    return feat, mkts, pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+
+
+def test_book_health_keeps_live_books_and_drops_stalled_or_crossed_ones():
+    feat, mkts, binance = _gated_fixture(live=True)
+    g = cross.gated_trades(feat, mkts, binance, z0=6.0, health=True)
+    assert len(g) == len(cross.GATE_LAGS) * len(cross.GATE_THETAS)  # a running feed trades as before
+    feat, mkts, binance = _gated_fixture(live=False)
+    assert len(cross.gated_trades(feat, mkts, binance, z0=6.0)) == len(g)
+    assert cross.gated_trades(feat, mkts, binance, z0=6.0, health=True).empty  # a frozen book does not
+    feat, mkts, binance = _gated_fixture(live=True)
+    feat["up_best_bid"] = 0.55  # crossed while the ask is 0.50: never bought there, only once the ask is 0.70
+    g = cross.gated_trades(feat, mkts, binance, z0=6.0, health=True)
+    assert len(g) and (g["price"] == 0.70).all()
+    feat, _, _ = _gated_fixture(live=True)
+    feat["observed_halt_flag"] = True
+    assert cross.gated_trades(feat, mkts, binance, z0=6.0, health=True).empty

@@ -7,7 +7,7 @@
 #       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-09-30 14:10 fair-jump gated stale asks on ETH 5m (does test D's mechanism carry over)
+requested: 2026-09-30 16:51 BTC 15m gated rule with the book-health filter
 mode: cross
-cross: gated --dataset whodisidk/polymarket-eth-updown-exchange-data --out real/cross-gated-eth.md
+cross: gated --horizon 15 --health --out real/cross-gated-15m-health.md
 later: 2026-09-28

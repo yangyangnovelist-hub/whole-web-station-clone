@@ -131,7 +131,7 @@ def probe(workdir, out):
 
 
 FEAT_COLS = ["timestamp_ms", "market_id", "lifecycle_state", "up_best_bid", "up_best_ask", "down_best_bid",
-             "down_best_ask", "up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes"]
+             "down_best_ask", "up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes", "observed_halt_flag"]
 MKT_COLS = ["market_id", "slug", "session_start_ts", "session_end_ts", "chainlink_open_price", "up_won",
             "outcome_direction", "lifecycle_state", "up_token_id", "down_token_id"]
 
@@ -441,11 +441,46 @@ def makers(workdir, out, days=None, reps=5000):
     print("\n".join(L))
 
 
+HEALTH_ALIVE = (2000, 2000)  # ms: the recorded book must change this close before the signal and after the fill
+HEALTH_STATE = ("up_best_bid", "up_best_ask", "down_best_bid", "down_best_ask", "up_ask_size", "down_ask_size",
+                "up_bid_size", "down_bid_size")
+
+
+def book_health(f):
+    """(sane, changes) for one market's snapshots (sorted by time). The archives repeat the last
+    observed state when nothing new arrives and keep crossed and incomplete quotes (dataset card),
+    so a row's presence does not show the feed was live. `sane` marks rows that are not crossed on
+    either side, whose two asks sum to at least 0.99, that are active and not halted; `changes`
+    are the snapshot times at which any top-of-book price or size differed from the row before."""
+    import numpy as np
+    ub, ua = f["up_best_bid"].to_numpy(float), f["up_best_ask"].to_numpy(float)
+    db, da = f["down_best_bid"].to_numpy(float), f["down_best_ask"].to_numpy(float)
+    with np.errstate(invalid="ignore"):
+        sane = ~(ub >= ua) & ~(db >= da) & ~(ua + da < 0.99)
+    if "lifecycle_state" in f:
+        ls = f["lifecycle_state"]
+        sane &= (ls.isin(["active", "open", "trading"]) | ls.isna()).to_numpy(bool)
+    if "observed_halt_flag" in f:
+        sane &= ~f["observed_halt_flag"].fillna(False).astype(bool).to_numpy()
+    st = f[[c for c in HEALTH_STATE if c in f]].to_numpy(float)
+    same = (st[1:] == st[:-1]) | (np.isnan(st[1:]) & np.isnan(st[:-1]))
+    moved = np.r_[True, ~same.all(axis=1)]
+    return sane, f["timestamp_ms"].to_numpy()[moved]
+
+
+def changed_near(changes, x, before, after):
+    """Whether the recorded book changed within `before` ms up to x and within `after` ms after it."""
+    import numpy as np
+    i = int(np.searchsorted(changes, x, "right"))
+    return i > 0 and x - changes[i - 1] <= before and i < len(changes) and changes[i] - x <= after
+
+
 GATE_THETAS = (0.0, 0.02, 0.04, 0.06, 0.08, 0.12)
 GATE_LAGS = (300, 500)
 
 
-def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15, horizon=5, tau_hi=None):
+def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15, horizon=5, tau_hi=None,
+                 health=False):
     """Stale-ask sniping gated by the fair-value jump a Binance move implies (`horizon`-minute
     markets, all settled on the 60 s TWAP).
 
@@ -456,7 +491,8 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
     the expected settlement TWAP by the whole move, so the fair Up price becomes
     Phi(Phi^-1(P0) + dx / (sigma * twap_std_factor(t))). The side of the move is bought at the
     ask L ms after receipt when fair - ask - fee >= theta; the first such trade per market and
-    (L, theta) is kept."""
+    (L, theta) is kept. With `health`, the quote at the print and the fill must be sane rows of a book
+    that changed within HEALTH_ALIVE before the print and after the fill (see book_health)."""
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -484,6 +520,8 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
         fts = f["timestamp_ms"].to_numpy()
         ub, ua = f["up_best_bid"].to_numpy(), f["up_best_ask"].to_numpy()
         da, uas, das = f["down_best_ask"].to_numpy(), f["up_ask_size"].to_numpy(), f["down_ask_size"].to_numpy()
+        if health:
+            sane, changes = book_health(f)
         a, b = np.searchsorted(rt, [mk["end"] - tau_hi * 1000, mk["end"] - tau_lo * 1000])
         if b <= a:
             continue
@@ -499,6 +537,8 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
             k0 = np.searchsorted(fts, t0, "right") - 1  # the quote shown when the print arrived
             if k0 < 0 or t0 - fts[k0] > 1000 or not (np.isfinite(ub[k0]) and np.isfinite(ua[k0])):
                 continue
+            if health and not (sane[k0] and changed_near(changes, t0, HEALTH_ALIVE[0], 10**12)):
+                continue
             p0 = min(max((ub[k0] + ua[k0]) / 2, 0.005), 0.995)
             t_mkt = (t0 - (mk["end"] - window * 1000)) / 1000
             fac = float(bo.twap_std_factor(t_mkt, window=window)) * sg[i]
@@ -511,6 +551,8 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
             for lag in lags:
                 k = np.searchsorted(fts, t0 + lag, "left")
                 if k >= len(f) or fts[k] > t0 + lag + 1000:
+                    continue
+                if health and not (sane[k] and changed_near(changes, fts[k], 10**12, HEALTH_ALIVE[1])):
                     continue
                 px = ua[k] if up else da[k]
                 size = uas[k] if up else das[k]
@@ -527,7 +569,7 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
                                        "won", "pnl"])
 
 
-def gated(workdir, out, days=None, reps=5000, horizon=5):
+def gated(workdir, out, days=None, reps=5000, horizon=5, health=False):
     """gated_trades on every day (`horizon`-minute markets); thresholds are compared on May 25 - Jul 15 and checked on the
     later days (Jul 16 - Aug 16, taker delay 250 ms; Aug 17 onwards, 50 ms)."""
     import numpy as np
@@ -545,7 +587,7 @@ def gated(workdir, out, days=None, reps=5000, horizon=5):
             feat, mk, rs = read_day(local)
             binance = read_binance(local)
             Path(local).unlink()
-            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon)
+            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon, health=health)
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(t):,} gated trades over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
@@ -559,6 +601,11 @@ def gated(workdir, out, days=None, reps=5000, horizon=5):
          "这次涨跌让结算 TWAP 的期望整体移动，新的公平价 = Φ(Φ⁻¹(P0) + Δx / (σ·TWAP 标准差系数))。L 毫秒后按卖一买顺势一方，"
          "只在 公平价 − 卖一 − taker 费 ≥ θ 时买，每个市场、每组 (L, θ) 只取第一笔，持有到结算。"
          "5 月 25 日–7 月 15 日用来比较门槛，之后的日子只用来核对。探索性质。", ""]
+    if health:
+        L += [f"本次加了盘口健康检查（`book_health`）：触发时和成交时的快照不能是交叉盘、两边卖一之和不低于 0.99、"
+              f"处于交易状态且未暂停，并且盘口在触发前 {HEALTH_ALIVE[0] / 1000:g} 秒内和成交后 {HEALTH_ALIVE[1] / 1000:g} 秒内"
+              "确实变过（数据集在没有新消息时会重复上一个状态，所以只有快照存在不能说明行情在更新）。"
+              "用来检验原结果是不是记录机断流造成的假象；门槛不重新选。", ""]
     if df.empty:
         L.append("没有可用的数据。")
     else:
@@ -951,17 +998,26 @@ def probe_trades(workdir, out):
 
 HOUR_WINDOWS = ((1800, 300), (300, 60), (60, 5))
 HOUR_THETAS = (0.02, 0.04, 0.06, 0.08, 0.12)
+HOUR_LAGS = (300, 500, 1000, 2000)
+FEE_072_UNTIL = 1782864000000  # 2026-07-01 00:00 UTC in ms: the crypto taker fee rate was 0.072 before, 0.07 after
 
 
-def hourly_trades(feat, mkts, binance, windows=HOUR_WINDOWS, thetas=HOUR_THETAS, lag_ms=300):
+def taker_rate(ts_ms):
+    import numpy as np
+    return np.where(np.asarray(ts_ms) < FEE_072_UNTIL, 0.072, 0.07)
+
+
+def hourly_trades(feat, mkts, binance, windows=HOUR_WINDOWS, thetas=HOUR_THETAS, lags=HOUR_LAGS, health=False):
     """1h markets settle on Binance's own 1-hour candle (close >= open), so Binance's price is the
     settlement variable itself: with K the first Binance trade of the hour and S the last trade
     received by second t, the fair Up price is the European digital Phi(ln(S/K) / (sigma*sqrt(tau))),
     sigma the trailing 10 min std of 1 s log returns up to two whole seconds back. Once a second
-    (recorder clock) in each window of seconds left, the side whose fair - ask - fee is largest is
-    bought at its ask lag_ms later if that edge is at least theta (edge measured on the quote shown
-    at t, at most 1 s old); first trade per market, window and theta. Also returns, per market,
-    whether the Binance candle agrees with the official outcome."""
+    (recorder clock) in each window of seconds left, the side whose fair - ask - fee is largest,
+    on the quote shown at t (at most 1 s old, ask in [0.02, 0.98]), is bought if that edge is at
+    least theta, as a limit order at 0.98 filled at the ask L ms later (no fill: the next second
+    may try again); first fill per market, window, theta and L. With `health`, both quotes must be
+    sane rows of a book that changed within HEALTH_ALIVE before t and after the fill (book_health).
+    Also returns, per market, whether the Binance candle agrees with the official outcome."""
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -987,13 +1043,14 @@ def hourly_trades(feat, mkts, binance, windows=HOUR_WINDOWS, thetas=HOUR_THETAS,
             continue  # the feed must cover the candle's first and last seconds
         k, close = px_s[i0], px_s[i1]
         k_known = rt[order][i0]  # when the recorder had the opening trade
-        checks.append((mid, float(close >= k), float(mk["up_won"])))
+        checks.append((mid, float(close >= k), float(mk["up_won"]), close / k - 1))
         if mid not in by:
             continue
         f = by[mid]
         fts = f["timestamp_ms"].to_numpy()
         ua, da = f["up_best_ask"].to_numpy(), f["down_best_ask"].to_numpy()
         uas, das = f["up_ask_size"].to_numpy(), f["down_ask_size"].to_numpy()
+        sane, changes = book_health(f) if health else (np.ones(len(f), bool), None)
         won_up = float(mk["up_won"])
         for hi, lo in windows:
             t = np.arange(end - hi * 1000, end - lo * 1000 + 1, 1000)
@@ -1008,37 +1065,46 @@ def hourly_trades(feat, mkts, binance, windows=HOUR_WINDOWS, thetas=HOUR_THETAS,
             with np.errstate(invalid="ignore", divide="ignore"):
                 fair_up = norm.cdf(np.log(s / k) / (sg * np.sqrt(tau)))
             q = np.searchsorted(fts, t, "right") - 1
-            fresh = (q >= 0) & (t - fts[np.maximum(q, 0)] <= 1000)
-            a_up, a_dn = ua[np.maximum(q, 0)], da[np.maximum(q, 0)]
-            e_up = fair_up - a_up - 0.07 * a_up * (1 - a_up)
-            e_dn = (1 - fair_up) - a_dn - 0.07 * a_dn * (1 - a_dn)
+            qq = np.maximum(q, 0)
+            fresh = (q >= 0) & (t - fts[qq] <= 1000) & sane[qq]
+            a_up, a_dn = ua[qq], da[qq]
+            r = taker_rate(t)
+            e_up = fair_up - a_up - r * a_up * (1 - a_up)
+            e_dn = (1 - fair_up) - a_dn - r * a_dn * (1 - a_dn)
             with np.errstate(invalid="ignore"):
                 up = np.where(np.isnan(e_dn), True, np.where(np.isnan(e_up), False, e_up >= e_dn))
                 edge = np.where(up, e_up, e_dn)
-                good = fresh & ok & np.isfinite(edge)
+                a_sel = np.where(up, a_up, a_dn)
+                good = fresh & ok & np.isfinite(edge) & (a_sel >= 0.02) & (a_sel <= 0.98)
+            if health:
+                good &= np.array([changed_near(changes, x, HEALTH_ALIVE[0], 10**12) for x in t])
             for th in thetas:
                 hit = np.flatnonzero(good & (edge >= th))
-                for i in hit:
-                    kk = np.searchsorted(fts, t[i] + lag_ms, "left")
-                    if kk >= len(f) or fts[kk] > t[i] + lag_ms + 1000:
-                        continue
-                    side_up = bool(up[i])
-                    p = ua[kk] if side_up else da[kk]
-                    if not (np.isfinite(p) and 0.02 <= p <= 0.98):
-                        continue
-                    fee = 0.07 * p * (1 - p)
-                    won = won_up if side_up else 1 - won_up
-                    rows.append((mid, f"{hi}-{lo}", th, int(t[i]), tau[i], "Up" if side_up else "Down",
-                                 float(fair_up[i] if side_up else 1 - fair_up[i]), p, uas[kk] if side_up else das[kk],
-                                 fee, won, won - p - fee))
-                    break
-    cols = ["market_id", "window", "theta", "t", "tau", "side", "fair", "price", "size", "fee", "won", "pnl"]
-    return pd.DataFrame(rows, columns=cols), pd.DataFrame(checks, columns=["market_id", "binance_up", "up_won"])
+                for lag in lags:
+                    for i in hit:
+                        kk = np.searchsorted(fts, t[i] + lag, "left")
+                        if kk >= len(f) or fts[kk] > t[i] + lag + 1000:
+                            continue
+                        if health and not (sane[kk] and changed_near(changes, fts[kk], 10**12, HEALTH_ALIVE[1])):
+                            continue
+                        side_up = bool(up[i])
+                        p = ua[kk] if side_up else da[kk]
+                        if not (np.isfinite(p) and p <= 0.98):
+                            continue  # the 0.98 limit does not fill
+                        fee = float(taker_rate(t[i] + lag)) * p * (1 - p)
+                        won = won_up if side_up else 1 - won_up
+                        rows.append((mid, f"{hi}-{lo}", th, lag, int(t[i]), tau[i], "Up" if side_up else "Down",
+                                     float(fair_up[i] if side_up else 1 - fair_up[i]), p,
+                                     uas[kk] if side_up else das[kk], fee, won, won - p - fee))
+                        break
+    cols = ["market_id", "window", "theta", "lag", "t", "tau", "side", "fair", "price", "size", "fee", "won", "pnl"]
+    return (pd.DataFrame(rows, columns=cols),
+            pd.DataFrame(checks, columns=["market_id", "binance_up", "up_won", "candle_return"]))
 
 
-def hourly(workdir, out, days=None, reps=5000):
-    """hourly_trades on every day; thresholds and windows are compared on May 25 - Jul 15 and
-    checked on the later days."""
+def hourly(workdir, out, days=None, reps=5000, health=False):
+    """hourly_trades on every day; the window and threshold are chosen on May 25 - Jul 15 at 300 ms
+    (highest EV among cells with at least 100 trades) and only checked on the later days."""
     import numpy as np
     import pandas as pd
     import binary as bo
@@ -1054,8 +1120,8 @@ def hourly(workdir, out, days=None, reps=5000):
             feat, mk, rs = read_day(local)
             binance = read_binance(local)
             Path(local).unlink()
-            t, c = hourly_trades(feat, market_table(mk, rs), binance)
-            t["day"] = name[15:25]
+            t, c = hourly_trades(feat, market_table(mk, rs), binance, health=health)
+            t["day"] = c["day"] = name[15:25]
             parts.append(t)
             checks.append(c)
             print(f"{name}: {len(t):,} trades, {len(c)} candles checked", flush=True)
@@ -1063,31 +1129,55 @@ def hourly(workdir, out, days=None, reps=5000):
             import traceback
             print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if len(df):
+        df = df.drop_duplicates(["market_id", "window", "theta", "lag"], keep="first")
     ck = pd.concat(checks, ignore_index=True).drop_duplicates("market_id") if checks else pd.DataFrame()
     df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
     L = [f"# 1 小时市场：按币安 1 小时 K 线算的公平价（{DS}，记录机时钟）", "",
          "1 小时市场按币安 BTCUSDT 1 小时 K 线的收盘 ≥ 开盘结算，所以公平 Up 价 = Φ(ln(S/K) / (σ√τ))："
          "K 是这一小时第一笔币安成交，S 是 t 时刻（记录机收到）最后一笔，σ 是之前 10 分钟每秒对数收益的标准差。"
-         "每个剩余时间窗口里每秒看一次，公平价 − 卖一 − taker 费 最大的一方超过 θ 时，300 ms 后按卖一买，"
-         "每个市场、窗口、θ 只取第一笔，持有到结算。5 月 25 日–7 月 15 日比较窗口和门槛，之后只核对。探索性质。", ""]
+         "每个剩余时间窗口里每秒看一次，按 t 时刻的报价（不超过 1 秒前、卖一在 0.02–0.98）算 公平价 − 卖一 − taker 费，"
+         "最大的一方超过 θ 时发 0.98 的限价买单，L 毫秒后按卖一成交（没成交下一秒可以再试），"
+         "每个市场、窗口、θ、L 只取第一笔，持有到结算。taker 费率 7 月前 0.072、之后 0.07。"
+         "窗口和门槛只在 5 月 25 日–7 月 15 日、L = 300 ms 上选（笔数至少 100 里 EV 最高），之后只核对。探索性质。", ""]
+    if health:
+        L += [f"加了盘口健康检查（`book_health`）：两个报价都不能是交叉盘、两边卖一之和不低于 0.99、处于交易状态且未暂停，"
+              f"并且盘口在 t 之前 {HEALTH_ALIVE[0] / 1000:g} 秒内和成交后 {HEALTH_ALIVE[1] / 1000:g} 秒内确实变过。", ""]
     if len(ck):
         agree = (ck["binance_up"] == ck["up_won"]).mean()
-        L += [f"核对：{len(ck):,} 个 1 小时市场里，币安 K 线（收盘 ≥ 开盘）与官方结果一致的比例 {agree:.1%}。", ""]
+        bad = ck[ck["binance_up"] != ck["up_won"]]
+        L += [f"核对：{len(ck):,} 个 1 小时市场里，币安 K 线（收盘 ≥ 开盘）与官方结果一致的比例 {agree:.1%}；"
+              f"不一致的 {len(bad)} 个，K 线涨跌幅中位 {100 * bad['candle_return'].abs().median():.3f}%"
+              if len(bad) else f"核对：{len(ck):,} 个 1 小时市场里，币安 K 线（收盘 ≥ 开盘）与官方结果全部一致", ""]
     if df.empty:
         L.append("没有可用的交易。")
     else:
         df["period"] = np.select([df["day"] <= "2026-07-15", df["day"] <= "2026-08-16"],
                                  ["A 5/25–7/15", "B 7/16–8/16"], "C 8/17–8/29")
-        L += ["| 窗口（剩余秒） | θ | 时段 | 笔数 | 胜率 | 平均价 | 平均公平价 | EV/份 | p | 卖一数量中位 |",
-              "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
-        for (w, th, per), g in df.groupby(["window", "theta", "period"], sort=False):
+        a = df[(df["period"].str.startswith("A")) & (df["lag"] == 300)].groupby(["window", "theta"])["pnl"].agg(["mean", "size"])
+        a = a[a["size"] >= 100]
+        if len(a):
+            w, th = a["mean"].idxmax()
+            sel = df[(df["window"] == w) & (df["theta"] == th)]
+            L += [f"## 在 A 段选出的格子：窗口 {w} 秒、θ = {100 * th:.0f}¢（A 段 300 ms 每份 {100 * a['mean'].max():+.2f}¢）", "",
+                  "| L | 时段 | 笔数 | 胜率 | 平均价 | EV/份 | p |", "|---:|---|---:|---:|---:|---:|---:|"]
+            for (lag, per), g in sel.groupby(["lag", "period"]):
+                pv = bo.fair_price_pvalue(g["pnl"].to_numpy(), (g["price"] + g["fee"]).to_numpy(), sims=reps) \
+                    if len(g) >= 10 and g["pnl"].mean() > 0 else 1.0
+                L.append(f"| {lag} ms | {per} | {len(g):,} | {g['won'].mean():.1%} | {g['price'].mean():.3f} | "
+                         f"{100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} |")
+            L.append("")
+        L += ["## 全部格子（描述用）", "",
+              "| L | 窗口（剩余秒） | θ | 时段 | 笔数 | 胜率 | 平均价 | 平均公平价 | EV/份 | p | 卖一数量中位 |",
+              "|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
+        for (lag, w, th, per), g in df.groupby(["lag", "window", "theta", "period"], sort=False):
             pv = bo.fair_price_pvalue(g["pnl"].to_numpy(), (g["price"] + g["fee"]).to_numpy(), sims=reps) \
                 if len(g) >= 10 and g["pnl"].mean() > 0 else 1.0
-            L.append(f"| {w} | {100 * th:.0f}¢ | {per} | {len(g):,} | {g['won'].mean():.1%} | {g['price'].mean():.3f} | "
-                     f"{g['fair'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} | {g['size'].median():.0f} |")
+            L.append(f"| {lag} ms | {w} | {100 * th:.0f}¢ | {per} | {len(g):,} | {g['won'].mean():.1%} | "
+                     f"{g['price'].mean():.3f} | {g['fair'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} | "
+                     f"{g['size'].median():.0f} |")
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
-
 
 HF_API = "https://huggingface.co/api/datasets?"
 SCAN_QUERIES = ("author=whodisidk", "search=polymarket", "search=updown", "search=up-down", "search=kalshi")
@@ -1342,6 +1432,8 @@ def main(argv=None):
         p.add_argument("--dataset", default=DS, help="another dataset of the same layout")
         if name == "gated":
             p.add_argument("--horizon", type=int, default=5, choices=(5, 15), help="market length in minutes")
+        if name in ("gated", "hourly"):
+            p.add_argument("--health", action="store_true", help="only sane, recently changed book snapshots")
     a = ap.parse_args(argv)
     if getattr(a, "dataset", DS) != DS:
         set_dataset(a.dataset)
@@ -1360,11 +1452,11 @@ def main(argv=None):
     elif a.cmd == "makers":
         makers(a.workdir, a.out, a.days)
     elif a.cmd == "gated":
-        gated(a.workdir, a.out, a.days, horizon=a.horizon)
+        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health)
     elif a.cmd == "openmis":
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":
-        hourly(a.workdir, a.out, a.days)
+        hourly(a.workdir, a.out, a.days, health=a.health)
     else:
         stale(a.workdir, a.out, a.days)
 
