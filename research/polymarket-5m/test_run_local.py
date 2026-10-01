@@ -78,3 +78,4 @@ def test_scale_in(export, tmp_path):
         # the first fill per market is the first-only trade, later ones at least 2 s apart
         assert e.groupby("market_id")["t"].min().sort_index().tolist() == f.set_index("market_id")["t"].sort_index().tolist()
         assert (e.groupby("market_id")["t"].diff().dropna() >= 2.0 - 1e-9).all()
+        assert e["side"].isin(["Up", "Down"]).all()

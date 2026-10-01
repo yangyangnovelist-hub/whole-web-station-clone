@@ -625,11 +625,11 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
             if fair - px - fee < theta:
                 continue
             won = float(m.winner == side)
-            rows.append((won, px, fee, won - px - fee, size, t0, m.market_id, p0, fair, lag))
+            rows.append((won, px, fee, won - px - fee, size, t0, m.market_id, p0, fair, lag, side))
             if every is None:
                 break
             next_t = t0 + every
-    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t", "market_id", "p0", "fair", "lag"])
+    return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t", "market_id", "p0", "fair", "lag", "side"])
 
 
 def _per_recording(dirs_by_coin, since, spot, make, keys, notes):

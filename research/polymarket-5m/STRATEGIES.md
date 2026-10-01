@@ -51,6 +51,12 @@ python equity_compound.py --extra sept.csv.gz
 
 默认每笔投账户的 1%，最少 5 份、最多 200 份，不超过卖一挂单量，按 78% 成交。可以用 `--fraction 0.025`、`--cap 40` 换别的假设。
 
+**加仓规则在 9 月上对比**（9 种规则，A 段 5/25–7/15 选出的是“只加反向”，B、C 段没确认它更好；输出里 X 段就是 9 月，结果见 `real/scalein.md`）：
+
+```bash
+python scalein.py --extra sept.csv.gz
+```
+
 ## 四个策略
 
 所有时间都是交易所时间戳。σ 是近 10 分钟币安每秒对数涨跌的标准差。
