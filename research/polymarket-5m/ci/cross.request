@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-10-01 06:05 100 rules on the 100 ms BTC 5m books (zoo100.py): favourite/underdog, Binance and book momentum and reversal, TWAP model price, 15m-implied price, imbalance, taker flow, volatility regime, spread, time of day, previous market, late lock, jumps, opening, combinations; select on May 25 - Jul 15, check on the later periods
-cmd: zoo --out real/cross-zoo100.md
+requested: 2026-10-01 06:40 does BTC lead the ETH 5m markets: BTC Binance jump, ETH expected to follow by beta, ETH book still stale?
+cmd: leadlag --out real/cross-leadlag-eth.md
