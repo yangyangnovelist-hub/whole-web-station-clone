@@ -2042,7 +2042,7 @@ def main(argv=None):
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
                           ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md"),
                           ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md"),
-                          ("jitter", "real/cross-jitter.md")):
+                          ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -2080,6 +2080,9 @@ def main(argv=None):
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":
         hourly(a.workdir, a.out, a.days, health=a.health)
+    elif a.cmd == "zoo":
+        import zoo100
+        zoo100.run(a.workdir, a.out, a.days)
     elif a.cmd == "jitter":
         jitter(a.workdir, a.out, a.days)
     elif a.cmd in ("fade", "follow"):
