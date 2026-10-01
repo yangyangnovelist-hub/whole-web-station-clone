@@ -408,3 +408,44 @@ def test_gated_trades_anchored_prior_does_not_count_a_followed_move_twice():
     assert (plain["t0"] == t_jump + 150).all() and (anch["t0"] == t_jump + 150).all()
     assert anch["fair"].iloc[0] < plain["fair"].iloc[0] - 0.05 and anch["fair"].iloc[0] > 0.81
     assert anch["pre_move"].iloc[0] == pytest.approx(0.305)  # 0.495 -> 0.80
+
+
+def test_jitter_rows_describe_the_state_around_a_jump():
+    """A flat book (0.49/0.50, changing its size every second) until 1 s before a Binance jump of
+    +0.4% at E-100 s, then 0.59/0.61 (bought 300 ms after receipt), 0.69/0.70 from 400 ms. One episode per jump
+    (the prints after it within 2 s are the same episode)."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    recv = t_jump + 150
+    bid = np.where(ts < t_jump - 1000, 0.49, np.where(ts < recv + 400, 0.59, 0.69))
+    ask = np.where(ts < t_jump - 1000, 0.50, np.where(ts < recv + 400, 0.61, 0.70))
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": bid, "up_best_ask": ask, "down_best_bid": 1 - ask, "down_best_ask": 1 - bid,
+                         "up_ask_size": 25.0 + (ts // 1000) % 2, "down_ask_size": 30.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    price[tt >= t_jump] *= 1.004
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    r = cross.jitter_rows(feat, mkts, binance, z0=6.0)
+    assert len(r) == 1
+    r = r.iloc[0]
+    assert r["t0"] == recv and r["up"] == 1 and r["ok"]
+    assert r["m_m32"] == pytest.approx(0.495) and r["m_m2"] == pytest.approx(0.495) and r["m_0"] == pytest.approx(0.60)
+    assert r["m_p03"] == pytest.approx(0.60) and r["m_p10"] == pytest.approx(0.695)
+    assert r["pm_range30"] == pytest.approx(0.0) and r["pm_changes30"] >= 25
+    assert r["ua_l"] == 0.61 and r["da_l"] == pytest.approx(0.41) and r["spread_0"] == pytest.approx(0.02)
+    assert r["bn_move2"] > 100 and abs(r["bn_after2"]) < 10 and 0.5 < r["bn_rv30"] < 2
+    assert "sweep2" not in r  # no Polymarket prints given
+    mk2 = mkts.assign(up_token="u", down_token="d")
+    prints = pd.DataFrame({"recv_ts_ms": [recv - 1500, recv - 1200, recv - 3000, recv - 500],
+                           "instrument": ["u", "d", "u", "d"], "price": [0.5, 0.5, 0.5, 0.4],
+                           "size": [10.0, 4.0, 7.0, 3.0], "taker_side": ["buy", "sell", "buy", "buy"]})
+    w = cross.jitter_rows(feat, mk2, binance, z0=6.0, trades=prints).iloc[0]
+    assert w["sweep2"] == 14.0 and w["against2"] == 3.0 and w["n_trades2"] == 3  # the print 3 s before is outside
+    assert w["uas_m2"] in (25.0, 26.0) and w["das_0"] == 30.0
+    t = cross.jitter_trades(cross.jitter_rows(feat, mkts, binance, z0=6.0), "move", 0.12, "fair_a2_up")
+    assert len(t) == 1 and t["pnl"].iloc[0] == pytest.approx(1 - 0.61 - 0.07 * 0.61 * 0.39)
+    assert cross.jitter_trades(cross.jitter_rows(feat, mkts, binance, z0=6.0), "fade", 0.0, "fair_a2_up").empty

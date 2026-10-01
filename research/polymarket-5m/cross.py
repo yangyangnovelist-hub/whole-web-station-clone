@@ -1484,6 +1484,265 @@ def fadefollow(kind, workdir, out, days=None, reps=5000, health=True):
     print("\n".join(L))
 
 
+JITTER_LAG = 300  # ms after receipt, as in test G
+JITTER_OFFSETS = (("m_m32", -32000), ("m_m10", -10000), ("m_m2", -2000), ("m_0", 0), ("m_p03", 300),
+                  ("m_p2", 2000), ("m_p10", 10000))
+
+
+def jitter_rows(feat, mkts, binance, lag=JITTER_LAG, z0=2.0, tau_lo=15, horizon=5, gap_ms=2000, trades=None):
+    """One row per Binance jump episode in each `horizon`-minute market: the first print with
+    tau_hi..tau_lo s left whose log price moved more than z0 sigma from the last trade at least a
+    second earlier (as gated_trades), then nothing for gap_ms. Each row describes the state around
+    the jump instead of trading it, so rules on it can be chosen later on May 25 - Jul 15 alone:
+
+    - up, z: the move's side and size (sigma = 10 min of 1 s Binance returns);
+    - m_*: the Up mid shown 32, 10 and 2 s before, at, and 0.3, 2 and 10 s after the receipt
+      (NaN without a snapshot in the second before), spread_0 / spread_m2 the Up spread then;
+    - pm_range30, pm_changes30: range of the Up mid and number of book changes from 32 to 2 s
+      before (a flat book before the jump has both small);
+    - bn_rv30: standard deviation of 1 s Binance returns over the same 30 s, in sigma units
+      (below 1: quieter than usual); bn_move2, bn_after2: the Binance move over the 2 s before and
+      after the receipt, in sigma units, signed Up;
+    - fair_up: Phi(Phi^-1(mid at receipt) + dx / (sigma * twap_std_factor)) as gated_trades;
+      fair_a2_up: the same from the mid 2 s before plus the Binance move since (anchor_ms=2000);
+    - ua_l, da_l, uas_l, das_l: both asks and sizes `lag` ms after receipt (the first snapshot then,
+      within a second); ok: both snapshots sane and the book changed within HEALTH_ALIVE around them;
+    - uas_m2, das_m2, uas_0, das_0: the top ask sizes 2 s before and at the receipt;
+    - with Polymarket `trades`, sweep2 / against2: shares that takers bought toward the move (Up
+      bought or Down sold for an up move) and against it in the 2 s before the receipt, n_trades2 the
+      prints then. A mid that jumped with a sweep2 near zero moved because makers pulled or
+      repriced their quotes, not because someone took them."""
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import norm
+    import binary as bo
+    if binance.empty:
+        return pd.DataFrame()
+    rt = binance["recv_ts_ms"].to_numpy()
+    tt = binance["trade_ts_ms"].to_numpy()
+    lp = np.log(binance["price"].to_numpy())
+    order = np.argsort(tt, kind="stable")
+    tt_s, lp_s = tt[order], lp[order]
+    last = pd.Series(lp_s, index=tt_s // 1000).groupby(level=0).last()
+    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=10)
+    sigma = grid.diff().rolling(600, min_periods=300).std()
+    g0, gd = int(grid.index[0]), grid.diff().to_numpy()
+    window = 60 * int(horizon)
+    tau_hi = window - 60
+    m5 = mkts[(mkts["horizon"] == horizon) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+
+    flows = {}
+    if trades is not None and len(trades):
+        for (tok, side), g in trades.sort_values("recv_ts_ms", kind="stable").groupby(["instrument", "taker_side"]):
+            flows[(tok, side)] = (g["recv_ts_ms"].to_numpy(), g["size"].to_numpy(float))
+
+    def flow(tok, side, lo, hi):
+        if (tok, side) not in flows:
+            return 0.0, 0
+        r, sz = flows[(tok, side)]
+        a_, b_ = np.searchsorted(r, [lo, hi], "right")
+        return float(sz[a_:b_].sum()), int(b_ - a_)
+
+    def at_recv(x):
+        j = np.searchsorted(rt, x, "right") - 1
+        return lp[j] if j >= 0 else np.nan
+
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by:
+            continue
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        ub, ua = f["up_best_bid"].to_numpy(float), f["up_best_ask"].to_numpy(float)
+        da, uas, das = f["down_best_ask"].to_numpy(float), f["up_ask_size"].to_numpy(float), f["down_ask_size"].to_numpy(float)
+        mids = (ub + ua) / 2
+        sane, changes = book_health(f)
+        a, b = np.searchsorted(rt, [mk["end"] - tau_hi * 1000, mk["end"] - tau_lo * 1000])
+        if b <= a:
+            continue
+        j = np.searchsorted(tt_s, tt[a:b] - 1000, "right") - 1
+        ok = (j >= 0) & (tt[a:b] - tt_s[np.maximum(j, 0)] <= 5000)
+        dx = np.where(ok, lp[a:b] - lp_s[np.maximum(j, 0)], np.nan)
+        sg = sigma.reindex(tt[a:b] // 1000 - 1).to_numpy()
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(np.abs(dx) > z0 * sg)
+
+        def snap(x):
+            k = np.searchsorted(fts, x, "right") - 1
+            return k if k >= 0 and x - fts[k] <= 1000 else -1
+
+        def clip(p):
+            return min(max(p, 0.005), 0.995)
+
+        prev = -np.inf
+        for i in cand:
+            t0 = int(rt[a + i])
+            if t0 - prev < gap_ms:
+                continue
+            prev = t0
+            k0 = snap(t0)
+            if k0 < 0 or not (np.isfinite(ub[k0]) and np.isfinite(ua[k0])):
+                continue
+            k = np.searchsorted(fts, t0 + lag, "left")
+            if k >= len(f) or fts[k] > t0 + lag + 1000:
+                continue
+            t_mkt = (t0 - (mk["end"] - window * 1000)) / 1000
+            fac = float(bo.twap_std_factor(t_mkt, window=window)) * sg[i]
+            if not (np.isfinite(fac) and fac > 0):
+                continue
+            fair_up = float(norm.cdf(norm.ppf(clip(mids[k0])) + dx[i] / fac))
+            ka = snap(t0 - 2000)
+            la = at_recv(t0 - 2000)
+            fair_a2 = float(norm.cdf(norm.ppf(clip(mids[ka])) + (lp[a + i] - la) / fac)) \
+                if ka >= 0 and np.isfinite(mids[ka]) and np.isfinite(la) else np.nan
+            lo, hi = np.searchsorted(fts, [t0 - 32000, t0 - 2000], "left")
+            w = mids[lo:hi]
+            w = w[np.isfinite(w)]
+            c_lo, c_hi = np.searchsorted(changes, [t0 - 32000, t0 - 2000], "left")
+            s = t0 // 1000
+            seg = gd[max(s - 32 - g0, 0):max(s - 2 - g0, 0)]
+            seg = seg[np.isfinite(seg)]
+            row = {"market_id": mid, "t0": t0, "tau": (mk["end"] - t0) / 1000, "up": int(dx[i] > 0),
+                   "z": abs(dx[i]) / sg[i], "p0": mids[k0], "fair_up": fair_up, "fair_a2_up": fair_a2}
+            for name, off in JITTER_OFFSETS:
+                kk = snap(t0 + off)
+                row[name] = mids[kk] if kk >= 0 else np.nan
+            row.update({"spread_0": ua[k0] - ub[k0], "spread_m2": (ua[ka] - ub[ka]) if ka >= 0 else np.nan,
+                        "pm_range30": float(w.max() - w.min()) if len(w) else np.nan, "pm_changes30": int(c_hi - c_lo),
+                        "bn_rv30": float(seg.std() / sg[i]) if len(seg) >= 20 else np.nan,
+                        "bn_move2": (lp[a + i] - la) / sg[i] if np.isfinite(la) else np.nan,
+                        "bn_after2": (at_recv(t0 + 2000) - lp[a + i]) / sg[i],
+                        "ua_l": ua[k], "da_l": da[k], "uas_l": uas[k], "das_l": das[k],
+                        "uas_m2": uas[ka] if ka >= 0 else np.nan, "das_m2": das[ka] if ka >= 0 else np.nan,
+                        "uas_0": uas[k0], "das_0": das[k0],
+                        "ok": bool(sane[k0] and sane[k] and changed_near(changes, t0, HEALTH_ALIVE[0], 10**12)
+                                   and changed_near(changes, fts[k], 10**12, HEALTH_ALIVE[1])),
+                        "up_won": float(mk["up_won"])})
+            if flows and "up_token" in mk:
+                up_tok, dn_tok = str(mk["up_token"]), str(mk["down_token"])
+                bu, nbu = flow(up_tok, "buy", t0 - 2000, t0)
+                su, nsu = flow(up_tok, "sell", t0 - 2000, t0)
+                bd, nbd = flow(dn_tok, "buy", t0 - 2000, t0)
+                sd, nsd = flow(dn_tok, "sell", t0 - 2000, t0)
+                toward, against = (bu + sd, bd + su) if row["up"] else (bd + su, bu + sd)
+                row.update({"sweep2": toward, "against2": against, "n_trades2": nbu + nsu + nbd + nsd})
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def jitter_trades(df, side_rule, theta, fair_col="fair_up"):
+    """First trade per market among healthy rows: `side_rule` 'move' buys the side of the Binance
+    move, 'fade' the other side; bought at that side's ask `lag` ms later when fair - ask - fee >=
+    theta, with fair from `fair_col` (the side's probability)."""
+    import numpy as np
+    d = df[df["ok"]].copy()
+    buy_up = (d["up"] == 1) if side_rule == "move" else (d["up"] == 0)
+    d["px"] = np.where(buy_up, d["ua_l"], d["da_l"])
+    d["size"] = np.where(buy_up, d["uas_l"], d["das_l"])
+    d["fair"] = np.where(buy_up, d[fair_col], 1 - d[fair_col])
+    d["fee"] = 0.07 * d["px"] * (1 - d["px"])
+    d["won"] = np.where(buy_up, d["up_won"], 1 - d["up_won"])
+    d = d[(d["px"] >= 0.02) & (d["px"] <= 0.98) & (d["fair"] - d["px"] - d["fee"] >= theta)]
+    d = d.sort_values("t0").drop_duplicates("market_id")
+    d["price"], d["pnl"] = d["px"], d["won"] - d["px"] - d["fee"]
+    return d
+
+
+def jitter(workdir, out, days=None, reps=5000):
+    """jitter_rows on every day; the rows go to <out>.csv.gz for slicing, the report shows the
+    split of the gated rule (and its fade) by how flat the book and Binance were before the jump,
+    with the cuts at the terciles of May 25 - Jul 15."""
+    import numpy as np
+    import pandas as pd
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            binance = read_binance(local)
+            prints = read_poly_trades(local)
+            Path(local).unlink()
+            t = jitter_rows(feat, market_table(mk, rs), binance, trades=prints)
+            t["day"] = name[15:25]
+            parts.append(t)
+            print(f"{name}: {len(t):,} jump episodes over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# 急动前后的盘口：横盘之后的抖动（{DS}，5m 市场，记录机时钟）", "",
+         "每个市场里每一次币安急动（剩 240–15 秒，与至少一秒前相比超过 2σ，之后 2 秒内不再算新的一次）记一行："
+         "触发前 32/10/2 秒、触发时、之后 0.3/2/10 秒的 Up 中间价，触发前 30 秒中间价的波动幅度和盘口变化次数，"
+         "同期币安一秒涨跌的标准差（相对平时的 σ），触发前后 2 秒币安的涨跌，两种公平价（从触发时的中间价起算 / "
+         f"从 2 秒前的中间价加上币安这 2 秒的涨跌起算），{JITTER_LAG} ms 后两边的卖一和数量，结算结果；"
+         "还有触发前 2 秒朝急动方向的主动成交量（扫单）和两边卖一挂单量的变化（没有成交、挂单却没了，就是做市商撤单或改价）。"
+         "全部数据在同名 .csv.gz 里。下面的分组门槛都取 5 月 25 日–7 月 15 日的三分位，之后两段只核对。探索性质。", ""]
+    if df.empty:
+        L.append("没有可用的数据。")
+    else:
+        df["period"] = np.select([df["day"] <= "2026-07-15", df["day"] <= "2026-08-16"],
+                                 ["A 5/25–7/15", "B 7/16–8/16"], "C 8/17–8/29")
+        h = df[df["ok"]]
+        L += [f"急动 {len(df):,} 次（盘口健康的 {len(h):,} 次），{df['market_id'].nunique():,} 个市场。", ""]
+        sgn = np.where(df["up"] == 1, 1.0, -1.0)
+        df["pre2"] = sgn * (df["m_0"] - df["m_m2"])
+        df["rev10"] = sgn * (df["m_p10"] - df["m_0"])
+        a = df[df["period"].str.startswith("A") & df["ok"]]
+        cuts = {c: a[c].quantile([1 / 3, 2 / 3]).to_list() for c in ("pm_range30", "pm_changes30", "bn_rv30")}
+
+        def bucket(x, c):
+            lo, hi = cuts[c]
+            return np.select([x <= lo, x <= hi], ["低", "中"], "高")
+
+        L += ["## 中间价在触发前 2 秒先动了，之后 10 秒回不回去（盘口健康的急动，按买的方向）", "",
+              "pre2：触发前 2 秒中间价朝急动方向动了多少；rev10：触发后 10 秒中间价再朝同方向动了多少（负数是回吐）。", "",
+              "| 时段 | 触发前 30 秒中间价幅度 | 先动 ≥ 3¢ 的次数 | 其后 10 秒平均 | 没先动的次数 | 其后 10 秒平均 |",
+              "|---|---|---:|---:|---:|---:|"]
+        h = df[df["ok"]].copy()
+        h["b_range"] = bucket(h["pm_range30"], "pm_range30")
+        for (per, br), g in h.groupby(["period", "b_range"]):
+            mv, st = g[g["pre2"] >= 0.03], g[g["pre2"] < 0.03]
+            L.append(f"| {per} | {br}（≤ {cuts['pm_range30'][0]:.3f} / {cuts['pm_range30'][1]:.3f}） | {len(mv):,} | "
+                     f"{100 * mv['rev10'].mean():+.2f}¢ | {len(st):,} | {100 * st['rev10'].mean():+.2f}¢ |")
+        if "sweep2" in h:
+            mv = h[h["pre2"] >= 0.03].copy()
+            mv["how"] = np.select([mv["sweep2"] >= 5, mv["n_trades2"] == 0], ["扫单（朝急动方向主动成交 ≥ 5 份）", "无成交（撤单/改价）"],
+                                  "少量成交")
+            for th in (0.04, 0.12):
+                for rule, label in (("move", "顺势"), ("fade", "反向")):
+                    t = jitter_trades(mv, rule, th, "fair_a2_up")
+                    if t.empty:
+                        continue
+                    L += ["", f"## 先动 ≥ 3¢ 的急动，按怎么动的分组：{label}，2 秒前起算的公平价，θ = {100 * th:.0f}¢", ""]
+                    L += _period_table(t, ["how"], reps, ["怎么动的"])
+            L += ["", "## 先动 ≥ 3¢ 的急动，之后 10 秒中间价（按急动方向，负数是回吐）", "",
+                  "| 时段 | 怎么动的 | 次数 | 其后 10 秒平均 | 价差（触发时）中位 |", "|---|---|---:|---:|---:|"]
+            for (per, how), g in mv.groupby(["period", "how"]):
+                L.append(f"| {per} | {how} | {len(g):,} | {100 * g['rev10'].mean():+.2f}¢ | {g['spread_0'].median():.3f} |")
+        for rule, col, label in (("move", "fair_up", "顺势（检验 D/F 的公平价）"),
+                                 ("move", "fair_a2_up", "顺势（2 秒前起算的公平价）"),
+                                 ("fade", "fair_a2_up", "反向（2 秒前起算的公平价，买另一边）")):
+            for th in (0.04, 0.08, 0.12):
+                t = jitter_trades(df, rule, th, col)
+                if t.empty:
+                    continue
+                L += ["", f"## {label}，θ = {100 * th:.0f}¢，按触发前的平静程度分组", ""]
+                for c, name in (("pm_range30", "中间价幅度"), ("pm_changes30", "盘口变化次数"), ("bn_rv30", "币安波动/σ")):
+                    t["b"] = bucket(t[c], c)
+                    L += [f"**{name}**（三分位 {cuts[c][0]:.3g} / {cuts[c][1]:.3g}）", ""]
+                    L += _period_table(t, ["b"], reps, [name]) + [""]
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 HF_API = "https://huggingface.co/api/datasets?"
 SCAN_QUERIES = ("author=whodisidk", "search=polymarket", "search=updown", "search=up-down", "search=kalshi")
 
@@ -1782,7 +2041,8 @@ def main(argv=None):
     for name, default in (("analyze", "real/cross-boxes.md"), ("stale", "real/cross-stale.md"),
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
                           ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md"),
-                          ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md")):
+                          ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md"),
+                          ("jitter", "real/cross-jitter.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -1820,6 +2080,8 @@ def main(argv=None):
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":
         hourly(a.workdir, a.out, a.days, health=a.health)
+    elif a.cmd == "jitter":
+        jitter(a.workdir, a.out, a.days)
     elif a.cmd in ("fade", "follow"):
         fadefollow(a.cmd, a.workdir, a.out, a.days)
     else:
