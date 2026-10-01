@@ -556,7 +556,7 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
 
 
 def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0=D_Z0, tau_lo=D_TAU_LO, max_pre=None,
-                 anchor=None):
+                 anchor=None, every=None):
     """Test D's trades: every spot print with 240..tau_lo s left whose log price moved more than z0
     sigma from the last print at most C_REF_AGE s and at least 1 s earlier is a candidate. The Up
     mid shown by the exchange at that print is the prior P0; the move shifts the expected settlement
@@ -568,7 +568,9 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
     move in the two seconds before the print (or no quote was shown then). With `anchor` (seconds;
     not part of any preregistered test), the prior is the Up mid shown `anchor` s before the print
     and the move is the print's log price against the last trade by then, so a quote that already
-    followed the spot price is not counted twice (cross.py gated --anchor)."""
+    followed the spot price is not counted twice (cross.py gated --anchor). With `every` (seconds;
+    not part of any preregistered test), every fill is kept (scaling in), the next one at least
+    `every` s after the last."""
     from scipy.stats import norm
     ts = spot_trades["trade_ts"].to_numpy()
     lp = np.log(spot_trades["price"].to_numpy())
@@ -584,8 +586,11 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
         sg = sigma.reindex(np.floor(ts[a:b]).astype("int64") - 1).to_numpy()
         with np.errstate(invalid="ignore"):
             cand = np.flatnonzero(np.abs(dx) > z0 * sg)
+        next_t = -np.inf
         for i in cand:
             t0 = float(ts[a + i])
+            if t0 < next_t:
+                continue
             r = book.at(m.market_id, t0)
             if r is None or not (np.isfinite(r[0]) and np.isfinite(r[1])):
                 continue
@@ -621,7 +626,9 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
                 continue
             won = float(m.winner == side)
             rows.append((won, px, fee, won - px - fee, size, t0, m.market_id, p0, fair, lag))
-            break
+            if every is None:
+                break
+            next_t = t0 + every
     return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t", "market_id", "p0", "fair", "lag"])
 
 

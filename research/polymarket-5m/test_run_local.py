@@ -64,3 +64,17 @@ def test_sqlite_and_log(export, tmp_path):
     run_local.main([str(db), str(tmp_path / "engine.jsonl.gz"), "--out", str(out), "--reps", "200"])
     t = pd.read_csv(out.with_suffix(".csv.gz"))
     assert len(t[t["strategy"] == "F（检验 F）"]) == N
+
+
+def test_scale_in(export, tmp_path):
+    d = _folder(export, tmp_path / "export-label")
+    out = tmp_path / "r.md"
+    run_local.main([str(d), "--out", str(out), "--reps", "200", "--scale-in"])
+    assert "## G 加仓" in out.read_text() and "## H 加仓" in out.read_text()
+    t = pd.read_csv(out.with_suffix(".csv.gz"))
+    for first, every in (("G（检验 G）", "G 加仓"), ("H（2 秒前起算）", "H 加仓")):
+        f, e = t[t["strategy"] == first], t[t["strategy"] == every].sort_values("t")
+        assert len(e) >= len(f) == N
+        # the first fill per market is the first-only trade, later ones at least 2 s apart
+        assert e.groupby("market_id")["t"].min().sort_index().tolist() == f.set_index("market_id")["t"].sort_index().tolist()
+        assert (e.groupby("market_id")["t"].diff().dropna() >= 2.0 - 1e-9).all()

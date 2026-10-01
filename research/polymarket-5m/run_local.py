@@ -21,6 +21,8 @@ Strategies (all BTC 5m, buy one side and hold to settlement, taker fee 0.07 p (1
   since), so a quote that already followed Binance is not counted twice.
 - M27: once a second with 240..30 s left, Binance's 5 s move above 2.5 sigma * sqrt(5): buy its
   side at the ask 0.3 s later; first per market (rule #27 of zoo100.py).
+- with --scale-in also "G 加仓" and "H 加仓": G and H keeping every fill in a market (scaling in),
+  the next at least 2 s after the last (equity_compound.py --extra reads them).
 For G, F and H the report also splits by how flat the Up mid was in the 30 s before (range over
 32..2 s before the print at most 0.42, the upper tercile cut chosen on May 25 - Jul 15).
 
@@ -240,6 +242,7 @@ def main(argv=None):
     ap.add_argument("--out", default="local-report.md")
     ap.add_argument("--reps", type=int, default=20000)
     ap.add_argument("--inspect", action="store_true", help="list what was found and stop")
+    ap.add_argument("--scale-in", action="store_true", help="also G and H keeping every fill per market")
     a = ap.parse_args(argv)
     books, markets, spot = load(a.paths, inspect=a.inspect)
     if a.inspect:
@@ -261,6 +264,9 @@ def main(argv=None):
         "H（2 秒前起算）": lambda: lt.gated_trades(markets, spot, sigma, book, anchor=2.0, **kw),
         "M27（币安 5 秒动量）": lambda: momentum5(markets, spot, sigma, book),
     }
+    if a.scale_in:
+        strategies["G 加仓"] = lambda: lt.gated_trades(markets, spot, sigma, book, max_pre=0.03, every=2.0, **kw)
+        strategies["H 加仓"] = lambda: lt.gated_trades(markets, spot, sigma, book, anchor=2.0, every=2.0, **kw)
     cuts = [pd.Timestamp(d, tz="UTC").timestamp() for d in sorted(a.split)]
     span = (pd.to_datetime(markets["start_ts"].min(), unit="s"), pd.to_datetime(markets["start_ts"].max(), unit="s"))
     L = ["# 本地 shadow 数据上的候选策略", "",

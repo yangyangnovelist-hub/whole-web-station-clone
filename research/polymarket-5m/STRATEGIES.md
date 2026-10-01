@@ -40,6 +40,17 @@ python run_local.py <shadow 数据路径 ...> --since 2026-08-30 --split 2026-09
 
 `--split 2026-09-04` 把吃单延迟改成 150 ms 前后分开看。
 
+**$300 复利资金曲线带上 9 月：**
+
+```bash
+# 加 --scale-in 会多出“G 加仓”“H 加仓”：同一市场每次急动都买，两笔至少隔 2 秒
+python run_local.py <9 月 shadow 数据路径 ...> --since 2026-08-30 --scale-in --out sept.md
+# 5/25–8/29 的公开数据接上 sept.csv.gz，画到 real/equity_compound.png；没数据的日子空仓（图上灰色）
+python equity_compound.py --extra sept.csv.gz
+```
+
+默认每笔投账户的 1%，最少 5 份、最多 200 份，不超过卖一挂单量，按 78% 成交。可以用 `--fraction 0.025`、`--cap 40` 换别的假设。
+
 ## 四个策略
 
 所有时间都是交易所时间戳。σ 是近 10 分钟币安每秒对数涨跌的标准差。
