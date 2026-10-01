@@ -555,7 +555,8 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
     print("\n".join(L))
 
 
-def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0=D_Z0, tau_lo=D_TAU_LO, max_pre=None):
+def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0=D_Z0, tau_lo=D_TAU_LO, max_pre=None,
+                 anchor=None):
     """Test D's trades: every spot print with 240..tau_lo s left whose log price moved more than z0
     sigma from the last print at most C_REF_AGE s and at least 1 s earlier is a candidate. The Up
     mid shown by the exchange at that print is the prior P0; the move shifts the expected settlement
@@ -564,7 +565,10 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
     fair - ask - fee >= theta (a fill-and-kill limit order sent at the print) and the book feed was
     running then; the first fill per market is kept and held to settlement. With `max_pre` (test G),
     a candidate is skipped when the Up mid had already moved max_pre or more toward the side of the
-    move in the two seconds before the print (or no quote was shown then)."""
+    move in the two seconds before the print (or no quote was shown then). With `anchor` (seconds;
+    not part of any preregistered test), the prior is the Up mid shown `anchor` s before the print
+    and the move is the print's log price against the last trade by then, so a quote that already
+    followed the spot price is not counted twice (cross.py gated --anchor)."""
     from scipy.stats import norm
     ts = spot_trades["trade_ts"].to_numpy()
     lp = np.log(spot_trades["price"].to_numpy())
@@ -597,7 +601,14 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
                 pre = (r[0] + r[1]) / 2 - (q[0] + q[1]) / 2
                 if (pre if up else -pre) >= max_pre - 1e-9:
                     continue
-            p1 = float(norm.cdf(norm.ppf(p0) + dx[i] / fac))
+            prior, move = p0, dx[i]
+            if anchor is not None:
+                q = book.at(m.market_id, t0 - anchor)
+                ja = np.searchsorted(ts, t0 - anchor, "right") - 1
+                if q is None or ja < 0 or not (np.isfinite(q[0]) and np.isfinite(q[1])):
+                    continue
+                prior, move = min(max((q[0] + q[1]) / 2, 0.005), 0.995), lp[a + i] - lp[ja]
+            p1 = float(norm.cdf(norm.ppf(prior) + move / fac))
             fair = p1 if up else 1 - p1
             side = "Up" if up else "Down"
             if not book.alive(m.market_id, t0 + lag, *C_ALIVE) or book.across_close(m.market_id, t0, t0 + lag):
