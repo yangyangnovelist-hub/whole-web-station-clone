@@ -589,6 +589,8 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 **BTC 领先 ETH？**（[`real/cross-leadlag-eth.md`](real/cross-leadlag-eth.md)，`cross.py leadlag`）：BTC 币安急动 2σ 时，按 ETH 对 BTC 的 β 预期 ETH 会跟、扣掉 ETH 自己已经动了的部分，0.3 秒后买 ETH 5m 的一边。两种公平价、三个门槛，A 段最好的只有 +1.2¢（p = 0.09），C 段全部为负。ETH 的报价并不等 ETH 现货，不开检验。SOL（[`real/cross-leadlag-sol.md`](real/cross-leadlag-sol.md)）更差：A、C 段每一格都亏（−1 到 −6¢）。
 
+**多因子**（[`real/multifactor.md`](real/multifactor.md)，`multifactor.py`，本地，用 cross-jitter 的急动明细）：只用触发那一刻已知的二十几个特征（市场价、两种公平价、急动大小、之前 2/10/32 秒中间价变化、横盘程度、币安波动、价差、挂单量、扫单量、剩余时间、时段），在 A 段训练逻辑回归和梯度提升树，预测“急动方向赢”的概率；概率 − 卖一 − 费 ≥ θ 就买。B 段选模型和 θ，C 段只看一次。选出的是梯度提升树（只顺势）θ = 12¢：B 222 笔每份 +14.9¢、C 256 笔 +16.8¢（每天约 21–28 笔）；θ = 8¢：B +8.8¢、C +11.3¢（每天约 50 笔）。同一框架下检验 G 的规则：θ = 12¢ B +11.0¢、C +15.4¢，θ = 8¢ B +6.9¢、C +13.6¢。模型在 B 段好一些，C 段和 G 差不多；最有用的特征是市场价本身、两种公平价、价差和之前 10/32 秒的中间价变化，扫单量、主动成交、币安波动几乎不添信息。两个模型在 B、C 段都校准得很好。结论：合在一起没有找到比 G 大很多的优势，G 的核心就是这笔优势。
+
 **抢单**（[`real/cross-gated-compete.md`](real/cross-gated-compete.md)）：检验 D 的规则在 8 月 17–29 日，触发时卖一中位 65 份，我们的单到达前别人已经买走中位 16 份（62% 的笔数有人先买），到达后 300 ms 内又被买走 19 份，三分之一的笔数里后来者买走的不少于剩下的。实际每笔大约能拿到二三十份到四五十份。
 
 **反向和跟随**（[`real/cross-fade.md`](real/cross-fade.md)、[`real/cross-follow.md`](real/cross-follow.md)，都加盘口健康检查，代码经过对抗式审查后才跑）：Polymarket 自己一秒内跳动 ≥ 3/5/8¢ 而币安没动时买变便宜的一方——A 段选出的格子三段 −2.2/−1.9/−1.6¢，全部格子为负：Polymarket 自己的跳动通常是对的。跟随 ≥ 100/500/2,000 USDC 的大单、300 ms 后价差不超过 1¢ 才跟——A 段选出的格子三段 −1.2/−1.7/−3.2¢，全部为负。都放弃。
