@@ -587,6 +587,8 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 同样 100 条在 ETH 上的那次运行（10 月 1 日 05:29）其实跑的是 BTC 数据：`python cross.py` 作为脚本运行时，zoo100 导入的是另一份 cross 模块，没拿到 `--dataset`。报告已删除，代码已修（`zoo100.run(dataset=...)`），没有在云端重跑；要看 ETH，在本地跑 `python cross.py zoo --dataset whodisidk/polymarket-eth-updown-exchange-data`。
 
+**BTC 领先 ETH？**（[`real/cross-leadlag-eth.md`](real/cross-leadlag-eth.md)，`cross.py leadlag`）：BTC 币安急动 2σ 时，按 ETH 对 BTC 的 β 预期 ETH 会跟、扣掉 ETH 自己已经动了的部分，0.3 秒后买 ETH 5m 的一边。两种公平价、三个门槛，A 段最好的只有 +1.2¢（p = 0.09），C 段全部为负。ETH 的报价并不等 ETH 现货，不开检验。
+
 **抢单**（[`real/cross-gated-compete.md`](real/cross-gated-compete.md)）：检验 D 的规则在 8 月 17–29 日，触发时卖一中位 65 份，我们的单到达前别人已经买走中位 16 份（62% 的笔数有人先买），到达后 300 ms 内又被买走 19 份，三分之一的笔数里后来者买走的不少于剩下的。实际每笔大约能拿到二三十份到四五十份。
 
 **反向和跟随**（[`real/cross-fade.md`](real/cross-fade.md)、[`real/cross-follow.md`](real/cross-follow.md)，都加盘口健康检查，代码经过对抗式审查后才跑）：Polymarket 自己一秒内跳动 ≥ 3/5/8¢ 而币安没动时买变便宜的一方——A 段选出的格子三段 −2.2/−1.9/−1.6¢，全部格子为负：Polymarket 自己的跳动通常是对的。跟随 ≥ 100/500/2,000 USDC 的大单、300 ms 后价差不超过 1¢ 才跟——A 段选出的格子三段 −1.2/−1.7/−3.2¢，全部为负。都放弃。
