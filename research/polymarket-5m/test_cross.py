@@ -449,3 +449,30 @@ def test_jitter_rows_describe_the_state_around_a_jump():
     t = cross.jitter_trades(cross.jitter_rows(feat, mkts, binance, z0=6.0), "move", 0.12, "fair_a2_up")
     assert len(t) == 1 and t["pnl"].iloc[0] == pytest.approx(1 - 0.61 - 0.07 * 0.61 * 0.39)
     assert cross.jitter_trades(cross.jitter_rows(feat, mkts, binance, z0=6.0), "fade", 0.0, "fair_a2_up").empty
+
+
+def test_leadlag_trades_buy_the_altcoin_market_btc_has_not_moved_yet():
+    """BTC jumps +0.4% at E-100 s; ETH (beta about 1 to BTC) follows 2 s later, and the ETH
+    market's Up ask stays 0.50 until 3 s after the BTC jump, then 0.90. Up wins."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    ask = np.where(ts < t_jump + 3000, 0.50, 0.90)
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "e5", "lifecycle_state": "active",
+                         "up_best_bid": ask - 0.01, "up_best_ask": ask, "down_best_bid": 1 - ask, "down_best_ask": 1.01 - ask,
+                         "up_ask_size": 20.0 + (ts // 1000) % 2, "down_ask_size": 20.0})
+    mkts = pd.DataFrame({"market_id": ["e5"], "start": [start], "end": [E], "k": [3000.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(5)
+    tt = np.arange(E - 1_200_000, E, 250)
+    common = np.cumsum(rng.normal(0, 1e-5, len(tt)))
+    pb = 80_000 * np.exp(common)
+    pe = 3_000 * np.exp(common + np.cumsum(rng.normal(0, 2e-6, len(tt))))  # moves with BTC, but this jump comes 2 s late
+    pb[tt >= t_jump] *= 1.004
+    pe[tt >= t_jump + 2000] *= 1.004
+    btc = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": pb})
+    eth = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": pe})
+    t = cross.leadlag_trades(feat, mkts, btc, eth, z0=6.0)
+    first = t[t["t0"] == t_jump + 150]
+    assert set(first["variant"]) == {"plain", "anchored"} and (first["price"] == 0.50).all()
+    assert (first["alt_done"].abs() < 0.2).all() and first["beta"].between(0.5, 1.5).all()
+    assert first["pnl"].iloc[0] == pytest.approx(1 - 0.50 - 0.07 * 0.25)

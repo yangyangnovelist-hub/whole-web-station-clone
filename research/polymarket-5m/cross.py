@@ -1743,6 +1743,178 @@ def jitter(workdir, out, days=None, reps=5000):
     print("\n".join(L))
 
 
+LEAD_THETAS = (0.04, 0.08, 0.12)
+
+
+def leadlag_trades(feat, mkts, btc, alt, z0=2.0, lag=300, thetas=LEAD_THETAS, tau_lo=15, horizon=5):
+    """BTC leads: a BTC print (Binance, as received) with tau_hi..tau_lo s left in an altcoin market
+    that moved more than z0 BTC sigma from the last BTC trade a second earlier is a candidate. The
+    altcoin is expected to follow by beta times the BTC move (beta: 10 min rolling regression of
+    the altcoin's 1 s Binance returns on BTC's), less what the altcoin's own Binance price already
+    moved over the same second. Two fair values for the altcoin market's side of the move:
+    'plain' from its Up mid at the print plus that remaining move; 'anchored' from its mid 2 s
+    before plus beta times the BTC move over those 2 s (whatever the market already did is not
+    counted twice). The side is bought at its ask `lag` ms later when fair - ask - fee >= theta, on
+    a healthy book (book_health, HEALTH_ALIVE); first trade per market, variant and theta.
+    alt_done is the share of the expected move the altcoin's Binance price had already made."""
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import norm
+    import binary as bo
+    if btc.empty or alt.empty:
+        return pd.DataFrame()
+
+    def prep(b):
+        rt, tt, lp = b["recv_ts_ms"].to_numpy(), b["trade_ts_ms"].to_numpy(), np.log(b["price"].to_numpy(float))
+        o = np.argsort(tt, kind="stable")
+        last = pd.Series(lp[o], index=tt[o] // 1000).groupby(level=0).last()
+        return rt, tt, lp, tt[o], lp[o], last
+
+    brt, btt, blp, btt_s, blp_s, blast = prep(btc)
+    alast = prep(alt)[5]
+    art, alp = alt["recv_ts_ms"].to_numpy(), np.log(alt["price"].to_numpy(float))
+    lo = int(max(blast.index[0], alast.index[0]))
+    hi = int(min(blast.index[-1], alast.index[-1]))
+    if hi - lo < 600:
+        return pd.DataFrame()
+    secs = range(lo, hi + 1)
+    rb = blast.reindex(secs).ffill(limit=10).diff()
+    ra = alast.reindex(secs).ffill(limit=10).diff()
+    sig_b = rb.rolling(600, min_periods=300).std()
+    sig_a = ra.rolling(600, min_periods=300).std()
+    beta = (rb * ra).rolling(600, min_periods=300).mean() / (rb * rb).rolling(600, min_periods=300).mean()
+
+    def a_recv(x):
+        j = np.searchsorted(art, x, "right") - 1
+        return alp[j] if j >= 0 else np.nan
+
+    def b_recv(x):
+        j = np.searchsorted(brt, x, "right") - 1
+        return blp[j] if j >= 0 else np.nan
+
+    window = 60 * int(horizon)
+    tau_hi = window - 60
+    m5 = mkts[(mkts["horizon"] == horizon) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by:
+            continue
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        ub, ua, da = f["up_best_bid"].to_numpy(float), f["up_best_ask"].to_numpy(float), f["down_best_ask"].to_numpy(float)
+        uas, das = f["up_ask_size"].to_numpy(float), f["down_ask_size"].to_numpy(float)
+        sane, changes = book_health(f)
+        a, b = np.searchsorted(brt, [mk["end"] - tau_hi * 1000, mk["end"] - tau_lo * 1000])
+        if b <= a:
+            continue
+        j = np.searchsorted(btt_s, btt[a:b] - 1000, "right") - 1
+        ok = (j >= 0) & (btt[a:b] - btt_s[np.maximum(j, 0)] <= 5000)
+        dx = np.where(ok, blp[a:b] - blp_s[np.maximum(j, 0)], np.nan)
+        sec = btt[a:b] // 1000 - 1
+        sb, sa, be = sig_b.reindex(sec).to_numpy(), sig_a.reindex(sec).to_numpy(), beta.reindex(sec).to_numpy()
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(np.abs(dx) > z0 * sb)
+        done = set()
+        for i in cand:
+            t0 = int(brt[a + i])
+            k0 = np.searchsorted(fts, t0, "right") - 1
+            if k0 < 0 or t0 - fts[k0] > 1000 or not (np.isfinite(ub[k0]) and np.isfinite(ua[k0])):
+                continue
+            if not (sane[k0] and changed_near(changes, t0, HEALTH_ALIVE[0], 10**12)):
+                continue
+            if not (np.isfinite(be[i]) and np.isfinite(sa[i]) and sa[i] > 0):
+                continue
+            k = np.searchsorted(fts, t0 + lag, "left")
+            if k >= len(f) or fts[k] > t0 + lag + 1000 or not (sane[k] and changed_near(changes, fts[k], 10**12, HEALTH_ALIVE[1])):
+                continue
+            t_mkt = (t0 - (mk["end"] - window * 1000)) / 1000
+            fac = float(bo.twap_std_factor(t_mkt, window=window)) * sa[i]
+            if not (np.isfinite(fac) and fac > 0):
+                continue
+            up = dx[i] > 0
+            expect = be[i] * dx[i]
+            alt_moved = a_recv(t0) - a_recv(t0 - 1000)
+            ka = np.searchsorted(fts, t0 - 2000, "right") - 1
+            p0 = min(max((ub[k0] + ua[k0]) / 2, 0.005), 0.995)
+            fairs = {"plain": float(norm.cdf(norm.ppf(p0) + (expect - alt_moved) / fac))}
+            if ka >= 0 and t0 - 2000 - fts[ka] <= 1000 and np.isfinite(ub[ka]) and np.isfinite(ua[ka]):
+                pa = min(max((ub[ka] + ua[ka]) / 2, 0.005), 0.995)
+                fairs["anchored"] = float(norm.cdf(norm.ppf(pa) + be[i] * (b_recv(t0) - b_recv(t0 - 2000)) / fac))
+                pre = (p0 - pa) if up else (pa - p0)
+            else:
+                pre = np.nan
+            px, size = (ua[k], uas[k]) if up else (da[k], das[k])
+            if not (np.isfinite(px) and 0.02 <= px <= 0.98):
+                continue
+            fee = 0.07 * px * (1 - px)
+            won = float(mk["up_won"] == (1.0 if up else 0.0))
+            for var, fu in fairs.items():
+                fair = fu if up else 1 - fu
+                for th in thetas:
+                    if (var, th) in done or fair - px - fee < th:
+                        continue
+                    done.add((var, th))
+                    rows.append((mid, var, th, t0, (mk["end"] - t0) / 1000, p0, fair, px, size, fee, won, won - px - fee,
+                                 be[i], dx[i] / sb[i], alt_moved / expect if expect else np.nan, pre))
+    return pd.DataFrame(rows, columns=["market_id", "variant", "theta", "t0", "tau", "p0", "fair", "price", "size", "fee",
+                                       "won", "pnl", "beta", "z_btc", "alt_done", "pre_move"])
+
+
+def leadlag(workdir, out, alt_ds, days=None, reps=5000):
+    """leadlag_trades on every day both datasets have: BTC prints from the BTC dataset, the
+    altcoin's markets and Binance trades from alt_ds. Thresholds compared on May 25 - Jul 15."""
+    import numpy as np
+    import pandas as pd
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    btc_ds = "whodisidk/polymarket-btc-updown-exchange-data"
+    set_dataset(btc_ds)
+    btc_days = {n for n, _ in archives(fetch("MANIFEST.txt").decode())}
+    set_dataset(alt_ds)
+    arcs = [(n, s) for n, s in archives(fetch("MANIFEST.txt").decode()) if n in btc_days]
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            set_dataset(btc_ds)
+            local = fetch(name, workdir / ("btc-" + name))
+            btc = read_binance(local)
+            Path(local).unlink()
+            set_dataset(alt_ds)
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            alt = read_binance(local)
+            Path(local).unlink()
+            t = leadlag_trades(feat, market_table(mk, rs), btc, alt)
+            t["day"] = name[15:25]
+            parts.append(t)
+            print(f"{name}: {len(t):,} trades over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    set_dataset(alt_ds)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# BTC 领先：BTC 急动后 {alt_ds.split('/')[1].split('-')[1].upper()} 5m 盘口还没跟上（{alt_ds}，记录机时钟）", "",
+         "候选：剩 240–15 秒时，与至少一秒前相比涨跌超过 2σ 的每一笔 BTC 币安成交（记录机收到时）。预期这个币会跟着动 β × BTC 涨跌"
+         "（β 是近 10 分钟两者每秒涨跌的回归系数），减去它自己的币安价格这一秒已经动了的部分。两种公平价：plain 从触发时的 Up 中间价起算加上"
+         "剩下要动的部分；anchored 从 2 秒前的中间价起算加上 β × BTC 这 2 秒的涨跌（市场已经跟上的不重复算）。0.3 秒后按卖一买，"
+         "公平价 − 卖一 − taker 费 ≥ θ 才买，盘口健康检查，每个市场每组取第一笔，持有到结算。5 月 25 日–7 月 15 日比较，之后只核对。探索性质。", ""]
+    if df.empty:
+        L.append("没有成交。")
+    else:
+        L += _period_table(df, ["variant", "theta"], reps, ["公平价", "θ"])
+        d = df.copy()
+        d["已跟"] = np.select([d["alt_done"] >= 0.5, d["alt_done"] >= 0.0], ["币自己已经动了 ≥ 一半", "动了不到一半"], "反方向")
+        L += ["", "## 按这个币自己的币安价格已经跟了多少（θ = 8¢）", ""]
+        L += _period_table(d[d["theta"] == 0.08], ["variant", "已跟"], reps, ["公平价", "已跟"])
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 HF_API = "https://huggingface.co/api/datasets?"
 SCAN_QUERIES = ("author=whodisidk", "search=polymarket", "search=updown", "search=up-down", "search=kalshi")
 
@@ -2042,7 +2214,8 @@ def main(argv=None):
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
                           ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md"),
                           ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md"),
-                          ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md")):
+                          ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md"),
+                          ("leadlag", "real/cross-leadlag-eth.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -2080,6 +2253,9 @@ def main(argv=None):
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":
         hourly(a.workdir, a.out, a.days, health=a.health)
+    elif a.cmd == "leadlag":
+        leadlag(a.workdir, a.out, a.dataset if "-btc-" not in a.dataset else "whodisidk/polymarket-eth-updown-exchange-data",
+                a.days)
     elif a.cmd == "zoo":
         import zoo100
         zoo100.run(a.workdir, a.out, a.days)
