@@ -579,6 +579,8 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 **“还没动”的条件救不了 ETH、SOL**（[`real/cross-gated-eth-premove.md`](real/cross-gated-eth-premove.md)、[`-sol-premove.md`](real/cross-gated-sol-premove.md)，健康过滤、θ = 12¢、300 ms）：只留触发前 2 秒中间价没朝我们动 3¢ 的，ETH 5 月 25 日–7 月 15 日每份约 +3.0¢、7 月 16 日–8 月 16 日约 +7.8¢、8 月 17–29 日约 −0.5¢（201 笔）；SOL 分别约 +1.1¢（没有 B 段）和 −8.1¢（2 秒前没有快照的也算在“没动”里，和报告一致；去掉它们 ETH 8 月下旬 +1.1¢、SOL −6.9¢）。这两个币在 8 月下旬有 85–87% 的触发是 Polymarket 已经先动了，币安的 ETH、SOL 成交并不领先它们的报价，所以不另开检验。实盘检验 F 的前 22 笔（[`real/latency-test-f-diagnose.md`](real/latency-test-f-diagnose.md)，检验 G 开始之前的市场，只看不判）：已经动了的 15 笔每份 −16.3¢，没动的 7 笔每份 +18.6¢，方向和回测一致，但只有 7 笔。
 
+**2 秒前起算的公平价**（[`real/cross-gated-anchor.md`](real/cross-gated-anchor.md)，`cross.py gated --anchor 2000`，健康过滤）：原来的概率取触发前 2 秒的中间价，涨跌取币安这 2 秒的总涨跌，Polymarket 已经跟上的部分不再算一遍。θ = 12¢、300 ms：A 段 8,442 笔每份 +3.95¢、B 段 +9.11¢、C 段 1,539 笔 +5.87¢，三段都不比原规则差（原规则 +2.89/+7.17/+5.85¢），笔数是检验 G 的三到四倍、每份少一半左右。先看检验 G 的实盘，再决定要不要为它开检验。**BTC 15m 按“还没动”拆开**（[`real/cross-gated-15m-premove.md`](real/cross-gated-15m-premove.md)）：没动的 A 段约 +6.7¢、B 段约 +13.5¢、C 段只有约 +3.5¢（151 笔，不显著），C 段 81% 的触发已经被抢先，不开检验。
+
 **抢单**（[`real/cross-gated-compete.md`](real/cross-gated-compete.md)）：检验 D 的规则在 8 月 17–29 日，触发时卖一中位 65 份，我们的单到达前别人已经买走中位 16 份（62% 的笔数有人先买），到达后 300 ms 内又被买走 19 份，三分之一的笔数里后来者买走的不少于剩下的。实际每笔大约能拿到二三十份到四五十份。
 
 **反向和跟随**（[`real/cross-fade.md`](real/cross-fade.md)、[`real/cross-follow.md`](real/cross-follow.md)，都加盘口健康检查，代码经过对抗式审查后才跑）：Polymarket 自己一秒内跳动 ≥ 3/5/8¢ 而币安没动时买变便宜的一方——A 段选出的格子三段 −2.2/−1.9/−1.6¢，全部格子为负：Polymarket 自己的跳动通常是对的。跟随 ≥ 100/500/2,000 USDC 的大单、300 ms 后价差不超过 1¢ 才跟——A 段选出的格子三段 −1.2/−1.7/−3.2¢，全部为负。都放弃。
