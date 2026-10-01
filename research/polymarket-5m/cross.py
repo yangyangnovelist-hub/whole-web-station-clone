@@ -1713,11 +1713,29 @@ def jitter_trades(df, side_rule, theta, fair_col="fair_up"):
     return d
 
 
-def jitter(workdir, out, days=None, reps=5000, gap_ms=2000):
+PRINT_COLS = ["market_id", "t0", "tau", "up", "z", "p0", "fair_up", "fair_a2_up", "m_m2", "m_0", "ua_l", "da_l",
+              "uas_l", "das_l", "ok", "up_won", "day"]
+
+
+def tradable(t, theta=0.04):
+    """Rows some scalein.py rule could buy: a healthy book, the side's ask in 0.02..0.98 and G's or
+    H's fair value at least `theta` (the lowest add threshold) above it after the fee."""
+    import numpy as np
+    up = t["up"].to_numpy() == 1
+    px = np.where(up, t["ua_l"], t["da_l"]).astype(float)
+    fee = 0.07 * px * (1 - px)
+    edge = [np.where(up, t[c], 1 - t[c]).astype(float) - px - fee for c in ("fair_up", "fair_a2_up")]
+    with np.errstate(invalid="ignore"):
+        return t["ok"].astype(bool).to_numpy() & (px >= 0.02) & (px <= 0.98) & ((edge[0] >= theta) | (edge[1] >= theta))
+
+
+def jitter(workdir, out, days=None, reps=5000, gap_ms=2000, shard=None):
     """jitter_rows on every day; the rows go to <out>.csv.gz for slicing, the report shows the
     split of the gated rule (and its fade) by how flat the book and Binance were before the jump,
     with the cuts at the terciles of May 25 - Jul 15. gap_ms=0 keeps every candidate print (as a
-    live bot sees them; scalein.py then waits 2 s after each fill)."""
+    live bot sees them; scalein.py then waits 2 s after each fill), only the rows some scalein.py
+    rule could buy and only the columns it reads, and skips the report. shard "i/n" runs every
+    n-th archive from the i-th (0-based), to run in parallel and concatenate."""
     import numpy as np
     import pandas as pd
     workdir = Path(workdir)
@@ -1725,6 +1743,9 @@ def jitter(workdir, out, days=None, reps=5000, gap_ms=2000):
     arcs = archives(fetch("MANIFEST.txt").decode())
     if days:
         arcs = arcs[-int(days):]
+    if shard:
+        i, n = map(int, shard.split("/"))
+        arcs = arcs[i::n]
     parts = []
     for name, _ in arcs:
         try:
@@ -1733,8 +1754,10 @@ def jitter(workdir, out, days=None, reps=5000, gap_ms=2000):
             binance = read_binance(local)
             prints = read_poly_trades(local)
             Path(local).unlink()
-            t = jitter_rows(feat, market_table(mk, rs), binance, trades=prints, gap_ms=gap_ms)
+            t = jitter_rows(feat, market_table(mk, rs), binance, trades=None if gap_ms == 0 else prints, gap_ms=gap_ms)
             t["day"] = name[15:25]
+            if gap_ms == 0 and len(t):
+                t = t.loc[tradable(t), PRINT_COLS]
             parts.append(t)
             print(f"{name}: {len(t):,} jump episodes over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
         except Exception:
@@ -1742,6 +1765,10 @@ def jitter(workdir, out, days=None, reps=5000, gap_ms=2000):
             print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    if gap_ms == 0:
+        Path(out).write_text(f"# 逐笔候选（{DS}）\n\n{len(df):,} 行，{df['day'].nunique() if len(df) else 0} 天；"
+                             f"只留某条加仓规则可能买到的行（scalein.py）。\n", encoding="utf-8")
+        return
     L = [f"# 急动前后的盘口：横盘之后的抖动（{DS}，5m 市场，记录机时钟）", "",
          "每个市场里每一次币安急动（剩 240–15 秒，与至少一秒前相比超过 2σ，之后 2 秒内不再算新的一次）记一行："
          "触发前 32/10/2 秒、触发时、之后 0.3/2/10 秒的 Up 中间价，触发前 30 秒中间价的波动幅度和盘口变化次数，"
@@ -2289,6 +2316,7 @@ def main(argv=None):
             p.add_argument("--horizon", type=int, default=5, choices=(5, 15), help="market length in minutes")
         if name == "jitter":
             p.add_argument("--gap-ms", type=int, default=2000, help="0: a row for every candidate print")
+            p.add_argument("--shard", help="i/n: every n-th daily archive from the i-th (0-based)")
         if name in ("gated", "hourly"):
             p.add_argument("--health", action="store_true", help="only sane, recently changed book snapshots")
         if name == "gated":
@@ -2328,7 +2356,7 @@ def main(argv=None):
         import zoo100
         zoo100.run(a.workdir, a.out, a.days, dataset=DS)  # run as a script, this module is not `cross`
     elif a.cmd == "jitter":
-        jitter(a.workdir, a.out, a.days, gap_ms=a.gap_ms)
+        jitter(a.workdir, a.out, a.days, gap_ms=a.gap_ms, shard=a.shard)
     elif a.cmd in ("fade", "follow"):
         fadefollow(a.cmd, a.workdir, a.out, a.days)
     else:
