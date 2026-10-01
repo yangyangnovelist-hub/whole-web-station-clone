@@ -329,3 +329,19 @@ def test_test_g_skips_markets_polymarket_already_moved(export, tmp_path, monkeyp
     lt.run_test_g([tmp_path / "rec"], out, reps=200)
     text = out.read_text()
     assert "检验 G（前 5 笔）" in text and f"成交 {len(kept):,} 笔" in text
+
+
+def test_diagnose_f_lists_test_f_trades_before_test_g(export, tmp_path, monkeypatch):
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    (d / "coinbase_trades.jsonl.gz").unlink()
+    monkeypatch.setattr(lt, "F_SINCE", "2026-09-01")
+    monkeypatch.setattr(lt, "G_SINCE", str(pd.to_datetime(starts[10], unit="s")))  # markets 10.. are test G's
+    out = tmp_path / "real" / "diag-f.md"
+    lt.main([str(tmp_path / "rec"), "--diagnose-f", "--out", str(out)])
+    text = out.read_text()
+    assert "检验 F 的逐笔诊断" in text and "10 笔：" in text
+    assert "没动到 3¢（检验 G 会留下的）：10 笔" in text

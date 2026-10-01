@@ -818,20 +818,25 @@ def run_test_g(roots, out, reps=20000):
     print("\n".join(L))
 
 
-def diagnose_d(roots, out):
+def diagnose_d(roots, out, spot=D_SPOT, since=None, until=None, name="D"):
     """Per-trade look at test D's trades so far (reporting only; the rule and the verdict are
-    untouched): the Coinbase move that triggered, the Binance move Polymarket relays (about one
-    print a second) over the same seconds, and where the Up mid went after the order."""
+    untouched): the spot move that triggered, the Binance move Polymarket relays (about one
+    print a second) over the same seconds, and where the Up mid went before and after the order.
+    With spot="binancews" and markets before G_SINCE it is the same look at test F's trades
+    (test G's markets are left out, so its data stays unseen until its own report)."""
+    since = D_SINCE if since is None else since
     dirs = _latency_dirs(roots, D_COINS)
     rows = []
     for coin, ds in sorted(dirs.items()):
         for d in ds:
             run = Path(d).parent.parent.parent.name
             try:
-                books, markets, cb = load(d, spot="coinbase")
+                books, markets, cb = load(d, spot=spot)
             except Exception:
                 continue
-            markets = markets[markets["start_ts"] >= pd.Timestamp(D_SINCE, tz="UTC").timestamp()]
+            markets = markets[markets["start_ts"] >= pd.Timestamp(since, tz="UTC").timestamp()]
+            if until is not None:
+                markets = markets[markets["start_ts"] < pd.Timestamp(until, tz="UTC").timestamp()]
             books = books[books["market_id"].isin(set(markets["market_id"]))]
             if markets.empty or books.empty:
                 continue
@@ -862,19 +867,31 @@ def diagnose_d(roots, out):
                 rows.append({"run": run, "market_id": r.market_id, "t": r.t, "side": "Up" if side_up else "Down",
                              "price": r.price, "p0": r.p0, "fair": r.fair, "won": r.won, "pnl": r.pnl,
                              "cb_z": sign * cb_move / sg if sg and np.isfinite(sg) else np.nan,
-                             "bn_move_bp": sign * 1e4 * bn_move, "mid_m2": mids[0], "mid_0": mids[1],
+                             "bn_move_bp": sign * 1e4 * bn_move, "pre": sign * (mids[1] - mids[0]),
+                             "mid_m2": mids[0], "mid_0": mids[1],
                              "mid_03": mids[2], "mid_2": mids[3], "mid_10": mids[4]})
     df = pd.DataFrame(rows).sort_values("t") if rows else pd.DataFrame()
-    L = ["# 检验 D 的逐笔诊断（只看数据，规则和判定不变）", "",
-         "cb_z：触发的 Coinbase 涨跌（按买的方向，单位 σ）；bn：Polymarket 转发的币安价格在触发前 2 秒到后 1 秒的涨跌"
-         "（按买的方向，基点，约每秒一笔）；mid：Up 中间价在触发前 2 秒、触发时、0.3 秒、2 秒、10 秒后的值。", ""]
+    src = {"coinbase": "Coinbase", "binancews": "币安逐笔"}.get(spot, spot)
+    L = [f"# 检验 {name} 的逐笔诊断（只看数据，规则和判定不变）", "",
+         f"市场：{since} UTC 起" + (f"、{until} UTC 之前" if until else "") + "。"
+         f"cb_z：触发的{src}涨跌（按买的方向，单位 σ）；bn：Polymarket 转发的币安价格在触发前 2 秒到后 1 秒的涨跌"
+         "（按买的方向，基点，约每秒一笔）；pre：触发前 2 秒到触发时 Up 中间价朝买的方向动了多少；"
+         "mid：Up 中间价在触发前 2 秒、触发时、0.3 秒、2 秒、10 秒后的值。", ""]
     if df.empty:
         L.append("还没有成交。")
     else:
         conf = df["bn_move_bp"] > 0
         L += [f"{len(df)} 笔：币安同向 {int(conf.sum())} 笔（胜率 {df.loc[conf, 'won'].mean():.0%}，每份 "
               f"{100 * df.loc[conf, 'pnl'].mean():+.1f}¢），币安没同向 {int((~conf).sum())} 笔（胜率 "
-              f"{df.loc[~conf, 'won'].mean():.0%}，每份 {100 * df.loc[~conf, 'pnl'].mean():+.1f}¢）。", "",
+              f"{df.loc[~conf, 'won'].mean():.0%}，每份 {100 * df.loc[~conf, 'pnl'].mean():+.1f}¢）。"]
+        moved = df["pre"] >= G_MAX_PRE - 1e-9
+        unseen = df["pre"].isna()
+        kept = ~moved & ~unseen
+        L += [f"触发前 2 秒中间价已朝买的方向动了 ≥ {100 * G_MAX_PRE:.0f}¢：{int(moved.sum())} 笔"
+              f"（胜率 {df.loc[moved, 'won'].mean():.0%}，每份 {100 * df.loc[moved, 'pnl'].mean():+.1f}¢）；"
+              f"没动到 {100 * G_MAX_PRE:.0f}¢（检验 G 会留下的）：{int(kept.sum())} 笔（胜率 "
+              f"{df.loc[kept, 'won'].mean():.0%}，每份 {100 * df.loc[kept, 'pnl'].mean():+.1f}¢）；"
+              f"2 秒前没有报价：{int(unseen.sum())} 笔。", "",
               "```", df.drop(columns=["market_id"]).round(3).to_string(index=False), "```"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
@@ -896,6 +913,8 @@ def main(argv=None):
     ap.add_argument("--diagnose-d", action="store_true", help="per-trade look at test D's trades (report only)")
     ap.add_argument("--test-f", action="store_true", help="test F (Binance-triggered test D) on the same roots")
     ap.add_argument("--test-g", action="store_true", help="test G (test F with the pre-move skip) on the same roots")
+    ap.add_argument("--diagnose-f", action="store_true",
+                    help="the same per-trade look at test F's trades before G_SINCE (report only)")
     a = ap.parse_args(argv)
     if a.test_g:
         run_test_g(a.export_dir, a.out, a.reps)
@@ -903,6 +922,8 @@ def main(argv=None):
         run_test_f(a.export_dir, a.out, a.reps)
     elif a.diagnose_d:
         diagnose_d(a.export_dir, a.out)
+    elif a.diagnose_f:
+        diagnose_d(a.export_dir, a.out, spot=F_SPOT, since=F_SINCE, until=G_SINCE, name="F")
     elif a.test_d:
         run_test_d(a.export_dir, a.out, a.reps)
     elif a.pooled:
