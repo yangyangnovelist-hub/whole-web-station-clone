@@ -51,10 +51,12 @@ python equity_compound.py --extra sept.csv.gz
 
 默认每笔投账户的 1%，最少 5 份、最多 200 份，不超过卖一挂单量，按 78% 成交。可以用 `--fraction 0.025`、`--cap 40` 换别的假设。
 
-**加仓规则在 9 月上对比**（9 种规则，A 段 5/25–7/15 选出的是“只加反向”，B、C 段没确认它更好；输出里 X 段就是 9 月，结果见 `real/scalein.md`）：
+**加仓规则在 9 月上对比**（63 条规则，先提交、后运行；A 段 5/25–7/15 选，B+C 段核对，输出里 X 段就是 9 月；见 `real/scalein.md`）：
 
 ```bash
-python scalein.py --extra sept.csv.gz
+# --episodes 另外写出每一段急动（两段至少隔 2 秒）和规则要用的字段：sept-episodes.csv.gz
+python run_local.py <9 月 shadow 数据路径 ...> --since 2026-08-30 --episodes --out sept.md
+python scalein.py --extra sept-episodes.csv.gz > scalein-sept.md
 ```
 
 ## 四个策略

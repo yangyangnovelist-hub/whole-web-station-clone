@@ -632,6 +632,64 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
     return pd.DataFrame(rows, columns=["won", "price", "fee", "pnl", "size", "t", "market_id", "p0", "fair", "lag", "side"])
 
 
+
+def episode_rows(markets, spot_trades, sigma, book, lag=G_LAG, z0=G_Z0, tau_lo=D_TAU_LO, gap=2.0):
+    """One row per Binance jump episode in each market, in the columns of cross.py jitter so that
+    scalein.py runs the same rules on them (not part of any preregistered test): the first
+    candidate print of gated_trades (240..tau_lo s left, moved more than z0 sigma from the last
+    print 1..C_REF_AGE s earlier), then nothing for `gap` s. p0 / m_0 and m_m2: the Up mid shown
+    at and 2 s before the print; fair_up from the mid at the print, fair_a2_up from the mid 2 s
+    before plus the move since (gated_trades with anchor=2); ua_l, da_l, uas_l, das_l: both asks
+    and sizes `lag` s after the print; ok: both asks shown, the book feed running then (C_ALIVE)
+    and no socket close across the order."""
+    from scipy.stats import norm
+    ts = spot_trades["trade_ts"].to_numpy()
+    lp = np.log(spot_trades["price"].to_numpy())
+    rows = []
+
+    def clip(p):
+        return min(max(p, 0.005), 0.995)
+
+    for m in markets.itertuples():
+        end = m.start_ts + bo.WINDOW_S
+        a, b = np.searchsorted(ts, [end - TAUS[0], end - tau_lo])
+        if b <= a:
+            continue
+        j = np.searchsorted(ts, ts[a:b] - 1.0, "right") - 1
+        ok = (j >= 0) & (ts[a:b] - ts[np.maximum(j, 0)] <= C_REF_AGE)
+        dx = np.where(ok, lp[a:b] - lp[np.maximum(j, 0)], np.nan)
+        sg = sigma.reindex(np.floor(ts[a:b]).astype("int64") - 1).to_numpy()
+        with np.errstate(invalid="ignore"):
+            cand = np.flatnonzero(np.abs(dx) > z0 * sg)
+        prev = -np.inf
+        for i in cand:
+            t0 = float(ts[a + i])
+            if t0 - prev < gap:
+                continue
+            prev = t0
+            r = book.at(m.market_id, t0)
+            if r is None or not (np.isfinite(r[0]) and np.isfinite(r[1])):
+                continue
+            fac = float(bo.twap_std_factor(t0 - m.start_ts)) * sg[i]
+            if not (np.isfinite(fac) and fac > 0):
+                continue
+            p0 = (r[0] + r[1]) / 2
+            q = book.at(m.market_id, t0 - 2.0)
+            m2 = (q[0] + q[1]) / 2 if q is not None and np.isfinite(q[0]) and np.isfinite(q[1]) else np.nan
+            ja = np.searchsorted(ts, t0 - 2.0, "right") - 1
+            fair_up = float(norm.cdf(norm.ppf(clip(p0)) + dx[i] / fac))
+            fair_a2 = float(norm.cdf(norm.ppf(clip(m2)) + (lp[a + i] - lp[ja]) / fac)) \
+                if np.isfinite(m2) and ja >= 0 else np.nan
+            ua, uas = book.side_ask(m.market_id, t0 + lag, "Up")
+            da, das = book.side_ask(m.market_id, t0 + lag, "Down")
+            alive = bool(np.isfinite(ua) and np.isfinite(da) and book.alive(m.market_id, t0 + lag, *C_ALIVE)
+                         and not book.across_close(m.market_id, t0, t0 + lag))
+            rows.append((m.market_id, round(1000 * t0), end - t0, int(dx[i] > 0), abs(dx[i]) / sg[i], p0, fair_up,
+                         fair_a2, m2, p0, ua, da, uas, das, alive, float(m.winner == "Up"),
+                         pd.Timestamp(t0, unit="s", tz="UTC").strftime("%Y-%m-%d")))
+    return pd.DataFrame(rows, columns=["market_id", "t0", "tau", "up", "z", "p0", "fair_up", "fair_a2_up", "m_m2", "m_0",
+                                       "ua_l", "da_l", "uas_l", "das_l", "ok", "up_won", "day"])
+
 def _per_recording(dirs_by_coin, since, spot, make, keys, notes):
     """Run `make(markets, spot_trades, sigma, book)` on each recording (directory) on its own and
     pool the rows over recordings and coins; rows repeated across recordings keep the earliest."""

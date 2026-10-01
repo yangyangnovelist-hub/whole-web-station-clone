@@ -23,6 +23,8 @@ Strategies (all BTC 5m, buy one side and hold to settlement, taker fee 0.07 p (1
   side at the ask 0.3 s later; first per market (rule #27 of zoo100.py).
 - with --scale-in also "G 加仓" and "H 加仓": G and H keeping every fill in a market (scaling in),
   the next at least 2 s after the last (equity_compound.py --extra reads them).
+- with --episodes, every Binance jump episode (2 s apart) with what scalein.py's rules need, in
+  the columns of cross.py jitter, to <out>-episodes.csv.gz (scalein.py --extra reads it).
 For G, F and H the report also splits by how flat the Up mid was in the 30 s before (range over
 32..2 s before the print at most 0.42, the upper tercile cut chosen on May 25 - Jul 15).
 
@@ -243,6 +245,7 @@ def main(argv=None):
     ap.add_argument("--reps", type=int, default=20000)
     ap.add_argument("--inspect", action="store_true", help="list what was found and stop")
     ap.add_argument("--scale-in", action="store_true", help="also G and H keeping every fill per market")
+    ap.add_argument("--episodes", action="store_true", help="also write every jump episode for scalein.py")
     a = ap.parse_args(argv)
     books, markets, spot = load(a.paths, inspect=a.inspect)
     if a.inspect:
@@ -292,6 +295,10 @@ def main(argv=None):
         allt.append(t)
     trades = pd.concat(allt, ignore_index=True)
     trades.to_csv(Path(a.out).with_suffix(".csv.gz"), index=False)
+    if a.episodes:
+        ep = lt.episode_rows(markets, spot, sigma, book, lag=kw["lag"], z0=kw["z0"], tau_lo=kw["tau_lo"])
+        ep.to_csv(Path(a.out).with_name(Path(a.out).stem + "-episodes.csv.gz"), index=False)
+        L += [f"急动段（scalein.py 用）：{len(ep):,} 段，盘口健康的 {int(ep['ok'].sum()) if len(ep) else 0:,} 段。"]
     Path(a.out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 
