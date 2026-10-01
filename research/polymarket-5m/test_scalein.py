@@ -80,3 +80,28 @@ def test_episodes_from_run_local(export, tmp_path):
         g = trades[trades["strategy"] == name].set_index("market_id").sort_index()
         assert len(first) == len(g) > 0
         assert np.allclose(first["t"], g["t"]) and np.allclose(first["price"], g["price"])
+
+
+def test_prints_match_live_rules(export, tmp_path):
+    """Every candidate print (run_local.py --prints) through the engine gives exactly run_local's
+    G, H (first trade) and G 加仓, H 加仓 (every fill, 2 s apart) trades."""
+    import run_local
+    from test_run_local import _folder
+    d = _folder(export, tmp_path / "export-label")
+    out = tmp_path / "r.md"
+    run_local.main([str(d), "--out", str(out), "--reps", "200", "--prints", "--scale-in"])
+    trades = pd.read_csv(out.with_suffix(".csv.gz"))
+    for rule, first, every in (("G", "G（检验 G）", "G 加仓"), ("H", "H（2 秒前起算）", "H 加仓")):
+        t = si.episodes(tmp_path / "r-prints.csv.gz", rule, period="X")
+        for name, strat in (("只买第一笔", first), (si.BASE, every)):
+            got = t[si.weights(t, RULE[name]) > 0].sort_values(["market_id", "t"])
+            want = trades[trades["strategy"] == strat].sort_values(["market_id", "t"])
+            assert len(got) == len(want) > 0
+            assert np.allclose(got["t"], want["t"]) and np.allclose(got["price"], want["price"])
+
+
+def test_refill_gap():
+    t = _t()
+    t.loc[t["t"] == 4, "t"] = 3.0  # an add 1 s after the first fill: a later print of the same jump
+    t = t.sort_values("t", kind="stable").reset_index(drop=True)
+    assert w(si.BASE, t)[3.0] == 0

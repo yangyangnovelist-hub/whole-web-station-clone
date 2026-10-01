@@ -637,7 +637,8 @@ def episode_rows(markets, spot_trades, sigma, book, lag=G_LAG, z0=G_Z0, tau_lo=D
     """One row per Binance jump episode in each market, in the columns of cross.py jitter so that
     scalein.py runs the same rules on them (not part of any preregistered test): the first
     candidate print of gated_trades (240..tau_lo s left, moved more than z0 sigma from the last
-    print 1..C_REF_AGE s earlier), then nothing for `gap` s. p0 / m_0 and m_m2: the Up mid shown
+    print 1..C_REF_AGE s earlier), then nothing for `gap` s (gap=0: every candidate print, as
+    gated_trades scans them). p0 / m_0 and m_m2: the Up mid shown
     at and 2 s before the print; fair_up from the mid at the print, fair_a2_up from the mid 2 s
     before plus the move since (gated_trades with anchor=2); ua_l, da_l, uas_l, das_l: both asks
     and sizes `lag` s after the print; ok: both asks shown, the book feed running then (C_ALIVE)
@@ -664,7 +665,7 @@ def episode_rows(markets, spot_trades, sigma, book, lag=G_LAG, z0=G_Z0, tau_lo=D
         prev = -np.inf
         for i in cand:
             t0 = float(ts[a + i])
-            if t0 - prev < gap:
+            if gap > 0 and t0 - prev < gap:
                 continue
             prev = t0
             r = book.at(m.market_id, t0)

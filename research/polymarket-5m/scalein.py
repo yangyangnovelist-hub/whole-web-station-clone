@@ -29,8 +29,16 @@ correlation was +0.27 (G) / +0.31 (H). Written down after seeing A, B and C and 
 September was run, the two rules to check on X: "同向全仓，反向 2 倍" and "加仓门槛 8¢" make more a day
 than "每次都加" with a daily Sharpe no more than 0.01 lower, for both G and H, on A and on B + C.
 
+September (the user's local run, episodes): the rules chosen on A lost to "每次都加" in all four
+settings (G -$6 to -$11 a day, H -$4.6 to -$7.2), and the two candidates were not significant.
+
+Rows can also be every candidate print (cross.py jitter --gap-ms 0, run_local.py --prints): then
+nothing is bought for REFILL s after a fill, and "只买第一笔" / "每次都加" are exactly run_local.py's
+G, H / G 加仓, H 加仓 (the live definition); episodes see only the first print of every 2 s.
+
     python scalein.py > real/scalein.md
     python scalein.py --extra sept-episodes.csv.gz      # from run_local.py ... --episodes
+    python scalein.py --jitter real/cross-prints.csv.gz --extra sept-prints.csv.gz
 """
 from __future__ import annotations
 
@@ -40,7 +48,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-STAKE, FILL, THETA = 3.0, 0.78, 0.12
+STAKE, FILL, THETA, REFILL = 3.0, 0.78, 0.12, 2.0
 BASE = "每次都加（现在的）"
 
 
@@ -184,6 +192,8 @@ def weights(t, r):
     for idx in t.groupby("market_id", sort=False).indices.values():
         n = 0
         for i in idx:
+            if n and ts[i] - last < REFILL:  # per-print rows: nothing for 2 s after a fill (as G 加仓)
+                continue
             if n == 0:
                 if pre[i] and edge[i] >= THETA:
                     x = _w(r.first, 0, True, edge[i])

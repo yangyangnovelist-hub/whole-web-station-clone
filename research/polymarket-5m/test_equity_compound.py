@@ -17,14 +17,19 @@ def test_simulate_sizing():
     assert np.isclose(big["eq"].iloc[0] - 1e6, 200 * 0.78 * (1 - cost))  # the cap, then the fill haircut
 
 
-def test_extra_selection(tmp_path, capsys):
-    e = pd.DataFrame({"strategy": ["G（检验 G）", "G 加仓", "G 加仓", "H（2 秒前起算）", "F（检验 F）", "M27（币安 5 秒动量）"],
-                      "t": [1e12, 1e9, 1e9 + 2, 1e9, 1e9, 1e9], "price": 0.4, "size": 50.0, "won": 1.0})
-    f = tmp_path / "x.csv.gz"
-    e.to_csv(f, index=False)
-    g1 = ec.extra_trades(f, "G", False)
-    assert len(g1) == 1 and g1["t"].iloc[0] == 1e9  # ms read as seconds
-    assert len(ec.extra_trades(f, "G", True)) == 2
-    assert len(ec.extra_trades(f, "H", False)) == 1
-    assert len(ec.extra_trades(f, "H", True)) == 1  # no "H 加仓": falls back to the first trades
-    assert "no 'H 加仓' rows" in capsys.readouterr().out
+def test_rule_trades_and_weights(tmp_path):
+    import scalein as si
+    rows = pd.DataFrame({"market_id": [1, 1, 1], "t0": [0, 3000, 30000], "tau": [200, 197, 170], "up": [1, 1, 0],
+                         "z": 2.2, "p0": 0.5, "fair_up": [0.7, 0.75, 0.2], "fair_a2_up": [0.7, 0.75, 0.2],
+                         "m_m2": 0.5, "m_0": 0.5, "ua_l": 0.5, "da_l": 0.5, "uas_l": 100.0, "das_l": 100.0,
+                         "ok": True, "up_won": 1.0, "day": "2026-06-01"})
+    f = tmp_path / "c.csv.gz"
+    rows.to_csv(f, index=False)
+    first = ec.rule_trades([f], "G", "只买第一笔")
+    every = ec.rule_trades([f], "G", si.BASE)
+    double = ec.rule_trades([f], "G", "同向全仓，反向 2 倍")
+    assert len(first) == 1 and len(every) == 3 and double["w"].tolist() == [1, 1, 2]
+    p1 = ec.simulate(every, 300, 0.01, 1.0, min_shares=0)
+    p2 = ec.simulate(double, 300, 0.01, 1.0, min_shares=0)
+    step1, step2 = (p["eq"].iloc[-1] - p["eq"].iloc[-2] for p in (p1, p2))
+    assert step1 < 0 and np.isclose(step2, 2 * step1, rtol=0.01)  # the Down add lost (Up won), twice as big

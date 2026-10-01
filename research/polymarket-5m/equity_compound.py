@@ -1,28 +1,22 @@
 """Compounding equity curves for G and H, with and without scaling in (local).
 
-Trades (BTC 5m, theta 12c, healthy books, the ask 300 ms after the Binance print, fee included,
-held to settlement):
-- "first": the first qualifying jump per market (as tests G and the H backtest);
-- "scale in": every qualifying jump in a market (cross.py jitter episodes, 2 s apart), each at its
-  own stale ask.
-G: fair value from the Up mid at the print, skipping prints where the mid had already moved 3c or
-more toward the side in the 2 s before; H: fair value from the mid 2 s before plus the Binance
-move since. Source: real/cross-jitter.csv.gz (May 25 - Aug 29).
+Trades come from scalein.py's engine on candidate rows (cross.py jitter's columns): the jump
+episodes of real/cross-jitter.csv.gz (May 25 - Aug 29), or every candidate print with
+`cross.py jitter --gap-ms 0` / `run_local.py --prints` (what a live bot sees; 2 s after a fill
+nothing more is bought). The left panel runs rule "只买第一笔" (G and H as tested), the right one
+--scale-rule (default "每次都加（现在的）"); its add weights scale the stake.
 
 Sizing compounds: each trade stakes FRACTION of the current account (1%; 2.5% is about 20 shares
-at $300), at least MIN_SHARES (Polymarket's minimum order) and at most CAP shares (what the book
-plausibly gives a sniper: the September best ask had a median of about 33 shares, and walls of
-thousands are where other takers compete hardest), capped by the shares shown at the ask, times
-FILL (0.78, the share other takers left us in September). The calendar runs day by day; days
-without data are flat (no trades).
+at $300) times the rule's weight, at least MIN_SHARES (Polymarket's minimum order) and at most CAP
+shares (what the book plausibly gives a sniper: the September best ask had a median of about 33
+shares, and walls of thousands are where other takers compete hardest), capped by the shares
+shown at the ask, times FILL (0.78, the share other takers left us in September). The calendar
+runs day by day; days without data are flat (no trades).
 
-September (or any other) trades are added with --extra FILE (csv or parquet), e.g. the .csv.gz of
-`run_local.py ... --scale-in`: t (unix seconds or ms of the trigger), price, size (shares shown),
-won (1/0) and strategy. The first-trade panel takes the strategies starting with G / H (not
-"加仓"), the scale-in panel "G 加仓" / "H 加仓" (or the first-trade rows, with a warning, when a file
-has none); fee and pnl are recomputed.
+September (or any other) candidates are appended with --extra FILE (run_local.py --prints or
+--episodes); use the same kind of rows as --jitter, or the two parts are not comparable.
 
-    python equity_compound.py [--extra local-report.csv.gz] [--start 300] [--fraction 0.01] [--cap 200]
+    python equity_compound.py [--jitter prints.csv.gz] [--extra sept-prints.csv.gz] [--cap 200]
 """
 import argparse
 
@@ -33,52 +27,31 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-plt.rcParams["font.family"] = ["WenQuanYi Zen Hei", "DejaVu Sans"]
+import scalein as si
+
+plt.rcParams["font.family"] = ["WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans"]
 SURF, INK, INK2, GRID, GAP = "#fcfcfb", "#0b0b0b", "#52514e", "#e6e5e0", "#efeee9"
 COLOR = {"G": "#2a78d6", "H": "#eb6834"}
 
 
-def jitter_trades(path, rule, scale_in, theta=0.12):
-    d = pd.read_csv(path)
-    d = d[d["ok"]].dropna(subset=["p0", "ua_l", "da_l", "up_won"]).copy()
-    up = d["up"].to_numpy() == 1
-    fair_up = d["fair_up"] if rule == "G" else d["fair_a2_up"]
-    fair = np.where(up, fair_up, 1 - fair_up)
-    px = np.where(up, d["ua_l"], d["da_l"])
-    fee = 0.07 * px * (1 - px)
-    keep = np.isfinite(fair) & (px >= 0.02) & (px <= 0.98) & (fair - px - fee >= theta)
-    if rule == "G":
-        pre = np.where(up, 1, -1) * (d["m_0"] - d["m_m2"])
-        keep &= np.isfinite(pre) & (pre < 0.03)
-    t = pd.DataFrame({"t": d["t0"] / 1000, "market_id": d["market_id"], "price": px,
-                      "size": np.where(up, d["uas_l"], d["das_l"]), "won": np.where(up, d["up_won"], 1 - d["up_won"])})[keep]
-    t = t.sort_values("t")
-    if not scale_in:
-        t = t.drop_duplicates("market_id")
-    return t
-
-
-def extra_trades(path, rule, scale_in):
-    e = pd.read_parquet(path) if str(path).endswith(".parquet") else pd.read_csv(path)
-    name = e["strategy"].astype(str).str.strip()
-    first = name.str.startswith(rule) & ~name.str.contains("加仓")
-    sel = name.str.startswith(rule) & name.str.contains("加仓") if scale_in else first
-    if scale_in and not sel.any():
-        print(f"{path}: no '{rule} 加仓' rows (run_local.py --scale-in); the scale-in panel uses its first trades")
-        sel = first
-    e = e[sel].copy()
-    t = e["t"].astype(float)
-    e["t"] = np.where(t > 1e11, t / 1000, t)
-    return e[["t", "price", "size", "won"]]
+def rule_trades(paths, rule, name):
+    """The trades rule `name` of scalein.py takes on the candidate rows of `paths`, with weight w."""
+    r = {x.name: x for x in si.RULES}[name]
+    t = pd.concat([si.episodes(p, rule, period="-") for p in paths], ignore_index=True)
+    t = t.sort_values("t", kind="stable").reset_index(drop=True)
+    w = si.weights(t, r)
+    return t[w > 0].assign(w=w[w > 0])[["t", "market_id", "price", "size", "won", "w"]]
 
 
 def simulate(t, start, fraction, fill, cap=np.inf, min_shares=5.0):
     t = t.sort_values("t")
+    if "w" not in t:
+        t = t.assign(w=1.0)
     eq, path = start, []
     for r in t.itertuples():
         fee = 0.07 * r.price * (1 - r.price)
         cost = r.price + fee
-        want = min(max(fraction * eq / cost, min_shares), cap, eq / cost)
+        want = min(max(fraction * r.w * eq / cost, min_shares), cap, eq / cost)
         sh = min(want, r.size if np.isfinite(r.size) else 0.0) * fill
         eq += sh * (r.won - cost)
         path.append((r.t, eq))
@@ -87,8 +60,9 @@ def simulate(t, start, fraction, fill, cap=np.inf, min_shares=5.0):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--jitter", default="real/cross-jitter.csv.gz")
-    ap.add_argument("--extra", help="more trades (e.g. September), csv or parquet")
+    ap.add_argument("--jitter", default="real/cross-jitter.csv.gz", help="candidate rows (cross.py jitter columns)")
+    ap.add_argument("--extra", help="more candidate rows (e.g. September: run_local.py --prints / --episodes)")
+    ap.add_argument("--scale-rule", default=si.BASE, help="scalein.py rule of the right panel")
     ap.add_argument("--start", type=float, default=300.0)
     ap.add_argument("--fraction", type=float, default=0.01)
     ap.add_argument("--cap", type=float, default=200.0, help="most shares per trade")
@@ -101,9 +75,7 @@ def main(argv=None):
         ax.set_facecolor(SURF)
         traded, cal = set(), None
         for rule in ("G", "H"):
-            t = jitter_trades(a.jitter, rule, scale_in)
-            if a.extra:
-                t = pd.concat([t, extra_trades(a.extra, rule, scale_in)], ignore_index=True)
+            t = rule_trades([a.jitter] + ([a.extra] if a.extra else []), rule, a.scale_rule if scale_in else "只买第一笔")
             p = simulate(t, a.start, a.fraction, a.fill, a.cap, a.min_shares)
             p["day"] = pd.to_datetime(p["t"], unit="s", utc=True).dt.normalize()
             daily = p.groupby("day")["eq"].last()
@@ -129,7 +101,7 @@ def main(argv=None):
             ax.axvspan(g.index[0] - pd.Timedelta(hours=12), g.index[-1] + pd.Timedelta(hours=12), color=GAP, lw=0, zorder=0)
         ax.axhline(a.start, color=INK2, lw=1)
         ax.set_yscale("log")
-        ax.set_title("每个市场只买第一笔" if not scale_in else "同一市场每次急动都买（加仓）", fontsize=11, color=INK, loc="left")
+        ax.set_title("每个市场只买第一笔" if not scale_in else f"加仓：{a.scale_rule}", fontsize=11, color=INK, loc="left")
         ax.grid(axis="y", color=GRID, lw=1, which="both")
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)

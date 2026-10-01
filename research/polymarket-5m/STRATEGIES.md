@@ -51,12 +51,16 @@ python equity_compound.py --extra sept.csv.gz
 
 默认每笔投账户的 1%，最少 5 份、最多 200 份，不超过卖一挂单量，按 78% 成交。可以用 `--fraction 0.025`、`--cap 40` 换别的假设。
 
-**加仓规则在 9 月上对比**（63 条规则，先提交、后运行；A 段 5/25–7/15 选，B+C 段核对，输出里 X 段就是 9 月；见 `real/scalein.md`）：
+**加仓规则和复利曲线，按实盘的逐笔定义**（每一笔币安成交都看，买到后 2 秒内不再买；急动段每 2 秒只看第一笔，九月会少算约 4/5 的成交）：
 
 ```bash
-# --episodes 另外写出每一段急动（两段至少隔 2 秒）和规则要用的字段：sept-episodes.csv.gz
-python run_local.py <9 月 shadow 数据路径 ...> --since 2026-08-30 --episodes --out sept.md
-python scalein.py --extra sept-episodes.csv.gz > scalein-sept.md
+# 5–8 月：从 Hugging Face 重新下载 67 个日档，写出每一笔候选成交（不要覆盖 real/cross-jitter.csv.gz）
+python cross.py jitter --gap-ms 0 --out real/cross-prints.md            # → real/cross-prints.csv.gz
+# 九月
+python run_local.py <9 月 shadow 数据路径 ...> --since 2026-08-30 --prints --out sept.md   # → sept-prints.csv.gz
+# 63 条加仓规则（A 段选，B+C 核对，X 是九月）和 $300 复利曲线，两边都用逐笔
+python scalein.py --jitter real/cross-prints.csv.gz --extra sept-prints.csv.gz > scalein-prints.md
+python equity_compound.py --jitter real/cross-prints.csv.gz --extra sept-prints.csv.gz --out equity-prints.png
 ```
 
 ## 四个策略

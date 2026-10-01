@@ -26,7 +26,14 @@ Result on A / B + C (real/scalein.md): the rule chosen on A did not beat the cur
 (G: Sharpe 0.83 vs 0.81 but $3.20 a day less; H: 0.75 vs 0.77 and $16 less), and the rank
 correlation was +0.27 (G) / +0.31 (H). Written down after seeing A, B and C and before any of
 September was run, the two rules to check on X: "同向全仓，反向 2 倍" and "加仓门槛 8¢" make more a day
-than "每次都加" with a daily Sharpe no more than 0.01 lower, for both G and H, on A and on B + C. 
+than "每次都加" with a daily Sharpe no more than 0.01 lower, for both G and H, on A and on B + C.
+
+September (the user's local run, episodes): the rules chosen on A lost to "每次都加" in all four
+settings (G -$6 to -$11 a day, H -$4.6 to -$7.2), and the two candidates were not significant.
+
+Rows can also be every candidate print (cross.py jitter --gap-ms 0, run_local.py --prints): then
+nothing is bought for REFILL s after a fill, and "只买第一笔" / "每次都加" are exactly run_local.py's
+G, H / G 加仓, H 加仓 (the live definition); episodes see only the first print of every 2 s. 
 
 ## G
 

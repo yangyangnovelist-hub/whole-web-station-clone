@@ -1713,10 +1713,11 @@ def jitter_trades(df, side_rule, theta, fair_col="fair_up"):
     return d
 
 
-def jitter(workdir, out, days=None, reps=5000):
+def jitter(workdir, out, days=None, reps=5000, gap_ms=2000):
     """jitter_rows on every day; the rows go to <out>.csv.gz for slicing, the report shows the
     split of the gated rule (and its fade) by how flat the book and Binance were before the jump,
-    with the cuts at the terciles of May 25 - Jul 15."""
+    with the cuts at the terciles of May 25 - Jul 15. gap_ms=0 keeps every candidate print (as a
+    live bot sees them; scalein.py then waits 2 s after each fill)."""
     import numpy as np
     import pandas as pd
     workdir = Path(workdir)
@@ -1732,7 +1733,7 @@ def jitter(workdir, out, days=None, reps=5000):
             binance = read_binance(local)
             prints = read_poly_trades(local)
             Path(local).unlink()
-            t = jitter_rows(feat, market_table(mk, rs), binance, trades=prints)
+            t = jitter_rows(feat, market_table(mk, rs), binance, trades=prints, gap_ms=gap_ms)
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(t):,} jump episodes over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
@@ -2286,6 +2287,8 @@ def main(argv=None):
         p.add_argument("--dataset", default=DS, help="another dataset of the same layout")
         if name == "gated":
             p.add_argument("--horizon", type=int, default=5, choices=(5, 15), help="market length in minutes")
+        if name == "jitter":
+            p.add_argument("--gap-ms", type=int, default=2000, help="0: a row for every candidate print")
         if name in ("gated", "hourly"):
             p.add_argument("--health", action="store_true", help="only sane, recently changed book snapshots")
         if name == "gated":
@@ -2325,7 +2328,7 @@ def main(argv=None):
         import zoo100
         zoo100.run(a.workdir, a.out, a.days, dataset=DS)  # run as a script, this module is not `cross`
     elif a.cmd == "jitter":
-        jitter(a.workdir, a.out, a.days)
+        jitter(a.workdir, a.out, a.days, gap_ms=a.gap_ms)
     elif a.cmd in ("fade", "follow"):
         fadefollow(a.cmd, a.workdir, a.out, a.days)
     else:
