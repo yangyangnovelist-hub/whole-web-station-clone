@@ -476,3 +476,57 @@ def test_leadlag_trades_buy_the_altcoin_market_btc_has_not_moved_yet():
     assert set(first["variant"]) == {"plain", "anchored"} and (first["price"] == 0.50).all()
     assert (first["alt_done"].abs() < 0.2).all() and first["beta"].between(0.5, 1.5).all()
     assert first["pnl"].iloc[0] == pytest.approx(1 - 0.50 - 0.07 * 0.25)
+
+
+def test_ladder_keeps_the_cheapest_asks_in_order():
+    ps, ss = cross._ladder([[0.6, 0.5, 0.9, 0.55], None, [0.4]], [[40.0, 25.0, 5.0, 0.0], None, [7.0]], 3)
+    assert [ps[i][0] for i in range(3)] == [0.5, 0.6, 0.9] and [ss[i][0] for i in range(3)] == [25.0, 40.0, 5.0]
+    assert ps[0][1] is None and ps[0][2] == 0.4 and ps[1][2] is None  # the empty size 0 level is dropped
+
+
+def test_gated_trades_take_deeper_asks_while_they_still_pay():
+    """The jump of test_gated_trades_price_the_jump (fair about 1); 300 ms later the Up asks are
+    0.50 x 25, 0.60 x 40 and 0.95 x 100: the first two pay 12c or more, the third only about 4.7c."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    late = ts >= t_jump + 150 + 400
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.49, "up_best_ask": np.where(late, 0.70, 0.50),
+                         "down_best_bid": 0.49, "down_best_ask": 0.51, "up_ask_size": 25.0, "down_ask_size": 30.0,
+                         "up_ask_p1": np.where(late, 0.70, 0.50), "up_ask_s1": 25.0, "up_ask_p2": np.where(late, 0.75, 0.60),
+                         "up_ask_s2": 40.0, "up_ask_p3": np.where(late, 0.97, 0.95), "up_ask_s3": 100.0,
+                         "down_ask_p1": 0.51, "down_ask_s1": 30.0, "down_ask_p2": np.nan, "down_ask_s2": np.nan,
+                         "down_ask_p3": np.nan, "down_ask_s3": np.nan})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    price[tt >= t_jump] *= 1.004
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    g = cross.gated_trades(feat, mkts, binance, z0=6.0, lags=(300,), thetas=(0.12,), depth=3).iloc[0]
+    fee = lambda p: 0.07 * p * (1 - p)
+    assert g["price"] == 0.50 and g["sh_d12"] == 65 and g["sh_d8"] == 65 and g["sh_d4"] == 165
+    assert g["pnl_d12"] == pytest.approx(25 * (0.50 - fee(0.50)) + 40 * (0.40 - fee(0.60)))
+    assert g["cost_d4"] == pytest.approx(25 * (0.50 + fee(0.50)) + 40 * (0.60 + fee(0.60)) + 100 * (0.95 + fee(0.95)))
+    plain = cross.gated_trades(feat, mkts, binance, z0=6.0, lags=(300,), thetas=(0.12,))
+    assert "sh_d12" not in plain
+
+
+def test_read_day_keeps_the_ask_ladders(tmp_path):
+    ts = np.arange(E - 300_000, E - 299_000, 100)
+    f = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                      "up_best_bid": 0.40, "up_best_ask": 0.42, "down_best_bid": 0.57, "down_best_ask": 0.59,
+                      "up_side_asks": [[0.45, 0.42, 0.50]] * len(ts), "up_ask_sizes": [[7.0, 20.0, 3.0]] * len(ts),
+                      "down_side_asks": [[0.59]] * len(ts), "down_ask_sizes": [[11.0]] * len(ts)})
+    path = tmp_path / "market_parquet_2026-08-19.tar.gz"
+    with tarfile.open(path, "w:gz") as tar:
+        raw = parquet_bytes(f)
+        info = tarfile.TarInfo("dataset=polymarket_features_100ms/date=2026-08-19/part-1.parquet")
+        info.size = len(raw)
+        tar.addfile(info, io.BytesIO(raw))
+    feat, _, _ = cross.read_day(path, depth=2)
+    r = feat.iloc[0]
+    assert (r["up_ask_p1"], r["up_ask_s1"], r["up_ask_p2"], r["up_ask_s2"]) == (0.42, 20.0, 0.45, 7.0)
+    assert r["down_ask_p1"] == 0.59 and np.isnan(r["down_ask_p2"])
+    assert "up_ask_p1" not in cross.read_day(path)[0]

@@ -136,8 +136,22 @@ MKT_COLS = ["market_id", "slug", "session_start_ts", "session_end_ts", "chainlin
             "outcome_direction", "lifecycle_state", "up_token_id", "down_token_id"]
 
 
-def read_day(path):
-    """(features, markets, resolution rows) of one daily archive, streamed member by member."""
+def _ladder(prices, sizes, depth):
+    """The `depth` cheapest asks of each row as (prices, sizes) column lists, cheapest first."""
+    ps = [[None] * len(prices) for _ in range(depth)]
+    ss = [[None] * len(prices) for _ in range(depth)]
+    for r, (pr, sz) in enumerate(zip(prices, sizes)):
+        if not pr or not sz:
+            continue
+        lv = sorted((p, q) for p, q in zip(pr, sz) if p is not None and q is not None and q > 0)[:depth]
+        for i, (p, q) in enumerate(lv):
+            ps[i][r], ss[i][r] = p, q
+    return ps, ss
+
+
+def read_day(path, depth=0):
+    """(features, markets, resolution rows) of one daily archive, streamed member by member. With
+    `depth`, also the `depth` cheapest asks of both tokens (up_ask_p1.., up_ask_s1.., down_...)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
     feats, mkts, res = [], [], []
@@ -151,8 +165,18 @@ def read_day(path):
             t = pq.read_table(io.BytesIO(tar.extractfile(m).read()))
             if table == "polymarket_features_100ms":
                 have = [c for c in FEAT_COLS if c in t.column_names]
+                ladders = {}
+                if depth:
+                    for side in ("up", "down"):
+                        pc, sc = f"{side}_side_asks", f"{side}_ask_sizes"
+                        if pc in t.column_names and sc in t.column_names:
+                            ladders[side] = _ladder(t[pc].to_pylist(), t[sc].to_pylist(), depth)
                 t = t.select(have)
                 cols = {c: t[c] for c in have if not c.endswith("_sizes")}
+                for side, (ps, ss) in ladders.items():
+                    for i in range(depth):
+                        cols[f"{side}_ask_p{i + 1}"] = pa.array(ps[i], pa.float64())
+                        cols[f"{side}_ask_s{i + 1}"] = pa.array(ss[i], pa.float64())
                 for c in ("up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes"):  # size at the best price
                     if c in have:
                         cols[c.replace("_sizes", "_size")] = pa.array([(v[0] if v else None) for v in t[c].to_pylist()],
@@ -479,8 +503,11 @@ GATE_THETAS = (0.0, 0.02, 0.04, 0.06, 0.08, 0.12)
 GATE_LAGS = (300, 500)
 
 
+DEPTH_THETAS = (0.12, 0.08, 0.04)  # the edge each deeper ask must still have to be taken
+
+
 def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15, horizon=5, tau_hi=None,
-                 health=False, trades=None, anchor_ms=None):
+                 health=False, trades=None, anchor_ms=None, depth=0):
     """Stale-ask sniping gated by the fair-value jump a Binance move implies (`horizon`-minute
     markets, all settled on the 60 s TWAP).
 
@@ -498,7 +525,10 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
     the fill price in the lag before our order (taken_before) and in the 300 ms after it (taken_next).
     With `anchor_ms`, the prior is the Up mid anchor_ms before the print instead (the snapshot within
     a second of it) and the move is the Binance price at the print against the last trade received
-    by then, so a quote that already followed Binance is not counted twice."""
+    by then, so a quote that already followed Binance is not counted twice. With `depth` (and the
+    ladders of read_day(depth=...)), each row also has, for every theta_d in DEPTH_THETAS, the shares,
+    cost and profit of taking every one of those asks with fair - price - fee >= theta_d at the fill
+    (sh_d12, cost_d12, pnl_d12, ...; the cheapest is the trade itself, theta_d below theta deepens it)."""
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -539,6 +569,9 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
         fts = f["timestamp_ms"].to_numpy()
         ub, ua = f["up_best_bid"].to_numpy(), f["up_best_ask"].to_numpy()
         da, uas, das = f["down_best_ask"].to_numpy(), f["up_ask_size"].to_numpy(), f["down_ask_size"].to_numpy()
+        lad = {side: (np.column_stack([f[f"{side}_ask_p{i + 1}"].to_numpy(float) for i in range(depth)]),
+                      np.column_stack([f[f"{side}_ask_s{i + 1}"].to_numpy(float) for i in range(depth)]))
+               for side in ("up", "down")} if depth and "up_ask_p1" in f else {}
         if health:
             sane, changes = book_health(f)
         a, b = np.searchsorted(rt, [mk["end"] - tau_hi * 1000, mk["end"] - tau_lo * 1000])
@@ -594,14 +627,26 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
                     km2 = np.searchsorted(fts, t0 - 2000, "right") - 1  # the quote two seconds before the print
                     mid_m2 = (ub[km2] + ua[km2]) / 2 if km2 >= 0 and t0 - 2000 - fts[km2] <= 1000 else np.nan
                     pre = (p0 - mid_m2) if up else (mid_m2 - p0)  # how far the mid had already moved our way
+                    deep = []
+                    if lad:
+                        lp_, ls_ = lad["up" if up else "down"]
+                        lpk, lsk = lp_[k], ls_[k]
+                        e = fair - lpk - 0.07 * lpk * (1 - lpk)
+                        for thd in DEPTH_THETAS:
+                            take = np.isfinite(lpk) & np.isfinite(lsk) & (e >= thd)
+                            deep += [float(lsk[take].sum()), float((lsk * (lpk + 0.07 * lpk * (1 - lpk)))[take].sum()),
+                                     float((lsk * (won - lpk - 0.07 * lpk * (1 - lpk)))[take].sum())]
                     rows.append((mid, lag, th, t0, (mk["end"] - t0) / 1000, p0, fair, px, size, fee, won, won - px - fee,
                                  ua[k0] if up else da[k0], uas[k0] if up else das[k0],
-                                 taken(tok, t0, t0 + lag, px), taken(tok, t0 + lag, t0 + lag + 300, px), pre))
-    return pd.DataFrame(rows, columns=["market_id", "lag", "theta", "t0", "tau", "p0", "fair", "price", "size", "fee",
-                                       "won", "pnl", "ask0", "size0", "taken_before", "taken_next", "pre_move"])
+                                 taken(tok, t0, t0 + lag, px), taken(tok, t0 + lag, t0 + lag + 300, px), pre, *deep))
+    cols = ["market_id", "lag", "theta", "t0", "tau", "p0", "fair", "price", "size", "fee",
+            "won", "pnl", "ask0", "size0", "taken_before", "taken_next", "pre_move"]
+    if depth and rows and len(rows[0]) > len(cols):
+        cols += [f"{k}_d{round(100 * thd)}" for thd in DEPTH_THETAS for k in ("sh", "cost", "pnl")]
+    return pd.DataFrame(rows, columns=cols)
 
 
-def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=False, anchor=None):
+def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=False, anchor=None, depth=0):
     """gated_trades on every day (`horizon`-minute markets); thresholds are compared on May 25 - Jul 15 and checked on the
     later days (Jul 16 - Aug 16, taker delay 250 ms; Aug 17 onwards, 50 ms)."""
     import numpy as np
@@ -616,12 +661,12 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=F
     for name, _ in arcs:
         try:
             local = fetch(name, workdir / name)
-            feat, mk, rs = read_day(local)
+            feat, mk, rs = read_day(local, depth=depth)
             binance = read_binance(local)
             prints = read_poly_trades(local) if compete else None
             Path(local).unlink()
             t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon, health=health, trades=prints,
-                             anchor_ms=anchor)
+                             anchor_ms=anchor, depth=depth)
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(t):,} gated trades over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
@@ -668,6 +713,24 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=F
             for (per, pm), g in c.groupby(["period", "pm"]):
                 L.append(f"| {per} | {pm} | {len(g):,} | {len(g) / (c['period'] == per).sum():.0%} | {g['won'].mean():.1%} | "
                          f"{g['price'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ |")
+        if "sh_d12" in df:
+            c = df[(df["lag"] == 300) & (df["theta"] == 0.12)].copy()
+            L += ["", f"## 吃深几档（L = 300 ms、θ = 12¢，读前 {depth} 档卖单）", "",
+                  "触发条件不变（第一档 公平价 − 卖一 − 费 ≥ 12¢）。成交时把 公平价 − 价格 − 费 ≥ θd 的每一档都吃下：θd = 12¢ 是同样的门槛，"
+                  "8¢、4¢ 是放宽给更深的档。份数是中位；每份是全部份数的平均盈亏；每天的钱按全部份数（不设上限）和每笔最多 200 份两种算。"
+                  "这里不扣别人同时去抢的部分（九月实测约少拿 22%）。", "",
+                  "| 规则 | 时段 | 笔数 | 只吃第一档：份数 / 每份 / 每天 | θd 12¢：份数 / 每份 / 每天 | θd 8¢ | θd 4¢ | θd 4¢、每笔 ≤ 200 份每天 |",
+                  "|---|---|---:|---|---|---|---|---:|"]
+            c["G"] = c["pre_move"] < 0.03
+            for rule, g0 in (("F（全部）", c), ("G（还没动）", c[c["G"]])):
+                for per, g in g0.groupby("period"):
+                    nd = max(g["day"].nunique(), 1)
+                    cells = [f"{g['size'].median():.0f} / {100 * g['pnl'].mean():+.1f}¢ / ${(g['pnl'] * g['size']).sum() / nd:,.0f}"]
+                    for d_ in (12, 8, 4):
+                        sh, pn = g[f"sh_d{d_}"], g[f"pnl_d{d_}"]
+                        cells.append(f"{sh.median():.0f} / {100 * pn.sum() / max(sh.sum(), 1):+.1f}¢ / ${pn.sum() / nd:,.0f}")
+                    capped = (g["pnl_d4"] * np.minimum(1.0, 200 / g["sh_d4"].clip(lower=1))).sum() / nd
+                    L.append(f"| {rule} | {per} | {len(g):,} | " + " | ".join(cells) + f" | ${capped:,.0f} |")
         if compete and "taken_before" in df:
             L += ["", "## 抢单：同一价位别人买走了多少（L = 300 ms、θ = 12¢）", "",
                   "卖一0 / 数量0：触发那一刻看到的卖一和挂单量；前：触发到我们的单到达之间，别的吃单在不高于成交价的价位买走的份数；"
@@ -2228,6 +2291,7 @@ def main(argv=None):
         if name == "gated":
             p.add_argument("--compete", action="store_true", help="also measure other takers at the same ask")
             p.add_argument("--anchor", type=int, help="prior and move from this many ms before the print")
+            p.add_argument("--depth", type=int, default=0, help="also take deeper asks (read this many levels)")
     a = ap.parse_args(argv)
     if getattr(a, "dataset", DS) != DS:
         set_dataset(a.dataset)
@@ -2248,7 +2312,8 @@ def main(argv=None):
     elif a.cmd == "makers":
         makers(a.workdir, a.out, a.days)
     elif a.cmd == "gated":
-        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health, compete=a.compete, anchor=a.anchor)
+        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health, compete=a.compete, anchor=a.anchor,
+              depth=a.depth)
     elif a.cmd == "openmis":
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":

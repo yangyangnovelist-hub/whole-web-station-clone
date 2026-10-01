@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-10-01 06:40 does BTC lead the ETH 5m markets: BTC Binance jump, ETH expected to follow by beta, ETH book still stale?
-cmd: leadlag --out real/cross-leadlag-eth.md
+requested: 2026-10-01 09:20 (user asked) how much more the gated rule takes when it also buys the deeper asks that still pay (5 levels), F and G
+cmd: gated --health --depth 5 --out real/cross-gated-depth.md

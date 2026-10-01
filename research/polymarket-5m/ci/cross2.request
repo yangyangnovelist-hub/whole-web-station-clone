@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
 # beside ci/cross.request): "cmd:" is the cross.py command, as there.
-requested: 2026-10-01 05:35 the same 100 rules on ETH 5m (selected on May 25 - Jul 15 there, checked on the later periods)
-cmd: zoo --dataset whodisidk/polymarket-eth-updown-exchange-data --out real/cross-zoo100-eth.md
+requested: 2026-10-01 09:20 (user asked) the same depth study with the anchored prior (H)
+cmd: gated --health --depth 5 --anchor 2000 --out real/cross-gated-depth-anchor.md
