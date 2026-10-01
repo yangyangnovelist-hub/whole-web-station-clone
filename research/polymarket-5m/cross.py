@@ -1757,7 +1757,8 @@ def jitter(workdir, out, days=None, reps=5000, gap_ms=2000, shard=None):
             t = jitter_rows(feat, market_table(mk, rs), binance, trades=None if gap_ms == 0 else prints, gap_ms=gap_ms)
             t["day"] = name[15:25]
             if gap_ms == 0 and len(t):
-                t = t.loc[tradable(t), PRINT_COLS]
+                t = t.loc[tradable(t), PRINT_COLS].round({"tau": 3, "z": 3, "p0": 4, "fair_up": 5, "fair_a2_up": 5,
+                                                          "m_m2": 4, "m_0": 4, "ua_l": 4, "da_l": 4, "uas_l": 2, "das_l": 2})
             parts.append(t)
             print(f"{name}: {len(t):,} jump episodes over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
         except Exception:

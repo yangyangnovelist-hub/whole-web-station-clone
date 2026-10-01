@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-10-01 09:20 (user asked) how much more the gated rule takes when it also buys the deeper asks that still pay (5 levels), F and G
-cmd: gated --health --depth 5 --out real/cross-gated-depth.md
+requested: 2026-10-01 19:15 (user asked) every candidate print on May 25 - Aug 29, so the scale-in rules and the compounding curve use the live definition (half 0 of the daily archives)
+cmd: jitter --gap-ms 0 --shard 0/2 --out real/cross-prints-0.md

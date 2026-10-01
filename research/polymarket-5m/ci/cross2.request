@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
 # beside ci/cross.request): "cmd:" is the cross.py command, as there.
-requested: 2026-10-01 09:20 (user asked) the same depth study with the anchored prior (H)
-cmd: gated --health --depth 5 --anchor 2000 --out real/cross-gated-depth-anchor.md
+requested: 2026-10-01 19:15 (user asked) every candidate print on May 25 - Aug 29, so the scale-in rules and the compounding curve use the live definition (half 1 of the daily archives)
+cmd: jitter --gap-ms 0 --shard 1/2 --out real/cross-prints-1.md
