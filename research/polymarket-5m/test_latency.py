@@ -292,3 +292,40 @@ def test_test_f_triggers_on_binance_trades(export, tmp_path, monkeypatch):
     out = tmp_path / "real" / "f.md"
     lt.run_test_f([tmp_path / "rec"], out, reps=200)
     assert "检验 F（前 5 笔）" in out.read_text()
+
+
+def test_test_g_skips_markets_polymarket_already_moved(export, tmp_path, monkeypatch):
+    """Two seconds before the jump the Up ask was 0.40 (mid moved +10c toward Up: skipped), 0.60
+    (moved the other way: kept), 0.50 (no move: kept) or 0.47 (exactly 3c: skipped)."""
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    (d / "coinbase_trades.jsonl.gz").unlink()
+    f = d / "runtime_1000.poly_probability_observations_v1.csv.gz"
+    books = pd.read_csv(f)
+    before = {0: 0.40, 1: 0.60, 3: 0.47}
+    for i, s0 in enumerate(starts):
+        a = before.get(i % 4)
+        if a is None:
+            continue
+        k = (books["market_id"] == f"m{i}") & (books["source_ts"] >= s0 + 97) & (books["source_ts"] < s0 + 99)
+        books.loc[k, ["best_bid", "best_ask", "bids_json", "asks_json"]] = (
+            round(a - 0.01, 2), a, f"[[{a - 0.01:.2f}, 40.0]]", f"[[{a:.2f}, 25.0]]")
+    books.to_csv(f, index=False, compression="gzip")
+    dirs = lt._latency_dirs([tmp_path / "rec"], lt.G_COINS)
+    tf = lt._per_recording(dirs, "2026-09-01", lt.G_SPOT, lambda mk, sp, sg, bk: lt.gated_trades(mk, sp, sg, bk),
+                           ["coin", "market_id"], [])
+    tg = lt._per_recording(dirs, "2026-09-01", lt.G_SPOT,
+                           lambda mk, sp, sg, bk: lt.gated_trades(mk, sp, sg, bk, max_pre=lt.G_MAX_PRE),
+                           ["coin", "market_id"], [])
+    assert len(tf) == N
+    kept = {f"m{i}" for i in range(N) if i % 4 in (1, 2)}
+    assert set(tg["market_id"]) == kept and (tg["price"] == 0.50).all()
+    monkeypatch.setattr(lt, "G_SINCE", "2026-09-01")
+    monkeypatch.setattr(lt, "G_N", 5)
+    out = tmp_path / "real" / "g.md"
+    lt.run_test_g([tmp_path / "rec"], out, reps=200)
+    text = out.read_text()
+    assert "检验 G（前 5 笔）" in text and f"成交 {len(kept):,} 笔" in text

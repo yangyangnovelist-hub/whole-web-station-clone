@@ -120,6 +120,7 @@ jobs:
           python latency.py "$rec" --pooled --out real/latency-test-c.md
           python latency.py "$rec" --test-d --out real/latency-test-d.md
           python latency.py "$rec" --test-f --out real/latency-test-f.md
+          python latency.py "$rec" --test-g --out real/latency-test-g.md
 
       - name: "Cross: 5m / 15m / 1h markets ending together (cross.py)"
         if: steps.mode.outputs.mode == 'cross'

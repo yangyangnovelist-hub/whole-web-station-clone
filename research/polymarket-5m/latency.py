@@ -127,6 +127,18 @@ test D's rule with that trigger: BTC 5m markets from F_SINCE, z0 = 2, 0.3 s afte
 exchange time, theta = 12c, first 1,200 trades, p < 0.025, same hygiene. Test D keeps running and
 will be judged as fixed; with tests C, D and F each at 0.025, the chance of at least one false pass
 is at most 7.5%.
+
+Test G, fixed 2026-10-01 02:00 UTC, before any of its data was recorded (see G_*): the per-trade
+look at test D raised a second question, whether Polymarket had already moved before the trigger in
+the backtest too. cross.py gated now records that move (pre_move, the Up mid's change toward the side
+bought over the two seconds before the Binance print; the 3c cut was written into the report before
+it ran). With the health filter at theta = 12c, 300 ms (real/cross-gated-premove.md): on May 25 -
+Jul 15 the trades where the mid had not yet moved 3c our way made +5.5c a share (and +7.9c where it
+had moved the other way) against +0.4c where it had; on the later periods +7.8c/+7.3c vs +6.1c and
++13.1c/+12.5c vs +3.1c. Test G is test F plus that skip, on markets from G_SINCE, judged once on its
+first 600 trades (about 37 a day in Aug 17-29, so within the forward chain), p < 0.025. Its trades
+are a subset of test F's; with tests C, D, F and G each at 0.025, the chance of at least one false
+pass is at most 10%.
 """
 from __future__ import annotations
 
@@ -171,6 +183,13 @@ F_SPOT, F_Z0, F_LAG, F_THETA, F_N = "binancews", 2.0, 0.3, 0.12, 1200
 F_SINCE, F_TAU_LO = "2026-09-30 23:00", 15
 F_COINS = ("btc",)
 F_ALPHA = 0.025
+# Test G (fixed 2026-10-01 02:00 UTC, before any of its data was recorded): test F plus a skip
+# when the Up mid had already moved G_MAX_PRE toward the side bought in the two seconds before the
+# print; chosen on May 25 - Jul 15 (cross.py gated pre_move), first G_N trades judged once.
+G_SPOT, G_Z0, G_LAG, G_THETA, G_MAX_PRE, G_N = "binancews", 2.0, 0.3, 0.12, 0.03, 600
+G_SINCE, G_TAU_LO = "2026-10-01 02:30", 15
+G_COINS = ("btc",)
+G_ALPHA = 0.025
 
 
 def _read(d, pattern):
@@ -536,14 +555,16 @@ def run(d, out, reps=20000, since=None, until=None, label="", spot="binance"):
     print("\n".join(L))
 
 
-def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0=D_Z0, tau_lo=D_TAU_LO):
+def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0=D_Z0, tau_lo=D_TAU_LO, max_pre=None):
     """Test D's trades: every spot print with 240..tau_lo s left whose log price moved more than z0
     sigma from the last print at most C_REF_AGE s and at least 1 s earlier is a candidate. The Up
     mid shown by the exchange at that print is the prior P0; the move shifts the expected settlement
     TWAP by the whole move, so the fair Up price is Phi(Phi^-1(P0) + dx / (sigma *
     twap_std_factor(t))). The side of the move is bought at the ask `lag` s later if
     fair - ask - fee >= theta (a fill-and-kill limit order sent at the print) and the book feed was
-    running then; the first fill per market is kept and held to settlement."""
+    running then; the first fill per market is kept and held to settlement. With `max_pre` (test G),
+    a candidate is skipped when the Up mid had already moved max_pre or more toward the side of the
+    move in the two seconds before the print (or no quote was shown then)."""
     from scipy.stats import norm
     ts = spot_trades["trade_ts"].to_numpy()
     lp = np.log(spot_trades["price"].to_numpy())
@@ -569,6 +590,13 @@ def gated_trades(markets, spot_trades, sigma, book, lag=D_LAG, theta=D_THETA, z0
             if not (np.isfinite(fac) and fac > 0):
                 continue
             up = dx[i] > 0
+            if max_pre is not None:
+                q = book.at(m.market_id, t0 - 2.0)
+                if q is None or not (np.isfinite(q[0]) and np.isfinite(q[1])):
+                    continue
+                pre = (r[0] + r[1]) / 2 - (q[0] + q[1]) / 2
+                if (pre if up else -pre) >= max_pre - 1e-9:
+                    continue
             p1 = float(norm.cdf(norm.ppf(p0) + dx[i] / fac))
             fair = p1 if up else 1 - p1
             side = "Up" if up else "Down"
@@ -762,6 +790,34 @@ def run_test_f(roots, out, reps=20000):
     print("\n".join(L))
 
 
+def run_test_g(roots, out, reps=20000):
+    """Test G: test F with the pre-move skip, judged once on the first G_N trades."""
+    dirs = _latency_dirs(roots, G_COINS)
+    notes = []
+    t = _per_recording(dirs, G_SINCE, G_SPOT,
+                       lambda mk, sp, sg, bk: gated_trades(mk, sp, sg, bk, lag=G_LAG, theta=G_THETA, z0=G_Z0,
+                                                           tau_lo=G_TAU_LO, max_pre=G_MAX_PRE),
+                       ["coin", "market_id"], notes)
+    L = [f"# 检验 G：检验 F 加“Polymarket 还没动”的条件（BTC 5m，币安逐笔成交触发，GitHub 前向录制）", "",
+         f"事先写死（10 月 1 日 02:00 UTC，数据还没录）：{G_SINCE} UTC 起开始的 BTC 5m 市场；规则同检验 F（币安逐笔成交 "
+         f"{G_Z0:g}σ 触发、{G_LAG:g} 秒后按卖一、公平价 − 卖一 − 手续费 ≥ {100 * G_THETA:.0f}¢、每个市场第一笔、持有到结算），"
+         f"另外：触发前 2 秒内 Up 中间价已经朝要买的方向动了 {100 * G_MAX_PRE:.0f}¢ 或更多（或 2 秒前没有报价）就跳过这个候选。"
+         f"这个条件在 5 月 25 日–7 月 15 日上定（没动的 +5.5¢、已动的 +0.4¢），之后两段核对（B +7.8/+6.1¢，C +13.1/+3.1¢）。"
+         f"按触发时间取前 {G_N:,} 笔判定一次，EV > 0 且精确 p < {G_ALPHA} 才算通过。数据处理同检验 C、D、F。", ""]
+    main_t = t.sort_values("t", kind="stable") if len(t) else t
+    L += [f"录制段 {sum(len(v) for v in dirs.values())} 个，成交 {len(main_t):,} 笔。"]
+    if notes:
+        L += ["", "录制段备注（跳过的和断线检查）：", ""] + [f"- {n}" for n in notes]
+    if len(main_t):
+        L += ["", "| 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |", "|---|---|---|---|---|---|", f"| {fmt(main_t, reps)} |"]
+    L += [""] + _judge(out, main_t, G_N, f"检验 G（前 {G_N:,} 笔）：", reps,
+                       lambda first: verdict(first, G_Z0, G_LAG, reps, G_ALPHA).replace(
+                           "过期报价（", f"币安触发、Polymarket 未动、公平价筛选的过期报价（θ={100 * G_THETA:.0f}¢，"))
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def diagnose_d(roots, out):
     """Per-trade look at test D's trades so far (reporting only; the rule and the verdict are
     untouched): the Coinbase move that triggered, the Binance move Polymarket relays (about one
@@ -839,8 +895,11 @@ def main(argv=None):
     ap.add_argument("--test-d", action="store_true", help="test D on the same roots as --pooled")
     ap.add_argument("--diagnose-d", action="store_true", help="per-trade look at test D's trades (report only)")
     ap.add_argument("--test-f", action="store_true", help="test F (Binance-triggered test D) on the same roots")
+    ap.add_argument("--test-g", action="store_true", help="test G (test F with the pre-move skip) on the same roots")
     a = ap.parse_args(argv)
-    if a.test_f:
+    if a.test_g:
+        run_test_g(a.export_dir, a.out, a.reps)
+    elif a.test_f:
         run_test_f(a.export_dir, a.out, a.reps)
     elif a.diagnose_d:
         diagnose_d(a.export_dir, a.out)

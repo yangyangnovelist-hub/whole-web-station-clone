@@ -59,6 +59,7 @@ jobs:
           python latency.py "$rec" --pooled --out real/latency-test-c.md || true
           python latency.py "$rec" --test-d --out real/latency-test-d.md || true
           python latency.py "$rec" --test-f --out real/latency-test-f.md || true
+          python latency.py "$rec" --test-g --out real/latency-test-g.md || true
           python latency.py "$rec" --diagnose-d --out real/latency-test-d-diagnose.md || true
 
       - name: Commit the reports
