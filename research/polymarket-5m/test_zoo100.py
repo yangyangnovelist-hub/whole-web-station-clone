@@ -78,3 +78,18 @@ def test_report_selects_on_a_and_checks_b_and_c():
     rules = [(1, "f", "good", None), (2, "f", "coin", None)] + [(i, "f", f"r{i}", None) for i in range(3, 101)]
     text = "\n".join(zoo100.report(pd.DataFrame(rows), rules, reps=500))
     assert "候选 1 条" in text and "都赚钱、且 B+C 合起来 p < 0.05/1 的：1 条" in text
+
+
+def test_zoo_uses_the_dataset_given_on_the_command_line(monkeypatch):
+    """Run as `python cross.py zoo --dataset X`, cross.py is __main__ and zoo100 imports another copy
+    of it, so the dataset has to be passed on explicitly."""
+    import importlib.util
+    import cross
+    seen = {}
+    monkeypatch.setattr(zoo100, "run", lambda workdir, out, days=None, dataset=None: seen.update(ds=dataset))
+    spec = importlib.util.spec_from_file_location("cross_as_script", cross.__file__)  # a second copy, as __main__ is
+    main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(main)
+    main.main(["zoo", "--dataset", "whodisidk/polymarket-eth-updown-exchange-data", "--out", "x.md"])
+    assert seen["ds"] == "whodisidk/polymarket-eth-updown-exchange-data"
+    assert cross.DS == "whodisidk/polymarket-btc-updown-exchange-data"  # the imported copy is untouched

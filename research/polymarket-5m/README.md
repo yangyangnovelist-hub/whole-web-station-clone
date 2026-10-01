@@ -585,6 +585,8 @@ python kacho.py run data/kacho --out real/kacho-btc.md
 
 **急动前后：扫单还是撤单，之前横没横**（[`real/cross-jitter.md`](real/cross-jitter.md)，`cross.py jitter`，128,651 次币安急动）：触发前 2 秒中间价已经朝急动方向动了 3¢ 以上的，A/B/C 段占 27%/23%/33%，其中 93–98% 是有人在这 2 秒里朝同一方向主动成交（扫单），没有成交、只靠做市商撤单或改价的不到 2.5%。扫单之后中间价 10 秒内平均再朝同方向走约 3¢，不回吐；反着买亏 2–11¢。实盘那笔 0.225 → 0.595 → 0.265 的来回在历史数据里是少数。之前横盘有用：按检验 D/F 的公平价、θ = 4¢，触发前 30 秒中间价幅度低或中（A 段三分位 0.255/0.42 以下）的每份 A +4.4¢、B +6.0¢、C +5.1¢，幅度高的 A +0.6¢、C +3.5¢；盘口变化次数少的也好一些。这是事后切出来的，只记下，留给下一轮选规则用。
 
+同样 100 条在 ETH 上的那次运行（10 月 1 日 05:29）其实跑的是 BTC 数据：`python cross.py` 作为脚本运行时，zoo100 导入的是另一份 cross 模块，没拿到 `--dataset`。报告已删除，代码已修（`zoo100.run(dataset=...)`），没有在云端重跑；要看 ETH，在本地跑 `python cross.py zoo --dataset whodisidk/polymarket-eth-updown-exchange-data`。
+
 **抢单**（[`real/cross-gated-compete.md`](real/cross-gated-compete.md)）：检验 D 的规则在 8 月 17–29 日，触发时卖一中位 65 份，我们的单到达前别人已经买走中位 16 份（62% 的笔数有人先买），到达后 300 ms 内又被买走 19 份，三分之一的笔数里后来者买走的不少于剩下的。实际每笔大约能拿到二三十份到四五十份。
 
 **反向和跟随**（[`real/cross-fade.md`](real/cross-fade.md)、[`real/cross-follow.md`](real/cross-follow.md)，都加盘口健康检查，代码经过对抗式审查后才跑）：Polymarket 自己一秒内跳动 ≥ 3/5/8¢ 而币安没动时买变便宜的一方——A 段选出的格子三段 −2.2/−1.9/−1.6¢，全部格子为负：Polymarket 自己的跳动通常是对的。跟随 ≥ 100/500/2,000 USDC 的大单、300 ms 后价差不超过 1¢ 才跟——A 段选出的格子三段 −1.2/−1.7/−3.2¢，全部为负。都放弃。

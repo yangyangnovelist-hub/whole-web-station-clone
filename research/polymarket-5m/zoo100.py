@@ -398,9 +398,11 @@ def report(t, rules, reps=5000):
     return L
 
 
-def run(workdir, out, days=None, reps=5000):
+def run(workdir, out, days=None, reps=5000, dataset=None):
     import pandas as pd
     import cross
+    if dataset:
+        cross.set_dataset(dataset)
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     rules = make_rules()

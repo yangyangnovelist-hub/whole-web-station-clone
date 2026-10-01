@@ -2258,7 +2258,7 @@ def main(argv=None):
                 a.days)
     elif a.cmd == "zoo":
         import zoo100
-        zoo100.run(a.workdir, a.out, a.days)
+        zoo100.run(a.workdir, a.out, a.days, dataset=DS)  # run as a script, this module is not `cross`
     elif a.cmd == "jitter":
         jitter(a.workdir, a.out, a.days)
     elif a.cmd in ("fade", "follow"):
