@@ -480,7 +480,7 @@ GATE_LAGS = (300, 500)
 
 
 def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS, tau_lo=15, horizon=5, tau_hi=None,
-                 health=False, trades=None):
+                 health=False, trades=None, anchor_ms=None):
     """Stale-ask sniping gated by the fair-value jump a Binance move implies (`horizon`-minute
     markets, all settled on the 60 s TWAP).
 
@@ -495,7 +495,10 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
     that changed within HEALTH_ALIVE before the print and after the fill (see book_health). With
     Polymarket `trades`, each row also has the competition for that ask: the side's ask and size
     shown at the print (ask0, size0), and the shares other takers bought of that token at or below
-    the fill price in the lag before our order (taken_before) and in the 300 ms after it (taken_next)."""
+    the fill price in the lag before our order (taken_before) and in the 300 ms after it (taken_next).
+    With `anchor_ms`, the prior is the Up mid anchor_ms before the print instead (the snapshot within
+    a second of it) and the move is the Binance price at the print against the last trade received
+    by then, so a quote that already followed Binance is not counted twice."""
     import numpy as np
     import pandas as pd
     from scipy.stats import norm
@@ -560,7 +563,14 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
             fac = float(bo.twap_std_factor(t_mkt, window=window)) * sg[i]
             if not (np.isfinite(fac) and fac > 0):
                 continue
-            p1 = float(norm.cdf(norm.ppf(p0) + dx[i] / fac))
+            prior, move = p0, dx[i]
+            if anchor_ms is not None:
+                ka = np.searchsorted(fts, t0 - anchor_ms, "right") - 1
+                ja = np.searchsorted(rt, t0 - anchor_ms, "right") - 1
+                if ka < 0 or t0 - anchor_ms - fts[ka] > 1000 or ja < 0 or not (np.isfinite(ub[ka]) and np.isfinite(ua[ka])):
+                    continue
+                prior, move = min(max((ub[ka] + ua[ka]) / 2, 0.005), 0.995), lp[a + i] - lp[ja]
+            p1 = float(norm.cdf(norm.ppf(prior) + move / fac))
             up = dx[i] > 0
             fair = p1 if up else 1 - p1
             won = float(mk["up_won"] == (1.0 if up else 0.0))
@@ -591,7 +601,7 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
                                        "won", "pnl", "ask0", "size0", "taken_before", "taken_next", "pre_move"])
 
 
-def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=False):
+def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=False, anchor=None):
     """gated_trades on every day (`horizon`-minute markets); thresholds are compared on May 25 - Jul 15 and checked on the
     later days (Jul 16 - Aug 16, taker delay 250 ms; Aug 17 onwards, 50 ms)."""
     import numpy as np
@@ -610,7 +620,8 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=F
             binance = read_binance(local)
             prints = read_poly_trades(local) if compete else None
             Path(local).unlink()
-            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon, health=health, trades=prints)
+            t = gated_trades(feat, market_table(mk, rs), binance, horizon=horizon, health=health, trades=prints,
+                             anchor_ms=anchor)
             t["day"] = name[15:25]
             parts.append(t)
             print(f"{name}: {len(t):,} gated trades over {t['market_id'].nunique() if len(t) else 0} markets", flush=True)
@@ -629,6 +640,10 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=F
               f"处于交易状态且未暂停，并且盘口在触发前 {HEALTH_ALIVE[0] / 1000:g} 秒内和成交后 {HEALTH_ALIVE[1] / 1000:g} 秒内"
               "确实变过（数据集在没有新消息时会重复上一个状态，所以只有快照存在不能说明行情在更新）。"
               "用来检验原结果是不是记录机断流造成的假象；门槛不重新选。", ""]
+    if anchor:
+        L += [f"**本次换了起点**：原来的概率取触发前 {anchor / 1000:g} 秒的 Up 中间价（那一刻前后一秒内的快照），"
+              f"Δx 取触发时币安价格相对 {anchor / 1000:g} 秒前最后一笔的涨跌。Polymarket 已经跟着币安动过的部分不会再算一遍，"
+              "动得不够或动过头的部分才是优势。触发条件（一秒 2σ）不变。门槛在 5 月 25 日–7 月 15 日比较。", ""]
     if df.empty:
         L.append("没有可用的数据。")
     else:
@@ -1779,6 +1794,7 @@ def main(argv=None):
             p.add_argument("--health", action="store_true", help="only sane, recently changed book snapshots")
         if name == "gated":
             p.add_argument("--compete", action="store_true", help="also measure other takers at the same ask")
+            p.add_argument("--anchor", type=int, help="prior and move from this many ms before the print")
     a = ap.parse_args(argv)
     if getattr(a, "dataset", DS) != DS:
         set_dataset(a.dataset)
@@ -1799,7 +1815,7 @@ def main(argv=None):
     elif a.cmd == "makers":
         makers(a.workdir, a.out, a.days)
     elif a.cmd == "gated":
-        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health, compete=a.compete)
+        gated(a.workdir, a.out, a.days, horizon=a.horizon, health=a.health, compete=a.compete, anchor=a.anchor)
     elif a.cmd == "openmis":
         openmis(a.workdir, a.out, a.days)
     elif a.cmd == "hourly":

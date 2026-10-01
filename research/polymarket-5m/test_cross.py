@@ -382,3 +382,29 @@ def test_gated_trades_measure_other_takers():
     assert (r["ask0"], r["price"], r["taken_before"], r["taken_next"]) == (0.50, 0.50, 40.0, 30.0)
     assert r["pre_move"] == pytest.approx(0.0)  # the mid had not moved in the two seconds before the print
     assert cross.gated_trades(feat, mkts, binance, z0=6.0)["taken_before"].isna().all()
+
+
+def test_gated_trades_anchored_prior_does_not_count_a_followed_move_twice():
+    """The Up quote went 0.49/0.50 -> 0.79/0.81 one second before a small Binance jump (no Binance
+    move then). From the mid at the print the jump looks worth 15c over the ask; from the mid two
+    seconds earlier plus the Binance move since, only about 6c."""
+    start = E - 300_000
+    ts = np.arange(start, E, 100)
+    t_jump = E - 100_000
+    bid = np.where(ts < t_jump - 1000, 0.49, 0.79)
+    ask = np.where(ts < t_jump - 1000, 0.50, 0.81)
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": bid, "up_best_ask": ask, "down_best_bid": 1 - ask, "down_best_ask": 1 - bid,
+                         "up_ask_size": 25.0, "down_ask_size": 30.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0], "up_won": [1.0], "horizon": [5]})
+    rng = np.random.default_rng(3)
+    tt = np.arange(E - 1_200_000, E, 250)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    price[tt >= t_jump] *= 1 + 1.5e-6
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 150, "price": price})
+    plain = cross.gated_trades(feat, mkts, binance, z0=6.0, thetas=(0.0, 0.10), lags=(300,))
+    anch = cross.gated_trades(feat, mkts, binance, z0=6.0, thetas=(0.0, 0.10), lags=(300,), anchor_ms=2000)
+    assert set(plain["theta"]) == {0.0, 0.10} and set(anch["theta"]) == {0.0}
+    assert (plain["t0"] == t_jump + 150).all() and (anch["t0"] == t_jump + 150).all()
+    assert anch["fair"].iloc[0] < plain["fair"].iloc[0] - 0.05 and anch["fair"].iloc[0] > 0.81
+    assert anch["pre_move"].iloc[0] == pytest.approx(0.305)  # 0.495 -> 0.80
