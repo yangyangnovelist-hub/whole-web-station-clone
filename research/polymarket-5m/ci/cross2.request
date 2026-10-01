@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
 # beside ci/cross.request): "cmd:" is the cross.py command, as there.
-requested: 2026-09-30 20:06 follow, after the review fixes (book must move after the print, 5-share minimum, lags 300/500/1000)
-cmd: follow --out real/cross-follow.md
+requested: 2026-10-01 02:05 gated rule on SOL with the health filter and the pre-move split
+cmd: gated --health --dataset whodisidk/polymarket-sol-updown-exchange-data --out real/cross-gated-sol-premove.md

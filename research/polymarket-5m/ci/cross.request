@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-10-01 00:18 gated rule (health filter): had Polymarket already moved our way before the Binance trigger, as it had before the Coinbase one live?
-cmd: gated --health --out real/cross-gated-premove.md
+requested: 2026-10-01 02:05 gated rule on ETH with the health filter and the pre-move split: does skipping triggers Polymarket had already moved toward rescue ETH?
+cmd: gated --health --dataset whodisidk/polymarket-eth-updown-exchange-data --out real/cross-gated-eth-premove.md
