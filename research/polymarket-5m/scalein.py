@@ -23,6 +23,12 @@ all. Caveat: a breakdown of the adds by edge, time left, gap and direction on A,
 before this list was written (the first, 9-rule version of this script), so B and C are not fully
 clean for those dimensions; September (X, the user's own recordings) is.
 
+Result on A / B + C (real/scalein.md): the rule chosen on A did not beat the current one on B + C
+(G: Sharpe 0.83 vs 0.81 but $3.20 a day less; H: 0.75 vs 0.77 and $16 less), and the rank
+correlation was +0.27 (G) / +0.31 (H). Written down after seeing A, B and C and before any of
+September was run, the two rules to check on X: "同向全仓，反向 2 倍" and "加仓门槛 8¢" make more a day
+than "每次都加" with a daily Sharpe at least as high, for both G and H.
+
     python scalein.py > real/scalein.md
     python scalein.py --extra sept-episodes.csv.gz      # from run_local.py ... --episodes
 """
@@ -255,7 +261,7 @@ def main(argv=None):
     ap.add_argument("--extra", help="September episodes: run_local.py ... --episodes (period X)")
     a = ap.parse_args(argv)
     print("# 加仓规则：63 条，A 段选、B+C 段核对" + ("、九月（X）检验" if a.extra else ""), "\n")
-    print(__doc__.split("\n\n", 1)[1].rsplit("\n\n", 1)[0], "\n")
+    print("\n\n".join(__doc__.split("\n\n")[1:-1]), "\n")
     for rule in ("G", "H"):
         t = episodes(a.jitter, rule)
         periods = ["A", "B+C"]
