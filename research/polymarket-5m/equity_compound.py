@@ -73,7 +73,7 @@ def main(argv=None):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), sharey=True, facecolor=SURF)
     for ax, scale_in in zip(axes, (False, True)):
         ax.set_facecolor(SURF)
-        traded, cal = set(), None
+        traded, cal, ends = set(), None, {}
         for rule in ("G", "H"):
             t = rule_trades([a.jitter] + ([a.extra] if a.extra else []), rule, a.scale_rule if scale_in else "只买第一笔")
             p = simulate(t, a.start, a.fraction, a.fill, a.cap, a.min_shares)
@@ -85,8 +85,7 @@ def main(argv=None):
             daily = daily.ffill()  # days without data: flat
             traded |= set(p["day"])
             ax.plot(daily.index, daily.to_numpy(), color=COLOR[rule], lw=2)
-            ax.annotate(f"{rule}  ${daily.iloc[-1]:,.0f}", (daily.index[-1], daily.iloc[-1]), xytext=(6, 0),
-                        textcoords="offset points", va="center", fontsize=10, color=INK)
+            ends[rule] = (daily.index[-1], daily.iloc[-1])
             dd = (daily.cummax() - daily)
             hi = p["eq"].cummax()
             last20 = (daily.iloc[-1] - daily.iloc[-21]) / 20 if len(daily) > 21 else np.nan
@@ -94,6 +93,11 @@ def main(argv=None):
                   f"按天最大回撤 ${dd.max():,.0f}（{100 * (dd / daily.cummax()).max():.0f}%），"
                   f"逐笔最大回撤 {100 * ((hi - p['eq']) / hi).max():.0f}%，账户最低 ${p['eq'].min():,.0f}，"
                   f"最后 20 天 ${last20:,.0f}/天")
+        lo, hi = sorted(ends, key=lambda k: ends[k][1])
+        close = ends[hi][1] / ends[lo][1] < 1.3  # labels would overlap: push them apart
+        for k in ends:
+            ax.annotate(f"{k}  ${ends[k][1]:,.0f}", ends[k], xytext=(6, (7 if k == hi else -7) if close else 0),
+                        textcoords="offset points", va="center", fontsize=10, color=INK)
         # shade the days on which neither rule traded (no data, or no healthy book): flat
         gap = pd.Series([d not in traded for d in cal[1:]], index=cal[1:])
         run = (gap != gap.shift()).cumsum()
