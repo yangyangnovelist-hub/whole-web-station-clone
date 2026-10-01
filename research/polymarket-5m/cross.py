@@ -581,11 +581,14 @@ def gated_trades(feat, mkts, binance, z0=2.0, lags=GATE_LAGS, thetas=GATE_THETAS
                         continue
                     done.add((lag, th))
                     tok = str(mk["up_token"] if up else mk["down_token"]) if "up_token" in mk else None
+                    km2 = np.searchsorted(fts, t0 - 2000, "right") - 1  # the quote two seconds before the print
+                    mid_m2 = (ub[km2] + ua[km2]) / 2 if km2 >= 0 and t0 - 2000 - fts[km2] <= 1000 else np.nan
+                    pre = (p0 - mid_m2) if up else (mid_m2 - p0)  # how far the mid had already moved our way
                     rows.append((mid, lag, th, t0, (mk["end"] - t0) / 1000, p0, fair, px, size, fee, won, won - px - fee,
                                  ua[k0] if up else da[k0], uas[k0] if up else das[k0],
-                                 taken(tok, t0, t0 + lag, px), taken(tok, t0 + lag, t0 + lag + 300, px)))
+                                 taken(tok, t0, t0 + lag, px), taken(tok, t0 + lag, t0 + lag + 300, px), pre))
     return pd.DataFrame(rows, columns=["market_id", "lag", "theta", "t0", "tau", "p0", "fair", "price", "size", "fee",
-                                       "won", "pnl", "ask0", "size0", "taken_before", "taken_next"])
+                                       "won", "pnl", "ask0", "size0", "taken_before", "taken_next", "pre_move"])
 
 
 def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=False):
@@ -640,6 +643,16 @@ def gated(workdir, out, days=None, reps=5000, horizon=5, health=False, compete=F
             usd = (g["pnl"] * g["size"].clip(upper=500)).sum() / max(ndays, 1)
             L.append(f"| {lag} ms | {100 * th:.0f}¢ | {per} | {len(g):,} | {g['won'].mean():.1%} | {g['price'].mean():.3f} | "
                      f"{g['fair'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ | {pv:.4f} | {g['size'].median():.0f} | ${usd:,.0f} |")
+        if "pre_move" in df:
+            c = df[(df["lag"] == 300) & (df["theta"] == 0.12)].copy()
+            c["pm"] = np.select([c["pre_move"] >= 0.03, c["pre_move"] <= -0.03], ["已朝买的方向动 ≥ 3¢", "反方向动 ≥ 3¢"],
+                                "动不到 3¢")
+            L += ["", "## 触发前两秒，Polymarket 中间价已经朝买的方向动了多少（L = 300 ms、θ = 12¢）", "",
+                  "实盘检验 D（Coinbase 触发）几乎每一笔都是已经动过的；如果币安确实领先，回测里（币安触发）这种情况应该少得多。", "",
+                  "| 时段 | 触发前已动 | 笔数 | 占比 | 胜率 | 平均价 | EV/份 |", "|---|---|---:|---:|---:|---:|---:|"]
+            for (per, pm), g in c.groupby(["period", "pm"]):
+                L.append(f"| {per} | {pm} | {len(g):,} | {len(g) / (c['period'] == per).sum():.0%} | {g['won'].mean():.1%} | "
+                         f"{g['price'].mean():.3f} | {100 * g['pnl'].mean():+.2f}¢ |")
         if compete and "taken_before" in df:
             L += ["", "## 抢单：同一价位别人买走了多少（L = 300 ms、θ = 12¢）", "",
                   "卖一0 / 数量0：触发那一刻看到的卖一和挂单量；前：触发到我们的单到达之间，别的吃单在不高于成交价的价位买走的份数；"

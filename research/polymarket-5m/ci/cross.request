@@ -1,5 +1,5 @@
 # Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
 # cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
 # optionally --dataset <another whodisidk dataset> --out real/cross-....md).
-requested: 2026-09-30 21:35 which Binance trade feeds a GitHub runner can reach (for a live feed like the backtest's)
-cmd: probe-binance-ws
+requested: 2026-10-01 00:18 gated rule (health filter): had Polymarket already moved our way before the Binance trigger, as it had before the Coinbase one live?
+cmd: gated --health --out real/cross-gated-premove.md

@@ -380,4 +380,5 @@ def test_gated_trades_measure_other_takers():
     g = cross.gated_trades(feat, mkts, binance, z0=6.0, trades=trades)
     r = g[(g["lag"] == 300) & (g["theta"] == 0.12)].iloc[0]
     assert (r["ask0"], r["price"], r["taken_before"], r["taken_next"]) == (0.50, 0.50, 40.0, 30.0)
+    assert r["pre_move"] == pytest.approx(0.0)  # the mid had not moved in the two seconds before the print
     assert cross.gated_trades(feat, mkts, binance, z0=6.0)["taken_before"].isna().all()
