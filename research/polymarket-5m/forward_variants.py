@@ -10,6 +10,11 @@ recordings it downloads (ROOT/<run id>/x/bundle-*/latency).
 
 --trades also writes every trade (variant, lag, market slug, trigger time, side, price, won, pnl),
 so the markets can be matched one by one against another recorder of the same markets.
+
+"反向 2 倍" rows reweight the "每次都加" trades: 1 share for a market's first trade and later ones on
+its side, 2 for later ones on the other side (latency.opp_weights; at 0.4 s from I_SINCE on, the
+H row is test I's rule); their standard error is clustered by market and p is the one-sided
+normal p (latency.clustered), not the fair-price simulation of the other rows.
 """
 import argparse
 from pathlib import Path
@@ -40,6 +45,19 @@ def run(root, lag):
     return out
 
 
+OPP2 = {"G 反向 2 倍": "G 每次都加", "H 反向 2 倍（检验 I 的规则）": "H 每次都加"}
+
+
+def opp2_cell(t):
+    if not len(t):
+        return "0 | – | – | – | –"
+    w = lt.opp_weights(t)
+    c, se, p, _ = lt.clustered(t, w)
+    cost = t["price"] + t["fee"]
+    return (f"{len(t):,} | {c:+.2f}¢ ±{se:.1f} | {100 * (w * t['pnl']).sum() / (w * cost).sum():+.1f}% | "
+            f"{t['won'].mean():.0%} | {p:.3f}")
+
+
 def cell(t, reps=20000):
     if not len(t):
         return "0 | – | – | – | –"
@@ -60,11 +78,16 @@ def main(argv=None):
     res = {lag: run(a.root, lag) for lag in a.lags}
     L = ["# 检验 G 的录盘，换成 H 和加仓版本再算（探索性，不是预注册检验；每轮录盘后自动更新）", "",
          f"和检验 G 完全相同的录盘（{lt.G_SINCE} UTC 起开始的 BTC 5m 市场）、同一币安源、同样的盘口健康和断线检查，只换规则。"
-         "几个版本是一起看的，最好的那个有挑选偏差；正式判定仍是检验 G 的 600 笔。", "",
+         f"几个版本是一起看的，最好的那个有挑选偏差；正式判定是检验 G 的 {lt.G_N} 笔和检验 I"
+         f"（{lt.I_SINCE} UTC 起前 {lt.I_N:,} 个市场，H 反向 2 倍、{lt.I_LAG:g} 秒，见 latency-test-i.md）。", "",
+         "“反向 2 倍”两行是把“每次都加”的成交重新加权（反方向的加仓 2 份），标准误按市场聚类、p 用正态近似。", "",
          "| 版本 | 延迟 | 笔数 | 每份（±标准误） | ROI | 胜率 | p |", "|---|---|---:|---:|---:|---:|---:|"]
     for name in VARIANTS:
         for lag in a.lags:
             L.append(f"| {name} | {lag:g} 秒 | {cell(res[lag][name])} |")
+    for name in OPP2:
+        for lag in a.lags:
+            L.append(f"| {name} | {lag:g} 秒 | {opp2_cell(res[lag][OPP2[name]])} |")
     if a.trades:
         rows = [t.assign(variant=name, lag=lag) for lag, r in res.items() for name, t in r.items() if len(t)]
         cols = ["variant", "lag", "run", "market_id", "t", "side", "price", "fee", "size", "won", "pnl", "p0", "fair"]

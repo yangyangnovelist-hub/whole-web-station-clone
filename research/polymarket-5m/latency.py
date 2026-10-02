@@ -139,6 +139,27 @@ had moved the other way) against +0.4c where it had; on the later periods +7.8c/
 first 600 trades (about 37 a day in Aug 17-29, so within the forward chain), p < 0.025. Its trades
 are a subset of test F's; with tests C, D, F and G each at 0.025, the chance of at least one false
 pass is at most 10%.
+
+Test I, fixed 2026-10-02 about 08:30 UTC, before any of its data was recorded (see I_*): the user
+ran G and H on the Dublin recorder's books for the same markets as the GitHub forward recordings
+(10-01 03:00 to 10-02 05:05 UTC). Matched trade by trade, Dublin's ask often changes some 50 ms
+later than the GitHub book on fast moves (a median 47 ms in the trades GitHub bought 2c or more
+dearer), so the cheap ask stays in view longer and every Dublin-type backtest, September's
+included, reads high; the GitHub recorder stamps each CLOB message with Polymarket's own time
+(recording.book_events, "xtop" rows). On the GitHub books at 0.4 s, about the latency the user's
+server reaches with the 150 ms taker hold, those 26 hours gave G first trade +0.3c (57 trades),
+H first -2.8c (73), H buying every fill 2 s apart +2.8c (112) and with opposite-side adds at
+twice the size +6.4c (an estimate with a 4.4c market-clustered standard error). Test I is that last rule: H's
+fair value (prior 2 s before the print, plus the Binance move since), every fill at least
+I_EVERY s apart, weight 1 for a market's first trade and later trades on its side and I_OPP_W
+for later trades on the other side (scalein.py "同向全仓，反向 2 倍", which passed in all eight
+September per-print cells), I_LAG s after the print, theta 12c, on markets from I_SINCE, with test
+G's data hygiene. Statistic: cents a share, sum(w pnl) / sum(w), with a standard error clustered
+by market (the adds of one market settle together), one-sided normal p. Judged once on all trades
+of the first I_N markets with a trade, in the order of their first trade; it passes with a
+positive mean and p < I_ALPHA. 1,000 markets (about 15 days at 67 a day) give a clustered
+standard error near 1.2c, so about seven chances in ten of passing at a true +3c and nine at +4c.
+With tests C, D, F, G and I each at 0.025, the chance of at least one false pass is at most 12.5%.
 """
 from __future__ import annotations
 
@@ -190,6 +211,13 @@ G_SPOT, G_Z0, G_LAG, G_THETA, G_MAX_PRE, G_N = "binancews", 2.0, 0.3, 0.12, 0.03
 G_SINCE, G_TAU_LO = "2026-10-01 02:30", 15
 G_COINS = ("btc",)
 G_ALPHA = 0.025
+# Test I (fixed 2026-10-02 about 08:30 UTC, before any of its data was recorded): H buying every
+# fill I_EVERY s apart, opposite-side adds at I_OPP_W times the size, I_LAG s after the print;
+# judged once on the trades of the first I_N markets, clustered by market (see module notes).
+I_SPOT, I_Z0, I_LAG, I_THETA, I_ANCHOR, I_EVERY, I_OPP_W, I_N = "binancews", 2.0, 0.4, 0.12, 2.0, 2.0, 2.0, 1000
+I_SINCE, I_TAU_LO = "2026-10-02 09:00", 15
+I_COINS = ("btc",)
+I_ALPHA = 0.025
 
 
 def _read(d, pattern):
@@ -895,6 +923,104 @@ def run_test_g(roots, out, reps=20000):
     print("\n".join(L))
 
 
+def opp_weights(t, opp=I_OPP_W):
+    """Each trade's size: 1 for a market's first trade and for later ones on its side, `opp` for
+    later ones on the other side (scalein.py "同向全仓，反向 2 倍")."""
+    if t.empty:
+        return pd.Series(dtype=float)
+    keys = [c for c in ("coin", "market_id") if c in t]
+    s = t.sort_values("t", kind="stable")
+    first = s.groupby(keys, sort=False)["side"].transform("first")
+    return pd.Series(np.where(s["side"] == first, 1.0, opp), index=s.index).reindex(t.index)
+
+
+def clustered(t, w):
+    """Cents a share sum(w pnl) / sum(w), its standard error clustered by market, the one-sided
+    normal p for a positive mean, and the number of markets."""
+    from scipy.stats import norm
+    if t.empty:
+        return np.nan, np.nan, 1.0, 0
+    keys = [t[c] for c in ("coin", "market_id") if c in t]
+    x = (w * t["pnl"]).groupby(keys).sum()
+    s = w.groupby(keys).sum()
+    mean = x.sum() / s.sum()
+    m = len(x)
+    se = np.sqrt(((x - mean * s) ** 2).sum() * m / (m - 1)) / s.sum() if m > 1 else np.nan
+    p = float(norm.sf(mean / se)) if mean > 0 and se > 0 else 1.0
+    return 100 * mean, 100 * se, p, m
+
+
+def first_markets(t, n):
+    """All trades of the first n markets with a trade, in the order of their first trade (None if
+    fewer than n markets have one)."""
+    keys = [c for c in ("coin", "market_id") if c in t]
+    order = t.sort_values("t", kind="stable").drop_duplicates(keys)[keys]
+    if len(order) < n:
+        return None
+    return t.merge(order.head(n), on=keys).sort_values("t", kind="stable").reset_index(drop=True)
+
+
+def run_test_i(roots, out, reps=20000):
+    """Test I: H buying every fill, opposite-side adds at twice the size, at I_LAG s, judged once on
+    the trades of the first I_N markets (clustered by market). Also reported, not judged: the same
+    trades at weight 1 and the first trade per market, and the rule at 0.3 s."""
+    dirs = _latency_dirs(roots, I_COINS)
+    notes = []
+    kw = dict(theta=I_THETA, z0=I_Z0, tau_lo=I_TAU_LO, anchor=I_ANCHOR, every=I_EVERY)
+    res = {}
+    for lag in (I_LAG, 0.3):
+        t = _per_recording(dirs, I_SINCE, I_SPOT, lambda mk, sp, sg, bk, lag=lag: gated_trades(mk, sp, sg, bk, lag=lag, **kw),
+                           ["coin", "market_id", "t"], notes if lag == I_LAG else [])
+        res[lag] = t.sort_values("t", kind="stable").reset_index(drop=True) if len(t) else t
+    main_t = res[I_LAG]
+    L = [f"# 检验 I：H 每次都加、反向 2 倍，{I_LAG:g} 秒（BTC 5m，币安逐笔成交触发，GitHub 前向录制）", "",
+         f"事先写死（10 月 2 日约 08:30 UTC，数据还没录）：{I_SINCE} UTC 起开始的 BTC 5m 市场；币安逐笔成交 {I_Z0:g}σ 触发"
+         f"（剩 240–{I_TAU_LO} 秒），公平价按 H：从触发前 {I_ANCHOR:g} 秒的 Up 中间价起算，加上这 {I_ANCHOR:g} 秒币安的涨跌；"
+         f"{I_LAG:g} 秒后按卖一买顺势一方，公平价 − 卖一 − 手续费 ≥ {100 * I_THETA:.0f}¢ 才买；同一市场每次都买，"
+         f"买到后 {I_EVERY:g} 秒内不再买；第一笔和与第一笔同方向的加仓每笔 1 份，反方向的加仓每笔 {I_OPP_W:g} 份；持有到结算。"
+         f"每份赚的钱 = Σ份数×盈亏 / Σ份数，标准误按市场聚类（同一市场的几笔一起结算），单边正态 p。"
+         f"按每个市场第一笔的时间取前 {I_N:,} 个有成交的市场、它们的全部成交，判定一次：每份 > 0 且 p < {I_ALPHA} 才算通过。"
+         "数据处理同检验 G（每段录制单独算、盘口健康、断线检查）。", "",
+         f"录制段 {sum(len(v) for v in dirs.values())} 个，{I_LAG:g} 秒：成交 {len(main_t):,} 笔、"
+         f"{main_t[['coin', 'market_id']].drop_duplicates().shape[0] if len(main_t) else 0:,} 个市场。"]
+    if notes:
+        L += ["", "录制段备注（跳过的和断线检查）：", ""] + [f"- {n}" for n in notes]
+    L += ["", "| 版本 | 延迟 | 市场 | 笔数 | 每份（±聚类标准误） | p |", "|---|---|---:|---:|---:|---:|"]
+    for lag in (I_LAG, 0.3):
+        t = res[lag]
+        if t.empty:
+            continue
+        first = t.drop_duplicates(["coin", "market_id"])
+        rows = [("反向 2 倍（检验的规则）", t, opp_weights(t)), ("每次都加（每笔 1 份）", t, pd.Series(1.0, index=t.index)),
+                ("只买第一笔", first, pd.Series(1.0, index=first.index))]
+        for name, x, w in (rows if lag == I_LAG else rows[:1]):
+            c, se, p, m = clustered(x, w)
+            L.append(f"| {name} | {lag:g} 秒 | {m:,} | {len(x):,} | {c:+.2f}¢ ±{se:.1f} | {p:.4f} |")
+    pinned = Path(out).with_suffix(".verdict.md")
+    if pinned.exists():
+        L += ["", pinned.read_text(encoding="utf-8").strip() + "（已判定，不再重算）"]
+    else:
+        first = first_markets(main_t, I_N) if len(main_t) else None
+        if first is None:
+            have = main_t[["coin", "market_id"]].drop_duplicates().shape[0] if len(main_t) else 0
+            L += ["", f"检验 I（前 {I_N:,} 个市场）：目前 {have:,} 个市场，不到 {I_N:,} 个，不判定。"]
+        else:
+            c, se, p, m = clustered(first, opp_weights(first))
+            ok = c > 0 and p < I_ALPHA
+            runs = sorted(first["run"].unique())
+            v = (f"检验 I（前 {I_N:,} 个市场）：H 每次都加、反向 {I_OPP_W:g} 倍、{I_LAG:g} 秒：{len(first):,} 笔，"
+                 f"每份 {c:+.2f}¢ ±{se:.2f}，p = {p:.4f} → {'通过' if ok else '没通过'}")
+            pinned.parent.mkdir(parents=True, exist_ok=True)
+            pinned.write_text(v + f"（录制段 {len(runs)} 个：{', '.join(map(str, runs))}；最后一笔触发于 "
+                              f"{pd.to_datetime(first['t'].max(), unit='s', utc=True):%Y-%m-%d %H:%M} UTC）\n",
+                              encoding="utf-8")
+            first.assign(w=opp_weights(first)).to_csv(Path(out).with_suffix(".trades.csv"), index=False)
+            L += ["", pinned.read_text(encoding="utf-8").strip()]
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
+
+
 def diagnose_d(roots, out, spot=D_SPOT, since=None, until=None, name="D"):
     """Per-trade look at test D's trades so far (reporting only; the rule and the verdict are
     untouched): the spot move that triggered, the Binance move Polymarket relays (about one
@@ -990,10 +1116,14 @@ def main(argv=None):
     ap.add_argument("--diagnose-d", action="store_true", help="per-trade look at test D's trades (report only)")
     ap.add_argument("--test-f", action="store_true", help="test F (Binance-triggered test D) on the same roots")
     ap.add_argument("--test-g", action="store_true", help="test G (test F with the pre-move skip) on the same roots")
+    ap.add_argument("--test-i", action="store_true",
+                    help="test I (H buying every fill, opposite adds at twice the size, 0.4 s) on the same roots")
     ap.add_argument("--diagnose-f", action="store_true",
                     help="the same per-trade look at test F's trades before G_SINCE (report only)")
     a = ap.parse_args(argv)
-    if a.test_g:
+    if a.test_i:
+        run_test_i(a.export_dir, a.out, a.reps)
+    elif a.test_g:
         run_test_g(a.export_dir, a.out, a.reps)
     elif a.test_f:
         run_test_f(a.export_dir, a.out, a.reps)

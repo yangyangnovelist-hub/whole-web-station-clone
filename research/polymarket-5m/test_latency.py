@@ -345,3 +345,66 @@ def test_diagnose_f_lists_test_f_trades_before_test_g(export, tmp_path, monkeypa
     text = out.read_text()
     assert "检验 F 的逐笔诊断" in text and "10 笔：" in text
     assert "没动到 3¢（检验 G 会留下的）：10 笔" in text
+
+
+def test_opp_weights_and_clustered_se():
+    """Weight 1 for a market's first trade and later trades on its side, 2 for the other side; the
+    standard error is clustered by market."""
+    t = pd.DataFrame({"coin": "btc", "market_id": ["a", "a", "a", "b", "c"], "t": [3.0, 1.0, 5.0, 2.0, 4.0],
+                      "side": ["Down", "Up", "Up", "Down", "Up"], "pnl": [0.5, -0.4, -0.4, 0.6, -0.3]})
+    w = lt.opp_weights(t)
+    assert w.tolist() == [2.0, 1.0, 1.0, 1.0, 1.0]  # market a's first trade (t = 1) is Up
+    c, se, p, m = lt.clustered(t, w)
+    x = np.array([2 * 0.5 - 0.4 - 0.4, 0.6, -0.3])
+    s = np.array([4.0, 1.0, 1.0])
+    mean = x.sum() / s.sum()
+    assert m == 3 and np.isclose(c, 100 * mean)
+    assert np.isclose(se, 100 * np.sqrt(((x - mean * s) ** 2).sum() * 3 / 2) / s.sum())
+    assert 0 < p < 0.5
+    assert lt.clustered(t.assign(pnl=-t["pnl"].abs()), w)[2] == 1.0
+    first = lt.first_markets(t, 2)
+    assert set(first["market_id"]) == {"a", "b"} and len(first) == 4 and lt.first_markets(t, 4) is None
+
+
+def test_test_i_is_judged_once_on_the_first_markets(export, tmp_path, monkeypatch):
+    """H buying every fill on the fixture's jumps: one trade a market, judged on the first I_N
+    markets and pinned, so a later run reads the verdict back instead of recomputing it."""
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    (d / "coinbase_trades.jsonl.gz").unlink()
+    monkeypatch.setattr(lt, "I_SINCE", "2026-09-01")
+    out = tmp_path / "real" / "latency-test-i.md"
+    monkeypatch.setattr(lt, "I_N", N + 1)
+    lt.main([str(tmp_path / "rec"), "--test-i", "--out", str(out), "--reps", "200"])
+    text = out.read_text()
+    assert f"成交 {N:,} 笔、{N:,} 个市场" in text and "不判定" in text
+    assert not out.with_suffix(".verdict.md").exists()
+    monkeypatch.setattr(lt, "I_N", 10)
+    lt.run_test_i([tmp_path / "rec"], out, reps=200)
+    v = out.with_suffix(".verdict.md").read_text()
+    assert "检验 I（前 10 个市场）" in v and "通过" in v
+    trades = pd.read_csv(out.with_suffix(".trades.csv"))
+    assert trades["market_id"].nunique() == 10 and (trades["w"] == 1).all() and (trades["price"] == 0.70).all()
+    out.with_suffix(".trades.csv").write_text("x")
+    monkeypatch.setattr(lt, "I_N", 5)
+    lt.run_test_i([tmp_path / "rec"], out, reps=200)
+    assert "已判定，不再重算" in out.read_text() and "前 10 个市场" in out.read_text()
+
+
+def test_forward_variants_report_the_opposite_side_rows(export, tmp_path, monkeypatch):
+    import forward_variants as fv
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    monkeypatch.setattr(lt, "G_SINCE", "2026-09-01")
+    out, trades = tmp_path / "fv.md", tmp_path / "fv.csv.gz"
+    fv.main([str(tmp_path / "rec"), "--out", str(out), "--trades", str(trades)])
+    text = out.read_text()
+    assert f"| H 反向 2 倍（检验 I 的规则） | 0.4 秒 | {N} |" in text and f"| H 每次都加 | 0.4 秒 | {N} |" in text
+    t = pd.read_csv(trades)
+    assert set(t["variant"]) == set(fv.VARIANTS) and set(t["lag"]) == {0.3, 0.4}

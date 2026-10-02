@@ -5,7 +5,7 @@
 
 Run by .github/workflows/polymarket-shadow.yml after every forward recording run, with the
 webhook kept as the repository secret WECOM_WEBHOOK (never in the code or the logs). The message
-repeats what real/latency-test-c.md, real/latency-test-d.md and forward/confirm.md already say:
+repeats what real/latency-test-{c,d,g,i}.md and forward/confirm.md already say:
 running counts are marked as not judged; a pinned verdict (real/latency-test-*.verdict.md) is
 shown as such.
 """
@@ -68,10 +68,21 @@ def test_line(name, path):
         v = pinned.read_text(encoding="utf-8").strip()
         colour = "info" if "→ 通过" in v else "warning"
         return f'<font color="{colour}">{name} 已判定</font>：{v}'
-    count = _first(lines, r"^检验 [CD]（前") or ""
-    count = re.sub(r"^检验 [CD]（前 [0-9,]+ 笔）：", "", count)
-    row = _row(lines)
+    count = _first(lines, r"^检验 [A-Z]（前") or ""
+    count = re.sub(r"^检验 [A-Z]（前 [0-9,]+ (笔|个市场)）：", "", count)
+    row = _row(lines) or _i_row(lines)
     return f"{name}：{count}" + (f"\n> 　目前（不作判定）：{row}" if row else "")
+
+
+def _i_row(lines):
+    """'m 个市场 n 笔，每份 …，p = …' from test I's row for its judged rule."""
+    ln = _first(lines, r"^\| 反向 2 倍（检验的规则） \|")
+    if not ln:
+        return None
+    cells = [c.strip() for c in ln.strip("|").split("|")]
+    if len(cells) < 6 or cells[2] in ("0", ""):
+        return None
+    return f"{cells[2]} 个市场 {cells[3]} 笔，每份 {cells[4]}，p = {cells[5]}"
 
 
 def forward_lines(path):
@@ -103,6 +114,8 @@ def build(root=HERE, now=None):
          "**预注册检验**（规则事先写死，只用新录的数据，笔数够了判定一次；纸面交易，不下单）",
          "> " + test_line("检验 C（Coinbase 3σ，0.3 秒）", Path(root) / "real/latency-test-c.md"),
          "> " + test_line("检验 D（公平价筛选 θ=12¢）", Path(root) / "real/latency-test-d.md"),
+         "> " + test_line("检验 G（币安 2σ、Polymarket 还没动，0.3 秒）", Path(root) / "real/latency-test-g.md"),
+         "> " + test_line("检验 I（H 每次都加、反向 2 倍，0.4 秒）", Path(root) / "real/latency-test-i.md"),
          "**其他前向检验**"]
     L += ["> " + ln for ln in forward_lines(Path(root) / "forward/confirm.md")]
     text = "\n".join(L)
