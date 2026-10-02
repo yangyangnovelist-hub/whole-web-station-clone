@@ -6,11 +6,16 @@ keeping every fill 2 s apart, at each lag. polymarket-shadow runs it after the t
 recordings it downloads (ROOT/<run id>/x/bundle-*/latency).
 
     python forward_variants.py ROOT [--lags 0.3 0.4] [--out real/forward-variants.md]
+                               [--trades real/forward-trades.csv.gz]
+
+--trades also writes every trade (variant, lag, market slug, trigger time, side, price, won, pnl),
+so the markets can be matched one by one against another recorder of the same markets.
 """
 import argparse
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 import binary as bo
 import latency as lt
@@ -50,6 +55,7 @@ def main(argv=None):
     ap.add_argument("root")
     ap.add_argument("--lags", type=float, nargs="+", default=[0.3, 0.4])
     ap.add_argument("--out", default="real/forward-variants.md")
+    ap.add_argument("--trades", help="also write every trade here (csv.gz)")
     a = ap.parse_args(argv)
     res = {lag: run(a.root, lag) for lag in a.lags}
     L = ["# 检验 G 的录盘，换成 H 和加仓版本再算（探索性，不是预注册检验；每轮录盘后自动更新）", "",
@@ -59,6 +65,10 @@ def main(argv=None):
     for name in VARIANTS:
         for lag in a.lags:
             L.append(f"| {name} | {lag:g} 秒 | {cell(res[lag][name])} |")
+    if a.trades:
+        rows = [t.assign(variant=name, lag=lag) for lag, r in res.items() for name, t in r.items() if len(t)]
+        cols = ["variant", "lag", "run", "market_id", "t", "side", "price", "fee", "size", "won", "pnl", "p0", "fair"]
+        pd.concat(rows, ignore_index=True)[cols].to_csv(a.trades, index=False)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
