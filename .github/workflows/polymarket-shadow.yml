@@ -60,6 +60,7 @@ jobs:
           python latency.py "$rec" --test-d --out real/latency-test-d.md || true
           python latency.py "$rec" --test-f --out real/latency-test-f.md || true
           python latency.py "$rec" --test-g --out real/latency-test-g.md || true
+          python forward_variants.py "$rec" --out real/forward-variants.md || true
           python latency.py "$rec" --diagnose-d --out real/latency-test-d-diagnose.md || true
           python latency.py "$rec" --diagnose-f --out real/latency-test-f-diagnose.md || true
 
@@ -67,7 +68,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/latency-test-* 2>/dev/null || true
+          git add real/latency-test-* real/forward-variants.md 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -q -m "research: tests C and D after run $(date -u +%m-%d\ %H:%M) UTC" \
             -m "Workflow run ${{ github.run_id }}." \
