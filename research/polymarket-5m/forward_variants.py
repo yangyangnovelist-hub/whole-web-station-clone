@@ -7,6 +7,7 @@ recordings it downloads (ROOT/<run id>/x/bundle-*/latency).
 
     python forward_variants.py ROOT [--lags 0.3 0.4] [--out real/forward-variants.md]
                                [--trades real/forward-trades.csv.gz]
+                               [--curve 0.2 0.25 0.3 0.35 0.4 0.45 0.5 --curve-out real/forward-latency-curve.md]
 
 --trades also writes every trade (variant, lag, market slug, trigger time, side, price, won, pnl),
 so the markets can be matched one by one against another recorder of the same markets.
@@ -15,6 +16,11 @@ so the markets can be matched one by one against another recorder of the same ma
 its side, 2 for later ones on the other side (latency.opp_weights; at 0.4 s from I_SINCE on, the
 H row is test I's rule); their standard error is clustered by market and p is the one-sided
 normal p (latency.clustered), not the fair-price simulation of the other rows.
+
+--curve: G's first trade, H buying every fill and H with opposite adds at twice the size at each
+of those lags (seconds from the Binance print's exchange time to the fill, the 150 ms taker hold
+included), all with standard errors clustered by market: what each 50 ms of latency is worth on
+the GitHub books, and the lag past which a trade is no longer worth sending.
 """
 import argparse
 from pathlib import Path
@@ -34,11 +40,13 @@ VARIANTS = {
 }
 
 
-def run(root, lag):
+def run(root, lag, names=None):
     dirs = lt._latency_dirs([root], lt.G_COINS)
     kw = dict(lag=lag, theta=lt.G_THETA, z0=lt.G_Z0, tau_lo=lt.G_TAU_LO)
     out = {}
     for name, (extra, keys) in VARIANTS.items():
+        if names is not None and name not in names:
+            continue
         t = lt._per_recording(dirs, lt.G_SINCE, lt.G_SPOT,
                               lambda mk, sp, sg, bk, e=extra: lt.gated_trades(mk, sp, sg, bk, **kw, **e), keys, [])
         out[name] = t.sort_values("t") if len(t) else t
@@ -58,6 +66,30 @@ def opp2_cell(t):
             f"{t['won'].mean():.0%} | {p:.3f}")
 
 
+CURVE = ("G 首笔（检验 G）", "H 每次都加")
+
+
+def curve_cell(t, w):
+    if not len(t):
+        return "–"
+    c, se, _, _ = lt.clustered(t, w)
+    return f"{c:+.1f}¢ ±{se:.1f}（{len(t)}）"
+
+
+def curve_lines(res):
+    L = ["# 优势随延迟怎么变（GitHub 前向录制的盘口；探索性，每轮录盘后自动更新）", "",
+         f"和检验 G 相同的录盘（{lt.G_SINCE} UTC 起的 BTC 5m 市场）、同一币安源和数据处理。延迟 = 从币安成交的交易所时间"
+         "到我们的单按当时的卖一成交，**包括 Polymarket 的 150 ms 吃单冻结**；所以 0.3 秒相当于币安成交后 150 ms 内单子已到 "
+         "Polymarket。每格：每份赚的钱 ± 按市场聚类的标准误（笔数）。", "",
+         "| 延迟 | G 首笔 | H 每次都加 | H 反向 2 倍 |", "|---|---:|---:|---:|"]
+    for lag in sorted(res):
+        g, h = res[lag].get(CURVE[0], pd.DataFrame()), res[lag].get(CURVE[1], pd.DataFrame())
+        one = lambda t: pd.Series(1.0, index=t.index)
+        L.append(f"| {lag:g} 秒 | {curve_cell(g, one(g))} | {curve_cell(h, one(h))} | "
+                 f"{curve_cell(h, lt.opp_weights(h)) if len(h) else '–'} |")
+    return L
+
+
 def cell(t, reps=20000):
     if not len(t):
         return "0 | – | – | – | –"
@@ -74,8 +106,14 @@ def main(argv=None):
     ap.add_argument("--lags", type=float, nargs="+", default=[0.3, 0.4])
     ap.add_argument("--out", default="real/forward-variants.md")
     ap.add_argument("--trades", help="also write every trade here (csv.gz)")
+    ap.add_argument("--curve", type=float, nargs="+", help="lags (s) for the edge-against-latency table")
+    ap.add_argument("--curve-out", default="real/forward-latency-curve.md")
     a = ap.parse_args(argv)
     res = {lag: run(a.root, lag) for lag in a.lags}
+    if a.curve:
+        cur = {lag: res[lag] if lag in res else run(a.root, lag, CURVE) for lag in a.curve}
+        Path(a.curve_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(a.curve_out).write_text("\n".join(curve_lines(cur)) + "\n", encoding="utf-8")
     L = ["# 检验 G 的录盘，换成 H 和加仓版本再算（探索性，不是预注册检验；每轮录盘后自动更新）", "",
          f"和检验 G 完全相同的录盘（{lt.G_SINCE} UTC 起开始的 BTC 5m 市场）、同一币安源、同样的盘口健康和断线检查，只换规则。"
          f"几个版本是一起看的，最好的那个有挑选偏差；正式判定是检验 G 的 {lt.G_N} 笔和检验 I"

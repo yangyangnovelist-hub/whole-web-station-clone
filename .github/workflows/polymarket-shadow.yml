@@ -61,7 +61,8 @@ jobs:
           python latency.py "$rec" --test-f --out real/latency-test-f.md || true
           python latency.py "$rec" --test-g --out real/latency-test-g.md || true
           python latency.py "$rec" --test-i --out real/latency-test-i.md || true
-          python forward_variants.py "$rec" --out real/forward-variants.md --trades real/forward-trades.csv.gz || true
+          python forward_variants.py "$rec" --out real/forward-variants.md --trades real/forward-trades.csv.gz \
+            --curve 0.2 0.25 0.3 0.35 0.4 0.45 0.5 --curve-out real/forward-latency-curve.md || true
           python latency.py "$rec" --diagnose-d --out real/latency-test-d-diagnose.md || true
           python latency.py "$rec" --diagnose-f --out real/latency-test-f-diagnose.md || true
 
@@ -69,7 +70,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/latency-test-* real/forward-variants.md real/forward-trades.csv.gz 2>/dev/null || true
+          # one missing file must not keep the others out (git add fails on a missing pathspec)
+          for f in real/latency-test-* real/forward-variants.md real/forward-trades.csv.gz real/forward-latency-curve.md; do
+            if [ -e "$f" ]; then git add "$f"; fi
+          done
           git diff --cached --quiet && exit 0
           git commit -q -m "research: tests C and D after run $(date -u +%m-%d\ %H:%M) UTC" \
             -m "Workflow run ${{ github.run_id }}." \

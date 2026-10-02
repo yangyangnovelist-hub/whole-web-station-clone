@@ -403,7 +403,11 @@ def test_forward_variants_report_the_opposite_side_rows(export, tmp_path, monkey
     (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
     monkeypatch.setattr(lt, "G_SINCE", "2026-09-01")
     out, trades = tmp_path / "fv.md", tmp_path / "fv.csv.gz"
-    fv.main([str(tmp_path / "rec"), "--out", str(out), "--trades", str(trades)])
+    curve = tmp_path / "curve.md"
+    fv.main([str(tmp_path / "rec"), "--out", str(out), "--trades", str(trades),
+             "--curve", "0.3", "0.45", "--curve-out", str(curve)])
+    c = curve.read_text()
+    assert f"| 0.3 秒 | +" in c and f"（{N}） |" in c and "| 0.45 秒 |" in c
     text = out.read_text()
     assert f"| H 反向 2 倍（检验 I 的规则） | 0.4 秒 | {N} |" in text and f"| H 每次都加 | 0.4 秒 | {N} |" in text
     t = pd.read_csv(trades)
