@@ -47,7 +47,7 @@
       ],
       "priority": 3,
       "passes": false,
-      "notes": ""
+      "notes": "The one-day raw H audit is complete, but the standard forward artifacts still omit bookTicker, per-message dual-token L2, and connection epochs. Continuous independent accumulation therefore remains pending until the recorder and artifact contract carry those fields."
     },
     {
       "id": "US-004",
@@ -63,7 +63,7 @@
       ],
       "priority": 4,
       "passes": false,
-      "notes": "Active mechanism repair frozen 2026-10-03T18:44:39Z: detect a one-sided partial top-ask withdrawal at an unchanged price, exclude taker-consumed size, and FAK only the remaining old-price shares. Primary current-regime replay is 200 ms signal-to-match (150 ms venue hold plus warm path), with 170/250/300/400 ms sensitivity. Binance is label-only: measure whether the cancel leads a same-direction 2-sigma jump within 500 ms. Historical A/B/C is a mechanism audit; any pass must be frozen and validated on later per-message books before live use."
+      "notes": "Partial-cancel remains rejected on the completed 67-day audit. The strict frozen H audit is also complete on the only raw archive with bookTicker plus per-message dual-token L2: about three hours on one UTC day, 34 immutable bookTicker-first signals, one decision-time send candidate, and zero qualifying fills at 300/350/400/500 ms when a fill requires at least five shares on the direct token ladder at the frozen limit. At every delay, 30 signals had ask above limit, three had no valid limit, and the sole send lacked five surviving shares; EV/share and clustered CI are undefined, PnL is $0, and exact p=1. This audit is deliberately conservative and is not the full deployed retry path: it excludes trade fallback, retries after no-send/kill, mirrored liquidity, and sub-five-share partial fills. It is audit-only, not paper-gate eligible, and H is not promoted."
     },
     {
       "id": "US-005",
@@ -79,7 +79,7 @@
       ],
       "priority": 5,
       "passes": false,
-      "notes": ""
+      "notes": "The authorised capped H fillability pilot completed and auto-halted: 10 FAK sends, 1 fill (10%), 9 venue kills, no reverse-2x opportunity, no unresolved/open order, and realised PnL +$3.149919740025 from the single winning fill. This is execution evidence only, not a passed alpha gate; recorded trial_edge was null, and the completed conservative raw replay produced no qualifying five-share fill. Production HALT is present and the service is stopped."
     }
   ]
 }
