@@ -1,0 +1,61 @@
+name: polymarket-crossvenue120-fit
+
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths:
+      - .github/workflows/polymarket-crossvenue120-fit.yml
+  workflow_dispatch:
+    inputs:
+      extraction_run_id:
+        description: Successful polymarket-crossvenue120 run containing four public shards
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  fit-public:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Causality, execution, and bundle tests
+        run: python -m pytest -p no:cacheprovider test_crossvenue120.py
+      - name: Download public shards inside GitHub
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.extraction_run_id }}
+          pattern: crossvenue120-*
+          path: ${{ runner.temp }}/crossvenue120-public
+      - name: Fit A/B and evaluate locked public C
+        shell: bash
+        run: |
+          mapfile -t shards < <(find "$RUNNER_TEMP/crossvenue120-public" -type f -name '*.parquet' | sort)
+          test "${#shards[@]}" -eq 4
+          public_args=()
+          for shard in "${shards[@]}"; do
+            public_args+=(--public "$shard")
+          done
+          python crossvenue120.py fit-public \
+            "${public_args[@]}" \
+            --bundle-out "$RUNNER_TEMP/crossvenue120-public.joblib"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crossvenue120-public-model
+          path: ${{ runner.temp }}/crossvenue120-public.joblib
+          if-no-files-found: error
+          retention-days: 3
