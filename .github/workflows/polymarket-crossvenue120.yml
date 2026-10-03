@@ -1,0 +1,76 @@
+name: polymarket-crossvenue120
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: One-day integration check or the full May-August extraction
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, full]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - id: plan
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          if [ "$SCOPE" = full ]; then
+            echo 'shards=[0,1,2,3]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'shards=[0]' >> "$GITHUB_OUTPUT"
+          fi
+
+  extract:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Causality and execution tests
+        run: python -m pytest -p no:cacheprovider test_crossvenue120.py
+      - name: Extract causal candidates
+        env:
+          SCOPE: ${{ inputs.scope }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          extra=()
+          total=4
+          if [ "$SCOPE" = smoke ]; then
+            extra=(--start 2026-08-19 --end 2026-08-19)
+            total=1
+          fi
+          python crossvenue120.py extract-public \
+            --shard "$SHARD/$total" \
+            --workdir "$RUNNER_TEMP/crossvenue120" \
+            --out "$RUNNER_TEMP/crossvenue120-$SHARD.parquet" \
+            "${extra[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crossvenue120-${{ matrix.shard }}
+          path: ${{ runner.temp }}/crossvenue120-${{ matrix.shard }}.parquet
+          if-no-files-found: error
+          retention-days: 3
