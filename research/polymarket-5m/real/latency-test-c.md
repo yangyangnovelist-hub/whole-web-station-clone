@@ -4,7 +4,7 @@
 
 | 币种 | 录制段 | 触发（按 L = 检验值） |
 |---|---:|---:|
-| btc | 13 | 587 |
+| btc | 14 | 626 |
 
 录制段备注（跳过的和断线检查）：
 
@@ -14,17 +14,18 @@
 - btc 37002779006: 3 candidates dropped because the CLOB socket closed between the quote and the order (107 disconnects in the recording; test C counts its judged lag only)
 - btc 37041041140: 4 candidates dropped because the CLOB socket closed between the quote and the order (70 disconnects in the recording; test C counts its judged lag only)
 - btc 37075141917: 5 candidates dropped because the CLOB socket closed between the quote and the order (80 disconnects in the recording; test C counts its judged lag only)
+- btc 37095301195: 10 candidates dropped because the CLOB socket closed between the quote and the order (76 disconnects in the recording; test C counts its judged lag only)
 
 | L | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |
 |---:|---|---|---|---|---|---|
-| 0 秒 | 591 | 57.4% | 0.549 | +1.14¢ | 0.2798 | 86 |
-| 0.1 秒 | 589 | 57.4% | 0.559 | +0.21¢ | 0.4769 | 60 |
-| 0.2 秒 | 587 | 57.4% | 0.571 | -0.99¢ | 1.0000 | 53 |
-| 0.3 秒 | 587 | 57.4% | 0.586 | -2.48¢ | 1.0000 | 75 |
-| 0.4 秒 | 586 | 57.3% | 0.594 | -3.35¢ | 1.0000 | 100 |
-| 0.5 秒 | 585 | 57.3% | 0.597 | -3.75¢ | 1.0000 | 148 |
-| 1 秒 | 582 | 57.0% | 0.599 | -4.12¢ | 1.0000 | 284 |
-| 2 秒 | 579 | 57.2% | 0.597 | -3.78¢ | 1.0000 | 381 |
-| 5 秒 | 578 | 57.1% | 0.590 | -3.13¢ | 1.0000 | 379 |
+| 0 秒 | 633 | 58.0% | 0.556 | +1.06¢ | 0.2889 | 86 |
+| 0.1 秒 | 629 | 58.0% | 0.567 | +0.07¢ | 0.5050 | 60 |
+| 0.2 秒 | 626 | 58.1% | 0.579 | -1.06¢ | 1.0000 | 53 |
+| 0.3 秒 | 626 | 58.1% | 0.594 | -2.52¢ | 1.0000 | 74 |
+| 0.4 秒 | 625 | 58.1% | 0.602 | -3.37¢ | 1.0000 | 98 |
+| 0.5 秒 | 624 | 58.0% | 0.605 | -3.79¢ | 1.0000 | 147 |
+| 1 秒 | 620 | 57.7% | 0.607 | -4.18¢ | 1.0000 | 290 |
+| 2 秒 | 617 | 57.9% | 0.605 | -3.87¢ | 1.0000 | 373 |
+| 5 秒 | 615 | 57.7% | 0.597 | -3.22¢ | 1.0000 | 349 |
 
-检验 C（前 1,500 笔）：目前 587 笔，不到 1,500 笔，不判定。
+检验 C（前 1,500 笔）：目前 626 笔，不到 1,500 笔，不判定。
