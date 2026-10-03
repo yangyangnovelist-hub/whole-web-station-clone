@@ -17,6 +17,10 @@ Every delayed-depth day was positive. Adding 450 ms to the execution window redu
 
 The exact fair-price test has not crossed the frozen 1% threshold. The first 100 post-freeze persistent-depth fills, spanning at least seven days, are judged once. They must have both a positive one-sided 99% day-cluster lower bound and exact p below 0.01. Real exchange fills are then required separately.
 
+## Post-freeze historical audit (not counted toward the gate)
+
+The independent September 8 sample was rechecked against its full-depth snapshots after the strategy was frozen. Of 15 quotes that remained reachable at the fixed limit throughout the 150–350 ms window, 14 also had at least five executable shares throughout; all 14 won, for +7.77¢ per share after fees. Minimum executable depth was 19 shares and median depth was 505 shares. The one failed candidate is treated as unfilled. This removes the snapshot-capacity concern but, because the audit was performed after parameter selection and covers only one day, none of these observations count toward the fresh-forward stopping rule.
+
 ## Why the earlier option model was rejected
 
 Using a Binance-derived opening average made `Asian180` appear to earn tens of cents per share. Replacing that proxy with each market's official Chainlink `priceToBeat` reduced the 150–350 ms result to +0.22¢ per share (p=0.48), and a further 200 ms delay made it negative. The apparent edge was an oracle-basis measurement error, not an implied-volatility opportunity.
