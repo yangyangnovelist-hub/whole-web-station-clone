@@ -2,5 +2,5 @@
 
 Completed: US-001 — frozen 5-second momentum replay implementation and adversarial fixes.
 Completed: US-002 — all retained eligible recordings replayed; zoo100 #27 rejected at 300/350/400/500 ms (400 ms: 396 fills, -1.19¢/share, exact p = 1).
-Active: US-003 — verify the continuous paper workflow appends first-observation evidence idempotently; then proceed directly to US-004 residual-alpha families.
+Active: US-004 — targeted repair of executable G/H alpha: use the first maker's partial ask withdrawal as an earlier trigger to hit remaining slow quotes. Rule and 200 ms primary budget froze at 2026-10-03T18:44:39Z; historical A/B/C mechanism replay dispatched. US-003 continuous accumulation remains pending after this user-prioritized audit.
 Safety: paper-only; production HALT remains in force.

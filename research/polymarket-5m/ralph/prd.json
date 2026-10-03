@@ -63,7 +63,7 @@
       ],
       "priority": 4,
       "passes": false,
-      "notes": ""
+      "notes": "Active mechanism repair frozen 2026-10-03T18:44:39Z: detect a one-sided partial top-ask withdrawal at an unchanged price, exclude taker-consumed size, and FAK only the remaining old-price shares. Primary current-regime replay is 200 ms signal-to-match (150 ms venue hold plus warm path), with 170/250/300/400 ms sensitivity. Binance is label-only: measure whether the cancel leads a same-direction 2-sigma jump within 500 ms. Historical A/B/C is a mechanism audit; any pass must be frozen and validated on later per-message books before live use."
     },
     {
       "id": "US-005",

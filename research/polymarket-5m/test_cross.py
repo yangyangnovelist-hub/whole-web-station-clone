@@ -368,6 +368,47 @@ def test_follow_copies_large_takers_within_a_cent():
     assert cross.follow_trades(dust, mkts, trades.iloc[1:]).empty  # fewer than 5 shares at the ask
 
 
+def test_partial_cancel_leads_a_binance_jump_and_hits_the_remaining_quote():
+    """One Up maker removes 60 of 100 shares without a trade while 40 remain at the same ask.
+    A later Binance jump is not yet visible at the signal; a FAK with a 200 ms total match delay
+    can still buy the slow maker at the old price. A taker-consumed drop is not a cancel signal."""
+    start, signal_t = E - 300_000, E - 100_000
+    ts = np.arange(start, E, 100)
+    up_size = 20.0 + np.arange(len(ts)) % 3
+    up_size[ts == signal_t - 100] = 100.0
+    up_size[(ts >= signal_t) & (ts < signal_t + 400)] = 40.0
+    feat = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
+                         "up_best_bid": 0.49, "up_best_ask": 0.50, "down_best_bid": 0.49,
+                         "down_best_ask": 0.51, "up_ask_size": up_size, "down_ask_size": 30.0,
+                         "up_bid_size": 10.0, "down_bid_size": 10.0})
+    mkts = pd.DataFrame({"market_id": ["m5"], "start": [start], "end": [E], "k": [100.0],
+                         "up_won": [1.0], "horizon": [5], "up_token": ["u"], "down_token": ["d"]})
+    rng = np.random.default_rng(7)
+    tt = np.arange(E - 1_200_000, E, 50)
+    price = 80_000 * np.exp(np.cumsum(rng.normal(0, 1e-7, len(tt))))
+    jump_trade = signal_t + 100
+    price[tt >= jump_trade] *= 1.004
+    binance = pd.DataFrame({"trade_ts_ms": tt, "recv_ts_ms": tt + 10, "price": price})
+    empty = pd.DataFrame(columns=["recv_ts_ms", "instrument", "price", "size", "taker_side"])
+
+    got = cross.cancel_lead_signals(feat, mkts, binance, empty, lags=(200,), jump_z=6.0)
+    row = got.loc[got["signal_t"] == signal_t].iloc[0]
+    assert row["side"] == "Up" and row["removed"] == pytest.approx(60.0)
+    assert row["jump_lead_ms"] == pytest.approx(110.0) and row["jump_same_side"] == 1.0
+    assert row["price_200"] == pytest.approx(0.50)
+    assert row["pnl_200"] == pytest.approx(1 - 0.50 - 0.07 * 0.50 * 0.50)
+
+    consumed = pd.DataFrame({"recv_ts_ms": [signal_t], "instrument": ["u"], "price": [0.50],
+                             "size": [60.0], "taker_side": ["buy"]})
+    blocked = cross.cancel_lead_signals(feat, mkts, binance, consumed, lags=(200,), jump_z=6.0)
+    assert signal_t not in set(blocked.get("signal_t", []))
+
+    frozen = feat.copy()
+    frozen.loc[ts >= signal_t, "up_ask_size"] = 40.0
+    stale = cross.cancel_lead_signals(frozen, mkts, binance, empty, lags=(200,), jump_z=6.0)
+    assert np.isnan(stale.loc[stale["signal_t"] == signal_t, "price_200"].iloc[0])
+
+
 def test_gated_trades_measure_other_takers():
     """Other takers buy 40 Up at 0.50 between the print's receipt and our order (300 ms), and 30
     more in the 300 ms after it; a 0.60 buy and a Down buy do not count."""

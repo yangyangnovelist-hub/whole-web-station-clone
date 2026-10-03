@@ -1401,6 +1401,7 @@ def fade_trades(feat, mkts, binance, jumps=FADE_JUMPS, thetas=FADE_THETAS, lags=
 
 
 FOLLOW_SIZES = (100, 500, 2000)
+CANCEL_LAGS = (170, 200, 250, 300, 400)
 
 
 def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lags=GATE_LAGS + (1000,), slip=0.01, min_shares=5.0,
@@ -1464,6 +1465,205 @@ def follow_trades(feat, mkts, trades, sizes=FOLLOW_SIZES, lags=GATE_LAGS + (1000
                              won - px - fee))
     return pd.DataFrame(rows, columns=["market_id", "lag", "min_usdc", "t", "tau", "side", "notional", "implied",
                                        "price", "size", "fee", "won", "pnl"])
+
+
+def cancel_lead_signals(feat, mkts, binance, trades, lags=CANCEL_LAGS, jump_z=2.0, jump_horizon_ms=500,
+                        tau_hi=240, tau_lo=15, max_remaining_ratio=0.5, min_removed=5.0, min_shares=5.0,
+                        signal_gap_ms=2000):
+    """Use a partial top-ask withdrawal as an early directional signal.
+
+    A signal occurs when at least ``min_removed`` shares disappear from one side at an unchanged
+    ask, no more than ``max_remaining_ratio`` of that side remains, at least ``min_shares`` remain,
+    the opposite ask is stable, and no taker buy explains the disappearance.  The disappearing
+    side is bought with a FAK limit at the still-visible ask.  ``lags`` are total signal-to-match
+    times, so 170--200 ms model the current 150 ms taker hold plus a warm network path.
+
+    Binance is never used to create or price the order.  It is only an after-the-fact mechanism
+    label: whether a >= ``jump_z`` sigma Binance move first arrived in the same direction within
+    ``jump_horizon_ms`` after the withdrawal, provided no such jump arrived in the prior 500 ms.
+    """
+    import numpy as np
+    import pandas as pd
+    if feat.empty or binance.empty:
+        return pd.DataFrame()
+
+    rt = binance["recv_ts_ms"].to_numpy()
+    tt = binance["trade_ts_ms"].to_numpy()
+    lp = np.log(binance["price"].to_numpy())
+    order = np.argsort(tt, kind="stable")
+    tt_s, lp_s = tt[order], lp[order]
+    last = pd.Series(lp_s, index=tt_s // 1000).groupby(level=0).last()
+    grid = last.reindex(range(int(last.index[0]), int(last.index[-1]) + 1)).ffill(limit=10)
+    sigma = grid.diff().rolling(600, min_periods=300).std()
+    ref = np.searchsorted(tt_s, tt - 1000, "right") - 1
+    valid = (ref >= 0) & (tt - tt_s[np.maximum(ref, 0)] <= 5000)
+    sg = sigma.reindex(tt // 1000 - 1).to_numpy()
+    with np.errstate(invalid="ignore"):
+        is_jump = valid & (np.abs(lp - lp_s[np.maximum(ref, 0)]) > jump_z * sg)
+    jump_t, jump_up = rt[is_jump], lp[is_jump] > lp_s[np.maximum(ref[is_jump], 0)]
+    jump_order = np.argsort(jump_t, kind="stable")
+    jump_t, jump_up = jump_t[jump_order], jump_up[jump_order]
+
+    buys = {}
+    if trades is not None and len(trades):
+        tb = trades[trades["taker_side"] == "buy"]
+        buys = {str(tok): (g["recv_ts_ms"].to_numpy(), g["price"].to_numpy(float))
+                for tok, g in tb.groupby("instrument")}
+
+    def consumed(tok, lo, hi, ask):
+        if tok not in buys:
+            return False
+        times, prices = buys[tok]
+        a, b = np.searchsorted(times, [lo, hi], "right")
+        return bool(np.any(prices[a:b] <= ask + 1e-9))
+
+    m5 = mkts[(mkts["horizon"] == 5) & mkts["up_won"].notna()].set_index("market_id")
+    by = {mid: g.drop_duplicates("timestamp_ms").sort_values("timestamp_ms")
+          for mid, g in feat[feat["market_id"].isin(m5.index)].groupby("market_id")}
+    rows = []
+    for mid, mk in m5.iterrows():
+        if mid not in by:
+            continue
+        f = by[mid]
+        fts = f["timestamp_ms"].to_numpy()
+        ua = f["up_best_ask"].to_numpy(float)
+        da = f["down_best_ask"].to_numpy(float)
+        uas = f["up_ask_size"].to_numpy(float)
+        das = f["down_ask_size"].to_numpy(float)
+        sane, changes = book_health(f)
+        tau = (mk["end"] - fts[1:]) / 1000
+        base = (np.diff(fts) <= 250) & (tau >= tau_lo) & (tau <= tau_hi) & sane[1:]
+
+        def partial_pull(ask, size, other_ask, other_size):
+            removed = size[:-1] - size[1:]
+            other_removed = other_size[:-1] - other_size[1:]
+            same_ask = np.isfinite(ask[:-1]) & np.isfinite(ask[1:]) & (np.abs(ask[1:] - ask[:-1]) < 1e-9)
+            other_stable = (np.isfinite(other_ask[:-1]) & np.isfinite(other_ask[1:])
+                            & (np.abs(other_ask[1:] - other_ask[:-1]) < 1e-9)
+                            & np.isfinite(other_size[:-1]) & np.isfinite(other_size[1:])
+                            & ((other_removed < min_removed) | (other_size[1:] > max_remaining_ratio * other_size[:-1])))
+            return (base & same_ask & np.isfinite(size[:-1]) & np.isfinite(size[1:]) & (size[1:] >= min_shares)
+                    & (removed >= min_removed) & (size[1:] <= max_remaining_ratio * size[:-1]) & other_stable)
+
+        up_pull = partial_pull(ua, uas, da, das)
+        down_pull = partial_pull(da, das, ua, uas)
+        last_signal = -np.inf
+        for i in np.flatnonzero(up_pull ^ down_pull) + 1:
+            t = int(fts[i])
+            tau = (mk["end"] - t) / 1000
+            if t - last_signal < signal_gap_ms:
+                continue
+            if up_pull[i - 1]:
+                side, ask, size, tok = "Up", ua, uas, str(mk.get("up_token"))
+            else:
+                side, ask, size, tok = "Down", da, das, str(mk.get("down_token"))
+            if consumed(tok, int(fts[i - 1]), t, ask[i]):
+                continue
+            limit_price = float(ask[i])
+            before_size, remaining_size = float(size[i - 1]), float(size[i])
+            removed = before_size - remaining_size
+            last_signal = t
+            next_jump = int(np.searchsorted(jump_t, t, "right"))
+            prev_jump = next_jump - 1
+            prior_age = t - jump_t[prev_jump] if prev_jump >= 0 else np.nan
+            clean_lead = not np.isfinite(prior_age) or prior_age > 500
+            if clean_lead and next_jump < len(jump_t) and jump_t[next_jump] <= t + jump_horizon_ms:
+                lead_ms = float(jump_t[next_jump] - t)
+                same_side = float(bool(jump_up[next_jump]) == (side == "Up"))
+            else:
+                lead_ms, same_side = np.nan, np.nan
+            won = float(mk["up_won"] == (1.0 if side == "Up" else 0.0))
+            row = {"market_id": mid, "signal_t": t, "tau": tau, "side": side, "limit_price": limit_price,
+                   "size_before": before_size, "size_remaining": remaining_size, "removed": removed,
+                   "removed_fraction": removed / before_size, "prior_jump_age_ms": prior_age,
+                   "jump_lead_ms": lead_ms, "jump_same_side": same_side, "won": won}
+            ask, size = (ua, uas) if side == "Up" else (da, das)
+            for lag in lags:
+                k = int(np.searchsorted(fts, t + lag, "left"))
+                price = np.nan
+                feed_live = k < len(f) and changed_near(changes, fts[k], fts[k] - t + 1, HEALTH_ALIVE[1])
+                if (feed_live and fts[k] <= t + lag + 100 and sane[k] and np.isfinite(ask[k])
+                        and ask[k] <= limit_price + 1e-9 and np.isfinite(size[k]) and size[k] >= min_shares):
+                    price = float(ask[k])
+                fee = float(taker_rate(fts[k])) * price * (1 - price) if np.isfinite(price) else np.nan
+                row[f"match_t_{lag}"] = int(fts[k]) if np.isfinite(price) else np.nan
+                row[f"price_{lag}"] = price
+                row[f"size_{lag}"] = float(size[k]) if np.isfinite(price) else np.nan
+                row[f"fee_{lag}"] = fee
+                row[f"pnl_{lag}"] = won - price - fee if np.isfinite(price) else np.nan
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def cancel_lead(workdir, out, days=None, reps=5000):
+    """Historical mechanism audit for the partial-cancel trigger; it never places orders."""
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import binomtest
+    import binary as bo
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    arcs = archives(fetch("MANIFEST.txt").decode())
+    if days:
+        arcs = arcs[-int(days):]
+    parts = []
+    for name, _ in arcs:
+        try:
+            local = fetch(name, workdir / name)
+            feat, mk, rs = read_day(local)
+            t = cancel_lead_signals(feat, market_table(mk, rs), read_binance(local), read_poly_trades(local))
+            Path(local).unlink()
+            t["day"] = name[15:25]
+            parts.append(t)
+            print(f"{name}: {len(t):,} partial-cancel signals", flush=True)
+        except Exception:
+            import traceback
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
+    L = [f"# 首批撤单领先信号（{DS}，BTC 5m，100 ms 盘口）", "",
+         "固定机制：一侧卖一价格不变、至少撤掉 5 份且剩余不超过原量 50%，仍有至少 5 份；另一侧没有同级撤量；"
+         "同一 100 ms 内没有 taker 买单解释这次减少。把这次部分撤单视为该方向的领先信号，FAK 限价固定为撤单后仍显示的卖一，"
+         "只买尚未撤走的慢报价。每个市场信号至少间隔 2 秒。币安只用于事后检查 500 ms 内是否出现同向 2σ 跳动，不参与下单。", "",
+         "主执行口径是信号后 200 ms 撮合（150 ms 固定等待 + warm 路径与处理）；170/250/300/400 ms 只做敏感性。"
+         "这是历史机制审计，不是可部署结论；即使通过，也必须冻结后在新的逐条盘口上前向验证。", ""]
+    if df.empty:
+        L.append("没有符合条件的信号。")
+    else:
+        df["period"] = np.select([df["day"] <= "2026-07-15", df["day"] <= "2026-08-16"],
+                                 ["A 5/25–7/15", "B 7/16–8/16"], "C 8/17–8/29")
+        L += ["## 是否领先币安", "", "| 时段 | 信号 | 500 ms 内币安跳动 | 同向率 | 同向二项 p | 同向时领先中位 |",
+              "|---|---:|---:|---:|---:|---:|"]
+        for period, g in df.groupby("period"):
+            j = g.dropna(subset=["jump_same_side"])
+            same = int(j["jump_same_side"].sum())
+            pv = float(binomtest(same, len(j), 0.5, alternative="greater").pvalue) if len(j) else 1.0
+            med = j.loc[j["jump_same_side"] == 1, "jump_lead_ms"].median()
+            L.append(f"| {period} | {len(g):,} | {len(j):,} ({len(j) / len(g):.1%}) | "
+                     f"{same / len(j):.1%} | {pv:.4f} | {med:.0f} ms |" if len(j) else
+                     f"| {period} | {len(g):,} | 0 | – | 1.0000 | – |")
+        L += ["", "## 剩余慢报价能否成交并赚钱", "", "每个时段、每个延迟只保留每个市场第一次可成交的信号。", "",
+              "| 时段 | 信号→撮合 | 信号 | 成交市场 | 成交率 | EV/份 | p | 均价 |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|"]
+        gate = {}
+        for period, g in df.groupby("period"):
+            for lag in CANCEL_LAGS:
+                x = g.dropna(subset=[f"price_{lag}"]).sort_values("signal_t").drop_duplicates("market_id")
+                ev = x[f"pnl_{lag}"].mean() if len(x) else np.nan
+                pv = bo.fair_price_pvalue(x[f"pnl_{lag}"].to_numpy(),
+                                          (x[f"price_{lag}"] + x[f"fee_{lag}"]).to_numpy(), sims=reps) \
+                    if len(x) >= 10 and ev > 0 else 1.0
+                L.append(f"| {period} | {lag} ms | {len(g):,} | {len(x):,} | {len(x) / len(g):.1%} | "
+                         f"{100 * ev:+.2f}¢ | {pv:.4f} | {x[f'price_{lag}'].mean():.3f} |" if len(x) else
+                         f"| {period} | {lag} ms | {len(g):,} | 0 | 0.0% | – | 1.0000 | – |")
+                gate[(period, lag)] = (len(x), ev, pv)
+        b = gate.get(("B 7/16–8/16", 200), (0, np.nan, 1.0))
+        c = gate.get(("C 8/17–8/29", 200), (0, np.nan, 1.0))
+        passed = b[0] >= 100 and c[0] >= 100 and b[1] > 0 and c[1] > 0 and c[2] < 0.05
+        L += ["", f"历史机制门：{'通过' if passed else '未通过'}。要求 200 ms 在 B、C 各至少 100 个成交市场且 EV 都为正，C 的精确 p < 0.05。"
+              "通过只允许冻结前向检验，不允许直接实盘。"]
+    Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    print("\n".join(L))
 
 
 def _period_table(df, keys, reps, title_cols):
@@ -2306,6 +2506,7 @@ def main(argv=None):
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
                           ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md"),
                           ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md"),
+                          ("cancel", "real/cross-cancel-lead.md"),
                           ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md"),
                           ("leadlag", "real/cross-leadlag-eth.md")):
         p = sub.add_parser(name)
@@ -2360,6 +2561,8 @@ def main(argv=None):
         jitter(a.workdir, a.out, a.days, gap_ms=a.gap_ms, shard=a.shard)
     elif a.cmd in ("fade", "follow"):
         fadefollow(a.cmd, a.workdir, a.out, a.days)
+    elif a.cmd == "cancel":
+        cancel_lead(a.workdir, a.out, a.days)
     else:
         stale(a.workdir, a.out, a.days)
 

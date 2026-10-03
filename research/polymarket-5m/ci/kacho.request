@@ -8,5 +8,6 @@
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | momentum5s (frozen zoo100 #27 on every retained post-freeze BTC recording)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-10-03 replay frozen five-second momentum on all unseen forward books
-mode: momentum5s
+requested: 2026-10-03T18:44:39Z audit partial-cancel lead signal before Binance jumps
+mode: cross
+cross: cancel
