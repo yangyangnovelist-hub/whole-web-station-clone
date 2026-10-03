@@ -942,11 +942,11 @@ def fit_public_bundle(public_paths: list[str]) -> dict:
         "public_fills": public_fills,
         "split": {
             "train_min": str(train["day"].min()), "train_max": str(train["day"].max()),
-            "train_rows": int(len(train)),
+            "train_rows": int(len(train)), "train_days": int(train["day"].nunique()),
             "validation_min": str(validation["day"].min()), "validation_max": str(validation["day"].max()),
-            "validation_rows": int(len(validation)),
+            "validation_rows": int(len(validation)), "validation_days": int(validation["day"].nunique()),
             "public_min": str(public_locked["day"].min()), "public_max": str(public_locked["day"].max()),
-            "public_rows": int(len(public_locked)),
+            "public_rows": int(len(public_locked)), "public_days": int(public_locked["day"].nunique()),
         },
     }
 
@@ -1051,9 +1051,9 @@ def _write_combined_report(
         "",
         "## 训练、选参和固定策略",
         "",
-        f"- 训练 A：{split['train_min']}–{split['train_max']}，{split['train_rows']:,} 个候选。",
-        f"- 选参 B：{split['validation_min']}–{split['validation_max']}，{split['validation_rows']:,} 个候选；只在这里选择一次门槛。",
-        f"- 锁定 C：{split['public_min']}–{split['public_max']}，{split['public_rows']:,} 个候选；九月另有 {len(september):,} 个候选。",
+        f"- 训练 A：{split['train_min']}–{split['train_max']}，{split.get('train_days', '未记录')} 个覆盖日，{split['train_rows']:,} 个候选。",
+        f"- 选参 B：{split['validation_min']}–{split['validation_max']}，{split.get('validation_days', '未记录')} 个覆盖日，{split['validation_rows']:,} 个候选；只在这里选择一次门槛。",
+        f"- 锁定 C：{split['public_min']}–{split['public_max']}，{split.get('public_days', '未记录')} 个覆盖日，{split['public_rows']:,} 个候选；九月另有 {september['day'].nunique()} 个覆盖日、{len(september):,} 个候选。",
         f"- 固定门槛：跳动概率 ≥ {policy['min_jump']:.4f}，成交概率 ≥ {policy['min_fill']:.2f}，"
         f"预测净 edge ≥ {100 * policy['min_expected_edge']:.0f}¢，最多追 {100 * policy['chase']:.0f}¢。",
         f"- B 段选参结果：{policy['validation_fills']:,} 成交，净 edge {100 * policy['validation_edge']:+.2f}¢/份，最多 5 份总收益 ${policy['validation_profit_usd']:+.2f}。",
