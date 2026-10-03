@@ -75,9 +75,12 @@ jobs:
             b="$RUNNER_TEMP/paper/bundle-$c"
             echo "== $c"
             python recording.py "$RUNNER_TEMP/paper" --coin "$c" --out "$b" || continue
-            python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
-              --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv" || continue
-            python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
+            if python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
+              --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv"; then
+              python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
+            else
+              echo "$b: strategy_zoo failed; independent frozen tests still run"
+            fi
             if [ "$c" = btc ] && [ -d "$b/latency" ]; then
               python theta30.py --latency-dir "$b/latency" \
                 --out "$RUNNER_TEMP/theta30-new.csv" \
@@ -88,6 +91,19 @@ jobs:
           done
           python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"
           python forward.py report
+
+      - name: Frozen five-second momentum paper test
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          d="$RUNNER_TEMP/paper/bundle-btc/latency"
+          [ -d "$d" ] || { echo "BTC latency bundle missing"; exit 1; }
+          seed=()
+          [ -s real/momentum5s-backfill.csv ] && seed=(--seed real/momentum5s-backfill.csv)
+          python momentum5s.py --latency-dir "$d" "${seed[@]}" \
+            --manifest forward/momentum5s-freeze.json \
+            --append forward/momentum5s.csv \
+            --verdict-out forward/momentum5s-verdict.json \
+            --out forward/momentum5s.md
 
       - name: Keep the converted bundles (the raw messages run to gigabytes)
         if: steps.cfg.outputs.enabled == 'true'

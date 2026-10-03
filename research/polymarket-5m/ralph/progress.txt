@@ -1,0 +1,5 @@
+# Ralph progress
+
+Completed: US-001 — frozen 5-second momentum replay implementation and adversarial fixes.
+Active: US-002 — backfill every retained post-freeze GitHub recording artifact.
+Safety: paper-only; production HALT remains in force.

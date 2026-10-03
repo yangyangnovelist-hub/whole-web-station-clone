@@ -6,8 +6,7 @@
 #       | rules (rules.py: 116 executable rules on the on-chain tape, split-half holdout, candidates for --final)
 #       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
+#       | momentum5s (frozen zoo100 #27 on every retained post-freeze BTC recording)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-10-01 06:40 does BTC lead the SOL 5m markets (same study as cross-leadlag-eth)
-mode: cross
-cross: leadlag --dataset whodisidk/polymarket-sol-updown-exchange-data --out real/cross-leadlag-sol.md
-later: 2026-09-28
+requested: 2026-10-03 replay frozen five-second momentum on all unseen forward books
+mode: momentum5s

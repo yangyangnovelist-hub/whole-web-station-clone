@@ -1,0 +1,85 @@
+{
+  "project": "Polymarket BTC 5m executable alpha search",
+  "branchName": "ralph/polymarket-executable-alpha",
+  "description": "Continuously collect independent data, reject false positives, and identify a statistically significant strategy that remains profitable at executable prices and measured latency.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Replay frozen 5-second momentum candidate on unseen recordings",
+      "description": "As a researcher, I want the historically validated 5-second Binance momentum rule replayed on post-freeze live books so that its current-regime edge is measured without look-ahead.",
+      "acceptanceCriteria": [
+        "Freeze the rule from commit 86e2767: BTC only, 5-second return above 2.5 trailing sigma, first signal per market between 240 and 30 seconds remaining",
+        "Use only markets starting after 2026-10-01T06:20:50Z",
+        "Measure fills at 300, 350, 400, and 500 milliseconds with at least five shares at the executable ask, taker fees, feed-health checks, and disconnect rejection",
+        "Deduplicate markets across recording runs and emit exact fair-price p-values plus day-cluster lower bounds",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented with receipt-time completed-second signals, 300/350/400/500 ms executable asks, five-share depth, fee, disconnect checks, immutable first-observation deduplication, deterministic Poisson-binomial p-values, and a pinned stopping sample."
+    },
+    {
+      "id": "US-002",
+      "title": "Backfill all post-freeze GitHub recording artifacts",
+      "description": "As a researcher, I want every eligible archived recording replayed so that the candidate is judged on substantially more unseen data immediately.",
+      "acceptanceCriteria": [
+        "Download and replay every retained polymarket-forward artifact containing BTC markets after the freeze",
+        "Pin the first preregistered stopping sample and never recompute its verdict",
+        "Report fill count, days, EV per share, exact p-value, clustered lower bound, and latency sensitivity",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Attach candidate evaluation to continuous paper recording",
+      "description": "As a researcher, I want each new recording run to append independent evidence automatically so that the test continues without manual intervention.",
+      "acceptanceCriteria": [
+        "Every completed forward recording evaluates the frozen rule without placing orders",
+        "Accumulation is idempotent by market and preserves the first observation",
+        "The workflow notifies only on rejection, paper-gate passage, or failure",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Run the next residual-alpha strategy family",
+      "description": "As a researcher, I want a new predeclared family tested with nested walk-forward validation so that the search continues after each rejection without mistaking high nominal win rates for alpha.",
+      "acceptanceCriteria": [
+        "Condition outcomes on executable price, fees, remaining time, and latency before testing additional features",
+        "Test cross-venue spot and perpetual flow, book microprice and imbalance, TWAP path state, and maker queue adverse selection as separate families",
+        "Use chronological discovery, validation, locked holdout, family-wise error correction, and minimum five-share depth",
+        "Promote at most one frozen candidate per completed family; otherwise record a rejection",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Gate any future real-money trial",
+      "description": "As the account owner, I want live trading to remain impossible until independent paper evidence and explicit approval exist.",
+      "acceptanceCriteria": [
+        "Production HALT remains present and the live service remains stopped",
+        "No workflow contains credentials or can submit an order",
+        "A candidate requires positive net EV, one-sided 99 percent day-cluster lower bound above zero, corrected exact p below 0.01, and robustness at 400 milliseconds",
+        "Real-money activation requires a new explicit user instruction",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

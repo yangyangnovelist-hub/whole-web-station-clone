@@ -50,6 +50,7 @@ jobs:
             survey) echo "mode=survey" ;;
             replay) echo "mode=replay" ;;
             latency) echo "mode=latency" ;;
+            momentum5s) echo "mode=momentum5s" ;;
             cross) echo "mode=cross"; echo "cross=$(sed -n 's/^cross: *//p' ci/kacho.request | head -1)" ;;
             onchain|makers|rules) echo "mode=$mode"; echo "later=$(sed -n 's/^later: *//p' ci/kacho.request | head -1)" ;;
             *) echo "mode=btc" ;;
@@ -122,6 +123,33 @@ jobs:
           python latency.py "$rec" --test-f --out real/latency-test-f.md
           python latency.py "$rec" --test-g --out real/latency-test-g.md
 
+      - name: "Momentum5s: replay the frozen rule on every retained forward recording"
+        if: steps.mode.outputs.mode == 'momentum5s'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"; failed=0; expected=0; extracted=0
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.expired == false and (.name | startswith("recording-"))) | .workflow_run.id' \
+                | sort -u)
+          for id in $ids; do
+            expected=$((expected + 1))
+            gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null || { echo "recording-$id download failed"; failed=1; continue; }
+            mkdir -p "$rec/$id/x"
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'bundle-*/latency' 2>/dev/null \
+              || { echo "recording-$id latency extraction failed"; failed=1; continue; }
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'raw/*/errors.jsonl*' 2>/dev/null || true
+            rm -f "$rec/$id/raw.tgz"
+            extracted=$((extracted + 1))
+          done
+          echo "retained artifacts: $expected; extracted: $extracted"
+          [ "$failed" -eq 0 ] && [ "$expected" -eq "$extracted" ] || exit 1
+          python momentum5s.py --root "$rec" \
+            --manifest forward/momentum5s-freeze.json \
+            --csv-out real/momentum5s-backfill.csv \
+            --out real/momentum5s-backfill.md
+
       - name: "Cross: 5m / 15m / 1h markets ending together (cross.py)"
         if: steps.mode.outputs.mode == 'cross'
         run: python cross.py ${{ steps.mode.outputs.cross || 'probe' }} --workdir "$RUNNER_TEMP/cross"
@@ -159,7 +187,7 @@ jobs:
             --delay-json real/onchain-delay.json
 
       - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
-        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules' && steps.mode.outputs.mode != 'replay' && steps.mode.outputs.mode != 'latency' && steps.mode.outputs.mode != 'cross'
+        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules' && steps.mode.outputs.mode != 'replay' && steps.mode.outputs.mode != 'latency' && steps.mode.outputs.mode != 'momentum5s' && steps.mode.outputs.mode != 'cross'
         run: |
           mkdir -p "$RUNNER_TEMP/kacho"
           for c in ${{ steps.mode.outputs.coins }}; do
@@ -208,7 +236,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-* real/cross-* 2>/dev/null || true
+          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-* real/cross-* real/momentum5s-* 2>/dev/null || true
           git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
             -m "Workflow run ${{ github.run_id }}." \
             -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
