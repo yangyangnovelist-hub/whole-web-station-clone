@@ -143,14 +143,15 @@ def spot_candidate_features(
     step_ms: int = 20,
     gate_bps: float = 0.05,
     jump_bps: float = 1.0,
-    horizon_ms: int = 120,
+    min_lead_ms: int = 80,
+    horizon_ms: int = 160,
 ) -> pd.DataFrame:
     """Build event-driven, strictly causal primary/secondary venue features.
 
     With no explicit decisions, the first primary print in each ``step_ms`` bucket is considered
     and a fixed, causal recent-move gate is applied.  Labels are the first ±``jump_bps`` crossing
-    after the decision and no later than ``horizon_ms``.  The function records both venues' newest
-    consumed timestamps so extraction jobs can assert causality before writing a shard.
+    in ``[decision + min_lead, decision + horizon]`` (centred on 120 ms by default).  The function
+    records both venues' newest consumed timestamps so extraction jobs can assert causality.
     """
     if primary.empty:
         return pd.DataFrame()
@@ -196,20 +197,32 @@ def spot_candidate_features(
 
     direction = np.zeros(len(decisions), dtype=np.int8)
     jump_ts = np.full(len(decisions), np.nan)
+    jump_recv_ts = np.full(len(decisions), np.nan)
+    if "trade_ts_ms" in p:
+        source_raw = pd.to_numeric(p["trade_ts_ms"], errors="coerce").to_numpy(float)
+        source_raw = np.where(np.isfinite(source_raw), source_raw, pt)
+    else:
+        source_raw = pt.astype(float)
+    source_order = np.argsort(source_raw, kind="stable")
+    source_ts = source_raw[source_order]
+    source_px = pp[source_order]
+    source_recv = pt[source_order]
     cutoff = jump_bps / 10_000.0
     for n, (decision, anchor_i) in enumerate(zip(decisions, pi)):
-        lo = np.searchsorted(pt, decision, side="right")
-        hi = np.searchsorted(pt, decision + horizon_ms, side="right")
+        lo = np.searchsorted(source_ts, decision + min_lead_ms, side="left")
+        hi = np.searchsorted(source_ts, decision + horizon_ms, side="right")
         if lo >= hi:
             continue
-        r = np.log(pp[lo:hi] / pp[anchor_i])
+        r = np.log(source_px[lo:hi] / pp[anchor_i])
         hit = np.flatnonzero(np.abs(r) >= cutoff)
         if len(hit):
             j = lo + int(hit[0])
             direction[n] = 1 if r[hit[0]] > 0 else -1
-            jump_ts[n] = pt[j]
+            jump_ts[n] = source_ts[j]
+            jump_recv_ts[n] = source_recv[j]
     rows["jump_direction"] = direction
     rows["jump_ts_ms"] = jump_ts
+    rows["jump_recv_ts_ms"] = jump_recv_ts
     rows["jump_lead_ms"] = jump_ts - decisions
 
     if secondary is not None and not secondary.empty:
@@ -251,6 +264,82 @@ def spot_candidate_features(
 
 def taker_fee(price: float) -> float:
     return 0.07 * price * (1.0 - price)
+
+
+def max_limit_for_edge(probability: float, min_edge: float, *, tick: float = 0.01) -> float:
+    """Highest tick whose fee-adjusted expected edge is at least ``min_edge``."""
+    prices = np.arange(tick, 1.0, tick)
+    good = probability - prices - 0.07 * prices * (1.0 - prices) >= min_edge - 1e-12
+    return float(prices[np.flatnonzero(good)[-1]]) if good.any() else np.nan
+
+
+def replay_joint_predictions(
+    candidates: pd.DataFrame,
+    *,
+    min_jump: float,
+    min_fill: float,
+    min_expected_edge: float,
+    min_realizable_edge: float,
+    chase: float,
+    shares: float = 5.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Turn out-of-sample model predictions into signals and executable fills.
+
+    Selection uses predicted fields only.  The edge-capped limit is fixed at decision time; the
+    first eligible ask then either fills it or does not.  Actual outcomes enter only after fills.
+    """
+    if candidates.empty:
+        return candidates.copy(), candidates.copy()
+    frame = candidates.copy()
+    frame["predicted_edge"] = (
+        frame["p_side_win"] - frame["pred_match_ask"]
+        - 0.07 * frame["pred_match_ask"] * (1.0 - frame["pred_match_ask"])
+    )
+    eligible = frame[
+        frame["book_ok"].astype(bool)
+        & (frame["p_jump"] >= min_jump)
+        & (frame["p_fill"] >= min_fill)
+        & (frame["predicted_edge"] >= min_expected_edge)
+    ].copy()
+    if eligible.empty:
+        return eligible, eligible.copy()
+    edge_limits = np.array([
+        max_limit_for_edge(q, min_realizable_edge) for q in eligible["p_side_win"].to_numpy(float)
+    ])
+    ask0 = np.where(eligible["pred_side"].astype(str).str.lower() == "up",
+                    eligible["up_ask0"], eligible["down_ask0"]).astype(float)
+    eligible["limit_price"] = np.minimum(np.round((ask0 + chase) * 100) / 100, edge_limits)
+    eligible = eligible[np.isfinite(eligible["limit_price"])]
+    signals = (
+        eligible.sort_values(["market_id", "decision_ms"], kind="stable")
+        .drop_duplicates("market_id", keep="first")
+        .reset_index(drop=True)
+    )
+    up = signals["pred_side"].astype(str).str.lower() == "up"
+    match_ask = np.where(up, signals["match_up_ask"], signals["match_down_ask"]).astype(float)
+    match_size = np.where(up, signals["match_up_size"], signals["match_down_size"]).astype(float)
+    fill_mask = (
+        signals["match_book_ok"].astype(bool).to_numpy()
+        & np.isfinite(match_ask)
+        & (match_ask <= signals["limit_price"].to_numpy(float) + 1e-12)
+    )
+    fills = signals.loc[fill_mask].copy()
+    if fills.empty:
+        return signals, fills
+    up_filled = fills["pred_side"].astype(str).str.lower() == "up"
+    price = np.where(up_filled, fills["match_up_ask"], fills["match_down_ask"]).astype(float)
+    available = np.where(up_filled, fills["match_up_size"], fills["match_down_size"]).astype(float)
+    quantity = np.minimum(shares, np.where(np.isfinite(available), available, 0.0))
+    won = np.where(up_filled, fills["up_won"], 1.0 - fills["up_won"]).astype(float)
+    fee = 0.07 * price * (1.0 - price)
+    fills["price"] = price
+    fills["shares"] = quantity
+    fills["fee"] = fee
+    fills["won"] = won
+    fills["pnl_per_share"] = won - price - fee
+    fills["pnl_usd"] = quantity * fills["pnl_per_share"]
+    fills = fills[fills["shares"] > 0].reset_index(drop=True)
+    return signals, fills
 
 
 def _sane_books(frame: pd.DataFrame) -> np.ndarray:
@@ -465,6 +554,222 @@ def select_joint_signals(
     )
 
 
+def model_matrix(frame: pd.DataFrame, *, include_venue: bool = True) -> pd.DataFrame:
+    """Causal model inputs; labels and all post-decision execution fields are excluded by design."""
+    index = frame.index
+
+    def col(name: str, default=np.nan) -> pd.Series:
+        if name in frame:
+            return pd.to_numeric(frame[name], errors="coerce").astype(float)
+        return pd.Series(default, index=index, dtype=float)
+
+    values: dict[str, pd.Series | np.ndarray] = {
+        "last_size_log": np.log1p(col("last_size").clip(lower=0)),
+        "last_sign": col("last_sign"),
+        "interarrival_log": np.log1p(col("interarrival_ms").clip(lower=0)),
+    }
+    for window in RETURN_WINDOWS_MS:
+        values[f"ret_{window}"] = col(f"ret_{window}ms_bps")
+    for window in FLOW_WINDOWS_MS:
+        flow = col(f"flow_{window}ms")
+        volume = col(f"volume_{window}ms")
+        values[f"flow_ratio_{window}"] = flow / volume.replace(0, np.nan)
+        values[f"flow_log_{window}"] = np.sign(flow) * np.log1p(np.abs(flow))
+        values[f"volume_log_{window}"] = np.log1p(volume.clip(lower=0))
+        values[f"prints_log_{window}"] = np.log1p(col(f"prints_{window}ms").clip(lower=0))
+    if include_venue:
+        values["venue_age_log"] = np.log1p(col("venue_age_ms").clip(lower=0))
+        for window in VENUE_WINDOWS_MS:
+            values[f"venue_ret_{window}"] = col(f"venue_ret_{window}ms_bps")
+        for window in (50, 100, 250):
+            flow = col(f"venue_flow_{window}ms")
+            values[f"venue_flow_log_{window}"] = np.sign(flow) * np.log1p(np.abs(flow))
+    values.update({
+        "tau_fraction": col("tau_s") / 300.0,
+        "book_age_log": np.log1p(col("book_age_ms").clip(lower=0)),
+        "up_mid": col("up_mid0"),
+        "up_spread": col("up_spread0"),
+        "up_ask": col("up_ask0"),
+        "down_ask": col("down_ask0"),
+        "up_imbalance": col("up_imbalance0"),
+        "down_imbalance": col("down_imbalance0"),
+        "up_bid_size_log": np.log1p(col("up_bid_size0").clip(lower=0)),
+        "up_ask_size_log": np.log1p(col("up_ask_size0").clip(lower=0)),
+        "down_bid_size_log": np.log1p(col("down_bid_size0").clip(lower=0)),
+        "down_ask_size_log": np.log1p(col("down_ask_size0").clip(lower=0)),
+    })
+    return pd.DataFrame(values, index=index).replace([np.inf, -np.inf], np.nan)
+
+
+def _bounded_sample(indices: np.ndarray, maximum: int, rng: np.random.Generator) -> np.ndarray:
+    if len(indices) <= maximum:
+        return indices
+    return np.sort(rng.choice(indices, maximum, replace=False))
+
+
+def fit_joint_models(
+    frame: pd.DataFrame,
+    *,
+    include_venue: bool = True,
+    random_state: int = 120,
+) -> dict:
+    """Fit jump direction, terminal outcome, quote survival and eligible-ask models."""
+    from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
+
+    clean = frame[
+        frame["book_ok"].astype(bool)
+        & (frame["feature_max_ms"] <= frame["decision_ms"])
+    ].reset_index(drop=True)
+    if clean.empty:
+        raise ValueError("no healthy causal training rows")
+    X = model_matrix(clean, include_venue=include_venue)
+    rng = np.random.default_rng(random_state)
+    y_jump = clean["jump_direction"].to_numpy(np.int8)
+    positive = np.flatnonzero(y_jump != 0)
+    negative = np.flatnonzero(y_jump == 0)
+    negative = _bounded_sample(negative, min(700_000, max(100_000, 20 * len(positive))), rng)
+    jump_i = np.sort(np.r_[positive, negative])
+    common_classifier = dict(
+        learning_rate=0.06,
+        max_iter=140,
+        max_leaf_nodes=15,
+        min_samples_leaf=200,
+        l2_regularization=2.0,
+        early_stopping=False,
+        random_state=random_state,
+    )
+    jump = HistGradientBoostingClassifier(class_weight="balanced", **common_classifier)
+    jump.fit(X.iloc[jump_i], y_jump[jump_i])
+
+    # Repeated candidates from one market must not let an active market dominate the terminal model.
+    terminal_i = np.arange(len(clean))
+    if len(terminal_i) > 350_000:
+        weight = 1.0 / clean.groupby("market_id")["market_id"].transform("size").to_numpy(float)
+        weight /= weight.sum()
+        terminal_i = np.sort(rng.choice(terminal_i, 350_000, replace=False, p=weight))
+    terminal = HistGradientBoostingClassifier(**common_classifier)
+    terminal.fit(X.iloc[terminal_i], clean["up_won"].to_numpy(float)[terminal_i])
+
+    match_wait = clean["match_ms"].to_numpy(float) - clean["eligible_ms"].to_numpy(float)
+    quote_ok = clean["match_book_ok"].astype(bool).to_numpy() & (match_wait >= 0) & (match_wait <= 250)
+    quote_i = np.flatnonzero(quote_ok)
+    quote_i = _bounded_sample(quote_i, 500_000, rng)
+    if len(quote_i) < 1000:
+        raise ValueError(f"only {len(quote_i)} usable execution rows")
+    regressors, fill_models = {}, {}
+    reg_params = dict(
+        loss="absolute_error",
+        learning_rate=0.06,
+        max_iter=120,
+        max_leaf_nodes=15,
+        min_samples_leaf=200,
+        l2_regularization=2.0,
+        early_stopping=False,
+        random_state=random_state,
+    )
+    for side in ("up", "down"):
+        target = clean[f"match_{side}_ask"].to_numpy(float)
+        usable = quote_i[np.isfinite(target[quote_i])]
+        regressor = HistGradientBoostingRegressor(**reg_params)
+        regressor.fit(X.iloc[usable], target[usable])
+        regressors[side] = regressor
+        survived = target[usable] <= clean[f"{side}_ask0"].to_numpy(float)[usable] + 0.03 + 1e-12
+        fill_model = HistGradientBoostingClassifier(**common_classifier)
+        fill_model.fit(X.iloc[usable], survived.astype(np.int8))
+        fill_models[side] = fill_model
+    return {
+        "include_venue": include_venue,
+        "jump": jump,
+        "terminal": terminal,
+        "ask": regressors,
+        "fill": fill_models,
+        "train_rows": int(len(clean)),
+        "jump_rows": int(len(jump_i)),
+        "quote_rows": int(len(quote_i)),
+    }
+
+
+def predict_joint_models(models: dict, frame: pd.DataFrame) -> pd.DataFrame:
+    """Append out-of-sample predictions used by the policy; no realized field is consulted."""
+    X = model_matrix(frame, include_venue=bool(models["include_venue"]))
+    probability = models["jump"].predict_proba(X)
+    classes = models["jump"].classes_
+    p_up_jump = probability[:, int(np.flatnonzero(classes == 1)[0])] if (classes == 1).any() else np.zeros(len(frame))
+    p_down_jump = probability[:, int(np.flatnonzero(classes == -1)[0])] if (classes == -1).any() else np.zeros(len(frame))
+    p_up_win = models["terminal"].predict_proba(X)[:, 1]
+    pred_up_ask = np.clip(models["ask"]["up"].predict(X), 0.01, 0.99)
+    pred_down_ask = np.clip(models["ask"]["down"].predict(X), 0.01, 0.99)
+    p_up_fill = models["fill"]["up"].predict_proba(X)[:, 1]
+    p_down_fill = models["fill"]["down"].predict_proba(X)[:, 1]
+    up = p_up_jump >= p_down_jump
+    out = frame.copy()
+    out["p_up_jump"] = p_up_jump
+    out["p_down_jump"] = p_down_jump
+    out["p_jump"] = np.where(up, p_up_jump, p_down_jump)
+    out["pred_side"] = np.where(up, "Up", "Down")
+    out["p_side_win"] = np.where(up, p_up_win, 1.0 - p_up_win)
+    out["p_fill"] = np.where(up, p_up_fill, p_down_fill)
+    out["pred_match_ask"] = np.where(up, pred_up_ask, pred_down_ask)
+    return out
+
+
+def choose_policy(validation: pd.DataFrame, *, min_fills: int = 30) -> dict:
+    """Choose one locked policy on validation by conservative five-share profit."""
+    jump_levels = np.unique(np.quantile(validation["p_jump"].dropna(), [0.90, 0.95, 0.975, 0.99]))
+    best = None
+    for jump in jump_levels:
+        for fill in (0.40, 0.60, 0.75):
+            for edge in (0.02, 0.04, 0.06, 0.08):
+                for chase in (0.01, 0.03, 0.05):
+                    signals, fills = replay_joint_predictions(
+                        validation,
+                        min_jump=float(jump),
+                        min_fill=fill,
+                        min_expected_edge=edge,
+                        min_realizable_edge=edge,
+                        chase=chase,
+                    )
+                    if len(fills) < min_fills:
+                        continue
+                    pnl = fills["pnl_usd"].to_numpy(float)
+                    penalty = 1.645 * pnl.std(ddof=1) * math.sqrt(len(pnl)) if len(pnl) > 1 else np.inf
+                    score = float(pnl.sum() - penalty)
+                    item = {
+                        "min_jump": float(jump), "min_fill": fill,
+                        "min_expected_edge": edge, "min_realizable_edge": edge,
+                        "chase": chase, "validation_signals": int(len(signals)),
+                        "validation_fills": int(len(fills)),
+                        "validation_edge": float(fills["pnl_per_share"].mean()),
+                        "validation_profit_usd": float(pnl.sum()), "selection_score": score,
+                    }
+                    if best is None or item["selection_score"] > best["selection_score"]:
+                        best = item
+    if best is None:
+        raise ValueError("no validation policy reached the minimum fill count")
+    return best
+
+
+def evaluate_policy(predictions: pd.DataFrame, policy: dict) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+    keys = ("min_jump", "min_fill", "min_expected_edge", "min_realizable_edge", "chase")
+    signals, fills = replay_joint_predictions(predictions, **{key: policy[key] for key in keys})
+    summary = cluster_summary(fills)
+    summary["candidates"] = int(len(predictions))
+    summary["signals"] = int(len(signals))
+    summary["fill_rate"] = float(len(fills) / len(signals)) if len(signals) else np.nan
+    summary["price_miss"] = int((~signals["market_id"].isin(set(fills["market_id"]))).sum()) if len(signals) else 0
+    if len(fills):
+        ordered = fills.sort_values("decision_ms", kind="stable")
+        equity = ordered["pnl_usd"].cumsum().to_numpy(float)
+        drawdown = equity - np.maximum.accumulate(np.r_[0.0, equity])[-len(equity):]
+        summary["max_drawdown_usd"] = float(-drawdown.min())
+        days = max(1, ordered["day"].nunique()) if "day" in ordered else 1
+        summary["profit_per_covered_day"] = float(summary["profit_usd"] / days)
+    else:
+        summary["max_drawdown_usd"] = 0.0
+        summary["profit_per_covered_day"] = 0.0
+    return summary, signals, fills
+
+
 def cluster_summary(fills: pd.DataFrame, *, bootstrap_reps: int = 10_000, seed: int = 120) -> dict:
     """Summarize fills with a market-cluster bootstrap confidence interval."""
     if fills.empty:
@@ -617,8 +922,10 @@ def extract_local_segment(
 ) -> pd.DataFrame:
     """Extract one September recorder segment into the public-shard schema."""
     spot = pd.read_parquet(spot_path, columns=["ts_us", "p", "q", "m"])
+    spot_source_ms = spot["ts_us"].to_numpy(np.int64) // 1000
     primary = pd.DataFrame({
-        "recv_ts_ms": (spot["ts_us"].to_numpy(np.int64) // 1000) + receive_delay_ms,
+        "trade_ts_ms": spot_source_ms,
+        "recv_ts_ms": spot_source_ms + receive_delay_ms,
         "price": spot["p"].to_numpy(float),
         "size": spot["q"].to_numpy(float),
         "taker_side": np.where(spot["m"].to_numpy(bool), "sell", "buy"),

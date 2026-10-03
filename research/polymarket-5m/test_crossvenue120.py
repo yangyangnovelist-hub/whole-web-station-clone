@@ -104,6 +104,28 @@ def test_spot_candidates_use_only_arrived_cross_venue_data():
     assert r.jump_lead_ms == 119
 
 
+def test_delayed_binance_receipt_cannot_relabel_an_already_happened_jump_as_prediction():
+    primary = pd.DataFrame(
+        {
+            "trade_ts_ms": [800, 900, 950, 1100],
+            "recv_ts_ms": [850, 950, 1050, 1119],
+            "price": [100.0, 100.0, 101.0, 102.0],
+            "size": [1.0] * 4,
+            "taker_side": ["buy"] * 4,
+        }
+    )
+    got = cv.spot_candidate_features(
+        primary, decision_times=np.array([1000]), gate_bps=0.0, jump_bps=90.0, horizon_ms=120
+    )
+    r = got.iloc[0]
+    # The 1% print received at 1050 happened at exchange time 950 and is therefore not a prediction.
+    # The later crossing really happens after the decision and is the valid target.
+    assert r.jump_direction == 1
+    assert r.jump_ts_ms == 1100
+    assert r.jump_recv_ts_ms == 1119
+    assert r.jump_lead_ms == 100
+
+
 def test_taker_execution_uses_first_book_after_hold_and_respects_limit():
     decision = ms("2026-09-10 00:00:00")
     books = pd.DataFrame(
@@ -201,6 +223,43 @@ def test_joint_trade_selection_is_thresholded_and_one_trade_per_market():
     assert got[["market_id", "decision_ms"]].values.tolist() == [["a", 1000]]
 
 
+def test_edge_capped_limit_and_joint_replay_do_not_assume_a_fill():
+    limit = cv.max_limit_for_edge(probability=0.70, min_edge=0.05)
+    assert limit == pytest.approx(0.63)
+    assert 0.70 - limit - cv.taker_fee(limit) >= 0.05
+    assert 0.70 - (limit + 0.01) - cv.taker_fee(limit + 0.01) < 0.05
+
+    rows = pd.DataFrame(
+        {
+            "market_id": ["a", "a", "b"],
+            "decision_ms": [1000, 1100, 1000],
+            "book_ok": [True, True, True],
+            "match_book_ok": [True, True, True],
+            "up_ask0": [0.50, 0.50, 0.50],
+            "down_ask0": [0.51, 0.51, 0.51],
+            "match_up_ask": [0.54, 0.52, 0.70],
+            "match_down_ask": [0.48, 0.48, 0.30],
+            "match_up_size": [9.0, 9.0, 9.0],
+            "match_down_size": [9.0, 9.0, 9.0],
+            "up_won": [1.0, 1.0, 0.0],
+            "p_jump": [0.90, 0.95, 0.90],
+            "pred_side": ["Up", "Up", "Up"],
+            "p_side_win": [0.75, 0.75, 0.75],
+            "p_fill": [0.90, 0.90, 0.90],
+            "pred_match_ask": [0.53, 0.53, 0.53],
+        }
+    )
+    signals, fills = cv.replay_joint_predictions(
+        rows, min_jump=0.80, min_fill=0.80, min_expected_edge=0.05,
+        min_realizable_edge=0.05, chase=0.05, shares=5.0,
+    )
+    # Earliest qualifying signal is retained.  It fills; b's eligible ask is above its edge-capped limit.
+    assert signals.market_id.tolist() == ["a", "b"]
+    assert fills.market_id.tolist() == ["a"]
+    assert fills.iloc[0].price == pytest.approx(0.54)
+    assert fills.iloc[0].pnl_usd == pytest.approx(5 * (1 - 0.54 - cv.taker_fee(0.54)))
+
+
 def test_market_cluster_summary_counts_markets_not_duplicate_fills():
     fills = pd.DataFrame(
         {
@@ -215,3 +274,26 @@ def test_market_cluster_summary_counts_markets_not_duplicate_fills():
     assert got["edge"] == pytest.approx((0.10 + 0.20 - 0.10) / 3)
     assert got["profit_usd"] == pytest.approx(1.0)
     assert got["ci_low"] <= got["edge"] <= got["ci_high"]
+
+
+def test_model_matrix_is_invariant_to_labels_and_future_execution():
+    base = pd.DataFrame(
+        {
+            "last_size": [1.0], "last_sign": [1.0], "interarrival_ms": [4.0],
+            **{f"ret_{w}ms_bps": [0.1] for w in cv.RETURN_WINDOWS_MS},
+            **{f"flow_{w}ms": [2.0] for w in cv.FLOW_WINDOWS_MS},
+            **{f"volume_{w}ms": [4.0] for w in cv.FLOW_WINDOWS_MS},
+            **{f"prints_{w}ms": [3.0] for w in cv.FLOW_WINDOWS_MS},
+            **{f"venue_ret_{w}ms_bps": [0.2] for w in cv.VENUE_WINDOWS_MS},
+            "venue_age_ms": [5.0],
+            "venue_flow_50ms": [1.0], "venue_flow_100ms": [1.0], "venue_flow_250ms": [1.0],
+            "tau_s": [120.0], "book_age_ms": [10.0], "up_mid0": [0.52], "up_spread0": [0.02],
+            "up_imbalance0": [0.1], "down_imbalance0": [-0.1],
+            "up_bid_size0": [10.0], "up_ask_size0": [12.0],
+            "down_bid_size0": [11.0], "down_ask_size0": [13.0],
+            "jump_direction": [1], "up_won": [1.0], "match_up_ask": [0.90], "match_down_ask": [0.10],
+        }
+    )
+    changed = base.assign(jump_direction=-1, up_won=0.0, match_up_ask=0.01, match_down_ask=0.99)
+    pd.testing.assert_frame_equal(cv.model_matrix(base), cv.model_matrix(changed))
+    assert not any("jump" in c or "match" in c or "won" in c for c in cv.model_matrix(base).columns)
