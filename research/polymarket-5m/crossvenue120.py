@@ -770,6 +770,210 @@ def evaluate_policy(predictions: pd.DataFrame, policy: dict) -> tuple[dict, pd.D
     return summary, signals, fills
 
 
+def prediction_metrics(predictions: pd.DataFrame, min_jump: float) -> dict:
+    """Out-of-sample quality of the actual 80–160 ms source-time target."""
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    actual = predictions["jump_direction"].to_numpy(int)
+    event = actual != 0
+    p_event = predictions["p_up_jump"].to_numpy(float) + predictions["p_down_jump"].to_numpy(float)
+    pred_direction = np.where(
+        predictions["p_up_jump"].to_numpy(float) >= predictions["p_down_jump"].to_numpy(float), 1, -1
+    )
+    selected = predictions["p_jump"].to_numpy(float) >= min_jump
+    return {
+        "rows": int(len(predictions)),
+        "prevalence": float(event.mean()),
+        "average_precision": float(average_precision_score(event, p_event)),
+        "roc_auc": float(roc_auc_score(event, p_event)) if event.any() and (~event).any() else np.nan,
+        "direction_accuracy_on_events": float((pred_direction[event] == actual[event]).mean()) if event.any() else np.nan,
+        "selected_rows": int(selected.sum()),
+        "selected_event_precision": float(event[selected].mean()) if selected.any() else np.nan,
+        "selected_exact_precision": float((pred_direction[selected] == actual[selected]).mean()) if selected.any() else np.nan,
+    }
+
+
+def direction_only_control(predictions: pd.DataFrame, policy: dict) -> tuple[dict, pd.DataFrame]:
+    """Same advance predictor, but no terminal-value or fill model; chase the current ask blindly."""
+    control = predictions.copy()
+    control["p_side_win"] = 0.99
+    control["p_fill"] = 1.0
+    up = control["pred_side"].astype(str).str.lower() == "up"
+    control["pred_match_ask"] = np.where(up, control["up_ask0"], control["down_ask0"])
+    signals, fills = replay_joint_predictions(
+        control,
+        min_jump=policy["min_jump"], min_fill=0.0, min_expected_edge=-1.0,
+        min_realizable_edge=0.0, chase=policy["chase"],
+    )
+    summary = cluster_summary(fills)
+    summary.update(signals=int(len(signals)), fill_rate=float(len(fills) / len(signals)) if len(signals) else np.nan)
+    return summary, fills
+
+
+def placebo_jump_models(models: dict, train: pd.DataFrame, *, random_state: int = 121) -> dict:
+    """Replace only the ahead model with one trained on deterministically shuffled labels."""
+    from sklearn.base import clone
+
+    clean = train[
+        train["book_ok"].astype(bool) & (train["feature_max_ms"] <= train["decision_ms"])
+    ].reset_index(drop=True)
+    X = model_matrix(clean, include_venue=bool(models["include_venue"]))
+    rng = np.random.default_rng(random_state)
+    label = clean["jump_direction"].to_numpy(np.int8).copy()
+    rng.shuffle(label)
+    positive = np.flatnonzero(label != 0)
+    negative = np.flatnonzero(label == 0)
+    negative = _bounded_sample(negative, min(700_000, max(100_000, 20 * len(positive))), rng)
+    use = np.sort(np.r_[positive, negative])
+    jump = clone(models["jump"])
+    jump.fit(X.iloc[use], label[use])
+    out = dict(models)
+    out["jump"] = jump
+    return out
+
+
+def _format_summary(name: str, summary: dict) -> str:
+    edge = 100 * summary.get("edge", np.nan)
+    lo, hi = 100 * summary.get("ci_low", np.nan), 100 * summary.get("ci_high", np.nan)
+    return (
+        f"| {name} | {summary.get('candidates', 0):,} | {summary.get('signals', 0):,} | "
+        f"{summary.get('fills', 0):,} | {summary.get('fill_rate', np.nan):.1%} | "
+        f"{edge:+.2f}¢ [{lo:+.2f}, {hi:+.2f}] | ${summary.get('profit_usd', 0):+.2f} | "
+        f"${summary.get('profit_per_covered_day', 0):+.2f} | ${summary.get('max_drawdown_usd', 0):.2f} |"
+    )
+
+
+def run_backtest(
+    public_paths: list[str],
+    september_paths: list[str],
+    *,
+    report_out: str | Path,
+    fills_out: str | Path,
+) -> dict:
+    """Fit on A, choose once on B, and write the locked public-C and September results."""
+    public = pd.concat([pd.read_parquet(path) for path in public_paths], ignore_index=True)
+    public = public.drop_duplicates(["market_id", "decision_ms"], keep="last")
+    september = pd.concat([pd.read_parquet(path) for path in september_paths], ignore_index=True)
+    september = september.drop_duplicates(["market_id", "decision_ms"], keep="last")
+    train = public[public["day"] <= "2026-07-15"].reset_index(drop=True)
+    validation = public[(public["day"] >= "2026-07-16") & (public["day"] <= "2026-08-16")].reset_index(drop=True)
+    public_locked = public[public["day"] >= "2026-08-17"].reset_index(drop=True)
+    if min(map(len, (train, validation, public_locked, september))) == 0:
+        raise ValueError("one of train/validation/public-lockbox/September is empty")
+
+    full = fit_joint_models(train, include_venue=True)
+    validation_full = predict_joint_models(full, validation)
+    policy = choose_policy(validation_full)
+    public_prediction = predict_joint_models(full, public_locked)
+    september_prediction = predict_joint_models(full, september)
+    public_summary, _, public_fills = evaluate_policy(public_prediction, policy)
+    september_summary, _, september_fills = evaluate_policy(september_prediction, policy)
+
+    spot = fit_joint_models(train, include_venue=False)
+    validation_spot = predict_joint_models(spot, validation)
+    spot_policy = choose_policy(validation_spot)
+    public_spot_prediction = predict_joint_models(spot, public_locked)
+    september_spot_prediction = predict_joint_models(spot, september)
+    public_spot_summary, _, _ = evaluate_policy(public_spot_prediction, spot_policy)
+    september_spot_summary, _, _ = evaluate_policy(september_spot_prediction, spot_policy)
+
+    placebo = placebo_jump_models(full, train)
+    validation_placebo = predict_joint_models(placebo, validation)
+    placebo_policy = choose_policy(validation_placebo)
+    public_placebo, _, _ = evaluate_policy(predict_joint_models(placebo, public_locked), placebo_policy)
+    september_placebo, _, _ = evaluate_policy(predict_joint_models(placebo, september), placebo_policy)
+    public_direction, _ = direction_only_control(public_prediction, policy)
+    september_direction, _ = direction_only_control(september_prediction, policy)
+
+    public_metrics = prediction_metrics(public_prediction, policy["min_jump"])
+    september_metrics = prediction_metrics(september_prediction, policy["min_jump"])
+    september_perp = september_prediction[september_prediction["venue_feature_max_ms"].notna()]
+    september_perp_metrics = prediction_metrics(september_perp, policy["min_jump"]) if len(september_perp) else {}
+
+    public_summary["candidates"] = len(public_locked)
+    september_summary["candidates"] = len(september)
+    for summary, count in ((public_spot_summary, len(public_locked)), (september_spot_summary, len(september)),
+                           (public_placebo, len(public_locked)), (september_placebo, len(september))):
+        summary["candidates"] = count
+    locked_fills = pd.concat([
+        public_fills.assign(period="C 2026-08-17..29"),
+        september_fills.assign(period="September recorder lockbox"),
+    ], ignore_index=True)
+    Path(fills_out).parent.mkdir(parents=True, exist_ok=True)
+    locked_fills.to_csv(fills_out, index=False, compression="gzip")
+
+    public_pass = public_summary["fills"] >= 30 and public_summary["ci_low"] > 0
+    september_pass = september_summary["fills"] >= 30 and september_summary["ci_low"] > 0
+    verdict = "通过两套锁定样本" if public_pass and september_pass else "未通过双锁定门槛"
+    L = [
+        "# CrossVenue-120：提前预测 + 可成交性联合模型",
+        "",
+        f"**结论：{verdict}。** 只有 8/17–29 与九月实录两段都达到至少 30 笔成交且按市场聚类的 95% CI 下界大于 0，才允许进入小额实盘。",
+        "",
+        "目标是在本机决策之后、交易所源时钟 80–160 ms（中心 120 ms）发生的 Binance ≥1 bp 跳动。"
+        "特征只使用决策时已经收到的 Binance、永续和 Polymarket 数据；订单按当时历史固定压单 250/50/150 ms，"
+        "再加 5 ms 传输，在第一份可用盘口上按事先固定的限价判断成交。未穿透限价就是未成交。每笔最多 5 份。",
+        "",
+        "## 锁定结果",
+        "",
+        "| 样本 | 候选 | 信号 | 成交 | 成交率 | 净 edge/份（市场聚类 95% CI） | 5份总收益 | 每覆盖日 | 最大回撤 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        _format_summary("C：8/17–8/29", public_summary),
+        _format_summary("九月实录", september_summary),
+        "",
+        "这里的收益已扣 taker 费，但没有假定不可见的排队优势；成交只来自压单结束时仍低于限价的卖一。",
+        "",
+        "## 训练、选参和固定策略",
+        "",
+        f"- 训练 A：{train['day'].min()}–{train['day'].max()}，{len(train):,} 个候选。",
+        f"- 选参 B：{validation['day'].min()}–{validation['day'].max()}，{len(validation):,} 个候选；只在这里选择一次门槛。",
+        f"- 锁定 C：{public_locked['day'].min()}–{public_locked['day'].max()}，{len(public_locked):,} 个候选；九月另有 {len(september):,} 个候选。",
+        f"- 固定门槛：跳动概率 ≥ {policy['min_jump']:.4f}，成交概率 ≥ {policy['min_fill']:.2f}，"
+        f"预测净 edge ≥ {100 * policy['min_expected_edge']:.0f}¢，最多追 {100 * policy['chase']:.0f}¢。",
+        f"- B 段选参结果：{policy['validation_fills']:,} 成交，净 edge {100 * policy['validation_edge']:+.2f}¢/份，5 份总收益 ${policy['validation_profit_usd']:+.2f}。",
+        "",
+        "## 提前预测本身",
+        "",
+        "| 样本 | 跳动基准率 | AUPRC | ROC-AUC | 有跳动时方向准确率 | 高分样本跳动率 | 高分样本方向完全命中率 |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        f"| C | {public_metrics['prevalence']:.2%} | {public_metrics['average_precision']:.3f} | {public_metrics['roc_auc']:.3f} | "
+        f"{public_metrics['direction_accuracy_on_events']:.1%} | {public_metrics['selected_event_precision']:.1%} | {public_metrics['selected_exact_precision']:.1%} |",
+        f"| 九月 | {september_metrics['prevalence']:.2%} | {september_metrics['average_precision']:.3f} | {september_metrics['roc_auc']:.3f} | "
+        f"{september_metrics['direction_accuracy_on_events']:.1%} | {september_metrics['selected_event_precision']:.1%} | {september_metrics['selected_exact_precision']:.1%} |",
+        "",
+        "## 消融与安慰剂",
+        "",
+        "| 版本 | C edge/份 | C 成交 | 九月 edge/份 | 九月成交 |",
+        "|---|---:|---:|---:|---:|",
+        f"| 完整联合模型 | {100 * public_summary['edge']:+.2f}¢ | {public_summary['fills']:,} | {100 * september_summary['edge']:+.2f}¢ | {september_summary['fills']:,} |",
+        f"| 去掉永续/第二交易所特征 | {100 * public_spot_summary['edge']:+.2f}¢ | {public_spot_summary['fills']:,} | {100 * september_spot_summary['edge']:+.2f}¢ | {september_spot_summary['fills']:,} |",
+        f"| 只看提前方向、盲追当前卖一 | {100 * public_direction['edge']:+.2f}¢ | {public_direction['fills']:,} | {100 * september_direction['edge']:+.2f}¢ | {september_direction['fills']:,} |",
+        f"| 打乱提前标签后重新选参 | {100 * public_placebo['edge']:+.2f}¢ | {public_placebo['fills']:,} | {100 * september_placebo['edge']:+.2f}¢ | {september_placebo['fills']:,} |",
+        "",
+        (f"九月带 Binance 永续的子集有 {len(september_perp):,} 个候选；其提前预测 AUPRC "
+         f"{september_perp_metrics.get('average_precision', np.nan):.3f}，基准率 {september_perp_metrics.get('prevalence', np.nan):.2%}。"),
+        "",
+        "## 仍然不能从回测中假定的事情",
+        "",
+        "- 公开盘口是 100 ms 对齐快照；真实撮合时刻落在两帧之间时仍有离散误差。",
+        "- 九月只使用盘口质量足够的实录日，并给 Binance 源时间统一加 100 ms 到机延迟；这不是每笔实测延迟。",
+        "- 公开段的第二交易所是 Hyperliquid，九月带第二交易所的子集是 Binance 永续；跨域改善必须单列看，不能混称稳定收益。",
+        "- 回测知道卖一数量，但不知道同一 150 ms 窗口里其他 taker 抢走多少；5 份仍可能被竞争者吃掉。",
+        "",
+        "因此，通过门槛也只代表值得做受限小额实盘；未通过则不部署 CrossVenue-120。",
+    ]
+    Path(report_out).parent.mkdir(parents=True, exist_ok=True)
+    Path(report_out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    return {
+        "verdict": verdict,
+        "policy": policy,
+        "public": public_summary,
+        "september": september_summary,
+        "public_metrics": public_metrics,
+        "september_metrics": september_metrics,
+    }
+
+
 def cluster_summary(fills: pd.DataFrame, *, bootstrap_reps: int = 10_000, seed: int = 120) -> dict:
     """Summarize fills with a market-cluster bootstrap confidence interval."""
     if fills.empty:
@@ -993,10 +1197,15 @@ def main(argv: list[str] | None = None) -> None:
     local.add_argument("--out", required=True)
     local.add_argument("--secondary-zip", action="append", default=[])
     local.add_argument("--receive-delay-ms", type=int, default=100)
+    fit_report = sub.add_parser("fit-report")
+    fit_report.add_argument("--public", action="append", required=True)
+    fit_report.add_argument("--september", action="append", required=True)
+    fit_report.add_argument("--out", required=True)
+    fit_report.add_argument("--fills-out", required=True)
     args = parser.parse_args(argv)
     if args.command == "extract-public":
         extract_public(out=args.out, workdir=args.workdir, shard=args.shard, start=args.start, end=args.end)
-    else:
+    elif args.command == "extract-local":
         extract_local_segment(
             spot_path=args.spot,
             book_path=args.book,
@@ -1005,6 +1214,11 @@ def main(argv: list[str] | None = None) -> None:
             secondary_zips=args.secondary_zip,
             receive_delay_ms=args.receive_delay_ms,
         )
+    else:
+        result = run_backtest(
+            args.public, args.september, report_out=args.out, fills_out=args.fills_out,
+        )
+        print(result)
 
 
 if __name__ == "__main__":
