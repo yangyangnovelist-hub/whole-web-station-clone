@@ -951,6 +951,59 @@ def fit_public_bundle(public_paths: list[str]) -> dict:
     }
 
 
+def lockbox_verdict(
+    public_summary: dict,
+    september_summary: dict,
+    public_spot_summary: dict,
+    september_spot_summary: dict,
+    public_placebo: dict,
+    september_placebo: dict,
+) -> tuple[str, bool, bool]:
+    """Require both profitable lockboxes and evidence that the ahead mechanism adds value."""
+    pnl_pass = (
+        public_summary["fills"] >= 30
+        and public_summary["ci_low"] > 0
+        and september_summary["fills"] >= 30
+        and september_summary["ci_low"] > 0
+    )
+    mechanism_pass = (
+        public_summary["edge"] > public_spot_summary["edge"]
+        and september_summary["edge"] > september_spot_summary["edge"]
+        and public_summary["edge"] > public_placebo["edge"]
+        and september_summary["edge"] > september_placebo["edge"]
+    )
+    if pnl_pass and mechanism_pass:
+        return "通过双锁箱与提前预测机制检验", True, True
+    if pnl_pass:
+        return "收益门槛通过，但提前预测机制未通过", True, False
+    return "未通过双锁箱收益门槛", False, mechanism_pass
+
+
+def jump_attribution(fills: pd.DataFrame) -> dict:
+    """Split realized profit by whether the promised 80–160 ms source-time jump occurred."""
+    event = fills["jump_direction"].to_numpy(float) != 0 if len(fills) else np.array([], dtype=bool)
+
+    def group(mask: np.ndarray) -> tuple[int, float, float]:
+        part = fills.loc[mask]
+        return (
+            int(len(part)),
+            float(part["pnl_per_share"].mean()) if len(part) else np.nan,
+            float(part["pnl_usd"].sum()),
+        )
+
+    event_fills, event_edge, event_profit = group(event)
+    no_event_fills, no_event_edge, no_event_profit = group(~event)
+    return {
+        "event_fills": event_fills,
+        "event_rate": float(event.mean()) if len(event) else np.nan,
+        "event_edge": event_edge,
+        "event_profit_usd": event_profit,
+        "no_event_fills": no_event_fills,
+        "no_event_edge": no_event_edge,
+        "no_event_profit_usd": no_event_profit,
+    }
+
+
 def _write_combined_report(
     bundle: dict,
     *,
@@ -962,6 +1015,10 @@ def _write_combined_report(
     september_metrics: dict,
     september_perp_count: int,
     september_perp_metrics: dict,
+    public_attribution: dict,
+    september_attribution: dict,
+    pnl_pass: bool,
+    mechanism_pass: bool,
     verdict: str,
     report_out: str | Path,
 ) -> None:
@@ -975,7 +1032,8 @@ def _write_combined_report(
     lines = [
         "# CrossVenue-120：提前预测 + 可成交性联合模型",
         "",
-        f"**结论：{verdict}。** 只有 8/17–29 与九月实录两段都达到至少 30 笔成交且按市场聚类的 95% CI 下界大于 0，才允许进入小额实盘。",
+        f"**结论：{verdict}。** 收益门槛要求 8/17–29 与九月实录两段都至少 30 笔成交且按市场聚类的 95% CI 下界大于 0；"
+        "机制门槛还要求完整模型在两段都优于去跨所特征和打乱跳动标签的对照。",
         "",
         "目标是在本机决策之后、交易所源时钟 80–160 ms（中心 120 ms）发生的 Binance ≥1 bp 跳动。"
         "特征只使用决策时已经收到的 Binance、永续和 Polymarket 数据；订单按当时历史固定压单 250/50/150 ms，"
@@ -983,12 +1041,13 @@ def _write_combined_report(
         "",
         "## 锁定结果",
         "",
-        "| 样本 | 候选 | 信号 | 成交 | 成交率 | 净 edge/份（市场聚类 95% CI） | 5份总收益 | 每覆盖日 | 最大回撤 |",
+        "| 样本 | 候选 | 信号 | 成交 | 成交率 | 净 edge/份（市场聚类 95% CI） | 最多5份总收益 | 每覆盖日 | 最大回撤 |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         _format_summary("C：8/17–8/29", public_summary),
         _format_summary("九月实录", september_summary),
         "",
         "这里的收益已扣 taker 费，但没有假定不可见的排队优势；成交只来自压单结束时仍低于限价的卖一。",
+        "公开 C 全部处于 50 ms 固定压单时期；九月处于当前 150 ms 时期，但其实录盘口已知偏旧。因此两段日收益都不能直接外推为当前实盘收益。",
         "",
         "## 训练、选参和固定策略",
         "",
@@ -997,7 +1056,7 @@ def _write_combined_report(
         f"- 锁定 C：{split['public_min']}–{split['public_max']}，{split['public_rows']:,} 个候选；九月另有 {len(september):,} 个候选。",
         f"- 固定门槛：跳动概率 ≥ {policy['min_jump']:.4f}，成交概率 ≥ {policy['min_fill']:.2f}，"
         f"预测净 edge ≥ {100 * policy['min_expected_edge']:.0f}¢，最多追 {100 * policy['chase']:.0f}¢。",
-        f"- B 段选参结果：{policy['validation_fills']:,} 成交，净 edge {100 * policy['validation_edge']:+.2f}¢/份，5 份总收益 ${policy['validation_profit_usd']:+.2f}。",
+        f"- B 段选参结果：{policy['validation_fills']:,} 成交，净 edge {100 * policy['validation_edge']:+.2f}¢/份，最多 5 份总收益 ${policy['validation_profit_usd']:+.2f}。",
         "",
         "## 实际重放延迟",
         "",
@@ -1019,6 +1078,19 @@ def _write_combined_report(
         f"| 九月 | {september_metrics['prevalence']:.2%} | {september_metrics['average_precision']:.3f} | {september_metrics['roc_auc']:.3f} | "
         f"{september_metrics['direction_accuracy_on_events']:.1%} | {september_metrics['selected_event_precision']:.1%} | {september_metrics['selected_exact_precision']:.1%} |",
         "",
+        "## 收益归因",
+        "",
+        "| 样本 | 目标跳动成交 | 占全部成交 | 有跳动 edge/份 | 有跳动收益 | 无跳动 edge/份 | 无跳动收益 |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        f"| C | {public_attribution['event_fills']:,} | {public_attribution['event_rate']:.2%} | "
+        f"{100 * public_attribution['event_edge']:+.2f}¢ | ${public_attribution['event_profit_usd']:+.2f} | "
+        f"{100 * public_attribution['no_event_edge']:+.2f}¢ | ${public_attribution['no_event_profit_usd']:+.2f} |",
+        f"| 九月 | {september_attribution['event_fills']:,} | {september_attribution['event_rate']:.2%} | "
+        f"{100 * september_attribution['event_edge']:+.2f}¢ | ${september_attribution['event_profit_usd']:+.2f} | "
+        f"{100 * september_attribution['no_event_edge']:+.2f}¢ | ${september_attribution['no_event_profit_usd']:+.2f} |",
+        "",
+        "公开 C 的目标跳动成交为负，且绝大多数收益来自没有发生目标跳动的成交；因此利润不能归因于提前 120 ms 的跳动预测。",
+        "",
         "## 消融与安慰剂",
         "",
         "| 版本 | C edge/份 | C 成交 | 九月 edge/份 | 九月成交 |",
@@ -1028,17 +1100,21 @@ def _write_combined_report(
         f"| 只看提前方向、盲追当前卖一 | {100 * public_direction['edge']:+.2f}¢ | {public_direction['fills']:,} | {100 * september_direction['edge']:+.2f}¢ | {september_direction['fills']:,} |",
         f"| 打乱提前标签后重新选参 | {100 * public_placebo['edge']:+.2f}¢ | {public_placebo['fills']:,} | {100 * september_placebo['edge']:+.2f}¢ | {september_placebo['fills']:,} |",
         "",
+        f"- 双锁箱收益门槛：{'通过' if pnl_pass else '未通过'}。",
+        f"- 提前预测机制门槛：{'通过' if mechanism_pass else '未通过'}；去掉跨所特征和打乱标签的对照没有变差，不能把收益归因于 CrossVenue-120。",
+        "",
         (f"九月带 Binance 永续的子集有 {september_perp_count:,} 个候选；其提前预测 AUPRC "
          f"{september_perp_metrics.get('average_precision', np.nan):.3f}，基准率 {september_perp_metrics.get('prevalence', np.nan):.2%}。"),
         "",
         "## 仍然不能从回测中假定的事情",
         "",
-        "- 公开盘口是 100 ms 对齐快照；真实撮合时刻落在两帧之间时仍有离散误差。",
-        "- 九月只使用盘口质量足够的实录日，并给 Binance 源时间统一加 100 ms 到机延迟；这不是每笔实测延迟。",
+        "- 公开 C 是 50 ms 压单制度且盘口为 100 ms 对齐快照；真实撮合时刻落在两帧之间时仍有离散误差。",
+        "- 九月是当前 150 ms 压单制度，但记录器盘口已知偏旧；同时给 Binance 源时间统一加 100 ms 到机延迟，这不是每笔实测延迟。",
         "- 公开段的第二交易所是 Hyperliquid，九月带第二交易所的子集是 Binance 永续；跨域改善必须单列看，不能混称稳定收益。",
         "- 回测知道卖一数量，但不知道同一 150 ms 窗口里其他 taker 抢走多少；5 份仍可能被竞争者吃掉。",
         "",
-        "因此，通过门槛也只代表值得做受限小额实盘；未通过则不部署 CrossVenue-120。",
+        ("因此，可以进入受限小额实盘。" if pnl_pass and mechanism_pass else
+         "因此，不部署 CrossVenue-120。双锁箱中的正收益只能作为独立 ValueFill 策略的研究线索，必须另行预注册并验证。"),
     ]
     Path(report_out).parent.mkdir(parents=True, exist_ok=True)
     Path(report_out).write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1086,9 +1162,16 @@ def finish_backtest_bundle(
     locked_fills.to_csv(fills_out, index=False, compression="gzip")
 
     public_summary = bundle["public_summary"]
-    public_pass = public_summary["fills"] >= 30 and public_summary["ci_low"] > 0
-    september_pass = september_summary["fills"] >= 30 and september_summary["ci_low"] > 0
-    verdict = "通过两套锁定样本" if public_pass and september_pass else "未通过双锁定门槛"
+    public_attribution = jump_attribution(bundle["public_fills"])
+    september_attribution = jump_attribution(september_fills)
+    verdict, pnl_pass, mechanism_pass = lockbox_verdict(
+        public_summary,
+        september_summary,
+        bundle["public_spot_summary"],
+        september_spot_summary,
+        bundle["public_placebo"],
+        september_placebo,
+    )
     _write_combined_report(
         bundle,
         september=september,
@@ -1099,6 +1182,10 @@ def finish_backtest_bundle(
         september_metrics=september_metrics,
         september_perp_count=september_perp_count,
         september_perp_metrics=september_perp_metrics,
+        public_attribution=public_attribution,
+        september_attribution=september_attribution,
+        pnl_pass=pnl_pass,
+        mechanism_pass=mechanism_pass,
         verdict=verdict,
         report_out=report_out,
     )
@@ -1109,6 +1196,10 @@ def finish_backtest_bundle(
         "september": september_summary,
         "public_metrics": bundle["public_metrics"],
         "september_metrics": september_metrics,
+        "pnl_pass": pnl_pass,
+        "mechanism_pass": mechanism_pass,
+        "public_attribution": public_attribution,
+        "september_attribution": september_attribution,
     }
 
 

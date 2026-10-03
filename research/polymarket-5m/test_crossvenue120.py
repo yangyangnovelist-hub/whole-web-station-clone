@@ -329,3 +329,19 @@ def test_public_bundle_round_trip(tmp_path):
     path = tmp_path / "public-model.joblib"
     cv.save_public_bundle(bundle, path)
     assert cv.load_public_bundle(path) == bundle
+
+
+def test_lockbox_verdict_requires_crossvenue_mechanism_not_only_positive_pnl():
+    full_public = {"fills": 100, "ci_low": 0.01, "edge": 0.03}
+    full_september = {"fills": 100, "ci_low": 0.01, "edge": 0.04}
+    spot_public = {"edge": 0.031}
+    spot_september = {"edge": 0.05}
+    placebo_public = {"edge": 0.10}
+    placebo_september = {"edge": 0.12}
+    verdict, pnl_pass, mechanism_pass = cv.lockbox_verdict(
+        full_public, full_september, spot_public, spot_september,
+        placebo_public, placebo_september,
+    )
+    assert pnl_pass
+    assert not mechanism_pass
+    assert verdict == "收益门槛通过，但提前预测机制未通过"
