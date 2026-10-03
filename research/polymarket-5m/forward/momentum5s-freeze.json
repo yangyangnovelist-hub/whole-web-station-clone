@@ -1,0 +1,9 @@
+{
+  "alpha": 0.01,
+  "first_fills": 1000,
+  "minimum_days": 7,
+  "origin_commit": "86e27671f2312ecd1c2064dd15cbe77c8d111fc2",
+  "protocol_frozen_at": "2026-10-03T15:00:57Z",
+  "signal_frozen_at": "2026-10-01T06:20:50Z",
+  "strategy_fingerprint": "569160f7852ca8bc51c8cdd5da04072f71f619eec1648562e1fe25677118f37f"
+}

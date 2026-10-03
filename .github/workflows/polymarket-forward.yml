@@ -1,0 +1,145 @@
+name: polymarket-forward
+
+# Forward test on live data: records Polymarket BTC 5m books and Chainlink
+# prices for a few hours on a GitHub runner (paper_trader.py live, which never
+# places orders and uses no key), tests the preregistered candidates on what it
+# recorded, pools the result into research/polymarket-5m/forward/ and
+# dispatches the next run. It stops by itself after `until` in ci/forward.json;
+# set "enabled": false there to stop it sooner.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/forward.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: polymarket-forward
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Read ci/forward.json
+        id: cfg
+        run: |
+          python - >> "$GITHUB_OUTPUT" <<'PY'
+          import datetime, json
+          c = json.load(open("ci/forward.json"))
+          on = c.get("enabled", True) and datetime.date.today().isoformat() <= c.get("until", "2000-01-01")
+          print(f"enabled={'true' if on else 'false'}")
+          print(f"hours={float(c.get('hours', 5.4))}")
+          coins = c.get("coins", ["btc"])
+          print(f"coins={' '.join(coins)}")
+          print(f"coins_csv={','.join(coins)}")
+          PY
+
+      - name: Record and paper-trade (no orders)
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          python paper_trader.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} \
+            --coins "${{ steps.cfg.outputs.coins_csv }}" || true
+          ls -la "$RUNNER_TEMP"/paper/raw/*/ && du -sh "$RUNNER_TEMP/paper/raw" && df -h "$RUNNER_TEMP" | tail -1
+          zcat "$RUNNER_TEMP"/paper/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
+
+      - name: Diagnose the recording
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        run: for c in ${{ steps.cfg.outputs.coins }}; do python recording.py "$RUNNER_TEMP/paper" --diagnose --coin "$c"; done
+
+      - name: Resolve, convert and test
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        run: |
+          sleep 90
+          python -c "import recording as r, sys; print('unresolved:', r.fetch_outcomes(sys.argv[1]))" "$RUNNER_TEMP/paper"
+          for c in ${{ steps.cfg.outputs.coins }}; do
+            b="$RUNNER_TEMP/paper/bundle-$c"
+            echo "== $c"
+            python recording.py "$RUNNER_TEMP/paper" --coin "$c" --out "$b" || continue
+            if python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
+              --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv"; then
+              python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
+            else
+              echo "$b: strategy_zoo failed; independent frozen tests still run"
+            fi
+            if [ "$c" = btc ] && [ -d "$b/latency" ]; then
+              python theta30.py --latency-dir "$b/latency" \
+                --out "$RUNNER_TEMP/theta30-new.csv" \
+                --manifest forward/theta30-freeze.json \
+                --append forward/theta30.csv \
+                --report forward/theta30.md || true
+            fi
+          done
+          python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"
+          python forward.py report
+
+      - name: Frozen five-second momentum paper test
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          d="$RUNNER_TEMP/paper/bundle-btc/latency"
+          [ -d "$d" ] || { echo "BTC latency bundle missing"; exit 1; }
+          seed=()
+          [ -s real/momentum5s-backfill.csv ] && seed=(--seed real/momentum5s-backfill.csv)
+          python momentum5s.py --latency-dir "$d" "${seed[@]}" \
+            --manifest forward/momentum5s-freeze.json \
+            --append forward/momentum5s.csv \
+            --verdict-out forward/momentum5s-verdict.json \
+            --out forward/momentum5s.md
+
+      - name: Keep the converted bundles (the raw messages run to gigabytes)
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          cd "$RUNNER_TEMP/paper"
+          tar czf "$RUNNER_TEMP/raw.tgz" bundle-* raw/*/markets.jsonl* raw/*/decisions.jsonl* raw/*/errors.jsonl* 2>/dev/null || true
+          ls -la "$RUNNER_TEMP/raw.tgz"
+      - uses: actions/upload-artifact@v4
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          name: recording-${{ github.run_id }}
+          path: ${{ runner.temp }}/raw.tgz
+          retention-days: 30
+
+      - name: Commit pooled results
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A forward 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: forward-test results from recording run ${{ github.run_id }}" \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
+
+      - name: Start the next run
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run polymarket-forward.yml --ref "${{ github.ref_name }}"
+
+      - name: Tests C and D and a WeChat Work report (polymarket-shadow)
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run polymarket-shadow.yml --ref "${{ github.ref_name }}"

@@ -1,0 +1,3 @@
+# Changing this file runs .github/workflows/polymarket-shadow.yml (tests C and D on every recording,
+# then a WeChat Work report if the repository secret WECOM_WEBHOOK is set).
+requested: 2026-10-02 09:10 recorder check on every GitHub recording since 10-01 02:30
