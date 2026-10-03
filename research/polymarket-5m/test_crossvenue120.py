@@ -126,6 +126,27 @@ def test_delayed_binance_receipt_cannot_relabel_an_already_happened_jump_as_pred
     assert r.jump_lead_ms == 100
 
 
+def test_source_price_at_decision_is_the_label_anchor_not_stale_received_price():
+    primary = pd.DataFrame(
+        {
+            "trade_ts_ms": [800, 900, 950, 1100],
+            "recv_ts_ms": [850, 950, 1050, 1119],
+            "price": [100.0, 100.0, 101.0, 101.0],
+            "size": [1.0] * 4,
+            "taker_side": ["buy"] * 4,
+        }
+    )
+    got = cv.spot_candidate_features(
+        primary, decision_times=np.array([1000]), gate_bps=0.0, jump_bps=90.0, horizon_ms=120
+    )
+    r = got.iloc[0]
+    # At source time 1000 the price was already 101.  Its delayed receipt at 1050 is not a
+    # future jump, and a later print at the same level must not relabel that persistence.
+    assert r.jump_direction == 0
+    assert np.isnan(r.jump_ts_ms)
+    assert np.isnan(r.jump_recv_ts_ms)
+
+
 def test_taker_execution_uses_first_book_after_hold_and_respects_limit():
     decision = ms("2026-09-10 00:00:00")
     books = pd.DataFrame(

@@ -208,12 +208,19 @@ def spot_candidate_features(
     source_px = pp[source_order]
     source_recv = pt[source_order]
     cutoff = jump_bps / 10_000.0
-    for n, (decision, anchor_i) in enumerate(zip(decisions, pi)):
+    for n, decision in enumerate(decisions):
+        # Labels describe a move that happens after the local decision, not a stale packet that
+        # was already reflected at the exchange but had not reached us yet.  Ground-truth labels
+        # may therefore anchor on the final exchange-time print at/before ``decision``; model
+        # features above remain restricted to packets actually received by ``decision``.
+        source_anchor_i = np.searchsorted(source_ts, decision, side="right") - 1
+        if source_anchor_i < 0 or source_px[source_anchor_i] <= 0:
+            continue
         lo = np.searchsorted(source_ts, decision + min_lead_ms, side="left")
         hi = np.searchsorted(source_ts, decision + horizon_ms, side="right")
         if lo >= hi:
             continue
-        r = np.log(source_px[lo:hi] / pp[anchor_i])
+        r = np.log(source_px[lo:hi] / source_px[source_anchor_i])
         hit = np.flatnonzero(np.abs(r) >= cutoff)
         if len(hit):
             j = lo + int(hit[0])
