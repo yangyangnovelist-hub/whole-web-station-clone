@@ -865,69 +865,114 @@ def _format_summary(name: str, summary: dict) -> str:
     )
 
 
-def run_backtest(
-    public_paths: list[str],
-    september_paths: list[str],
-    *,
-    report_out: str | Path,
-    fills_out: str | Path,
-) -> dict:
-    """Fit on A, choose once on B, and write the locked public-C and September results."""
-    public = pd.concat([pd.read_parquet(path) for path in public_paths], ignore_index=True)
-    public = public.drop_duplicates(["market_id", "decision_ms"], keep="last")
-    september = pd.concat([pd.read_parquet(path) for path in september_paths], ignore_index=True)
-    september = september.drop_duplicates(["market_id", "decision_ms"], keep="last")
+def save_public_bundle(bundle: dict, path: str | Path) -> None:
+    """Persist fitted public models and locked-C evidence for local September scoring."""
+    import joblib
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, target, compress=3)
+
+
+def load_public_bundle(path: str | Path) -> dict:
+    """Load a bundle written by :func:`save_public_bundle`."""
+    import joblib
+
+    bundle = joblib.load(path)
+    if not isinstance(bundle, dict) or bundle.get("schema_version") != 1:
+        raise ValueError("unsupported CrossVenue-120 public bundle")
+    return bundle
+
+
+def _read_unique_frames(paths: list[str]) -> pd.DataFrame:
+    if not paths:
+        raise ValueError("at least one parquet path is required")
+    frame = pd.concat([pd.read_parquet(path) for path in paths], ignore_index=True)
+    return frame.drop_duplicates(["market_id", "decision_ms"], keep="last").reset_index(drop=True)
+
+
+def fit_public_bundle(public_paths: list[str]) -> dict:
+    """Fit on A, select once on B, and lock all public-C evidence into a portable bundle."""
+    public = _read_unique_frames(public_paths)
     train = public[public["day"] <= "2026-07-15"].reset_index(drop=True)
     validation = public[(public["day"] >= "2026-07-16") & (public["day"] <= "2026-08-16")].reset_index(drop=True)
     public_locked = public[public["day"] >= "2026-08-17"].reset_index(drop=True)
-    if min(map(len, (train, validation, public_locked, september))) == 0:
-        raise ValueError("one of train/validation/public-lockbox/September is empty")
+    del public
+    if min(map(len, (train, validation, public_locked))) == 0:
+        raise ValueError("one of train/validation/public-lockbox is empty")
 
     full = fit_joint_models(train, include_venue=True)
     validation_full = predict_joint_models(full, validation)
     policy = choose_policy(validation_full)
+    del validation_full
     public_prediction = predict_joint_models(full, public_locked)
-    september_prediction = predict_joint_models(full, september)
     public_summary, _, public_fills = evaluate_policy(public_prediction, policy)
-    september_summary, _, september_fills = evaluate_policy(september_prediction, policy)
+    public_direction, _ = direction_only_control(public_prediction, policy)
+    public_metrics = prediction_metrics(public_prediction, policy["min_jump"])
+    del public_prediction
 
     spot = fit_joint_models(train, include_venue=False)
     validation_spot = predict_joint_models(spot, validation)
     spot_policy = choose_policy(validation_spot)
-    public_spot_prediction = predict_joint_models(spot, public_locked)
-    september_spot_prediction = predict_joint_models(spot, september)
-    public_spot_summary, _, _ = evaluate_policy(public_spot_prediction, spot_policy)
-    september_spot_summary, _, _ = evaluate_policy(september_spot_prediction, spot_policy)
+    del validation_spot
+    public_spot_summary, _, _ = evaluate_policy(predict_joint_models(spot, public_locked), spot_policy)
 
     placebo = placebo_jump_models(full, train)
     validation_placebo = predict_joint_models(placebo, validation)
     placebo_policy = choose_policy(validation_placebo)
+    del validation_placebo
     public_placebo, _, _ = evaluate_policy(predict_joint_models(placebo, public_locked), placebo_policy)
-    september_placebo, _, _ = evaluate_policy(predict_joint_models(placebo, september), placebo_policy)
-    public_direction, _ = direction_only_control(public_prediction, policy)
-    september_direction, _ = direction_only_control(september_prediction, policy)
-
-    public_metrics = prediction_metrics(public_prediction, policy["min_jump"])
-    september_metrics = prediction_metrics(september_prediction, policy["min_jump"])
-    september_perp = september_prediction[september_prediction["venue_feature_max_ms"].notna()]
-    september_perp_metrics = prediction_metrics(september_perp, policy["min_jump"]) if len(september_perp) else {}
 
     public_summary["candidates"] = len(public_locked)
-    september_summary["candidates"] = len(september)
-    for summary, count in ((public_spot_summary, len(public_locked)), (september_spot_summary, len(september)),
-                           (public_placebo, len(public_locked)), (september_placebo, len(september))):
-        summary["candidates"] = count
-    locked_fills = pd.concat([
-        public_fills.assign(period="C 2026-08-17..29"),
-        september_fills.assign(period="September recorder lockbox"),
-    ], ignore_index=True)
-    Path(fills_out).parent.mkdir(parents=True, exist_ok=True)
-    locked_fills.to_csv(fills_out, index=False, compression="gzip")
+    public_spot_summary["candidates"] = len(public_locked)
+    public_placebo["candidates"] = len(public_locked)
+    return {
+        "schema_version": 1,
+        "full": full,
+        "spot": spot,
+        "placebo": placebo,
+        "policy": policy,
+        "spot_policy": spot_policy,
+        "placebo_policy": placebo_policy,
+        "public_summary": public_summary,
+        "public_spot_summary": public_spot_summary,
+        "public_placebo": public_placebo,
+        "public_direction": public_direction,
+        "public_metrics": public_metrics,
+        "public_fills": public_fills,
+        "split": {
+            "train_min": str(train["day"].min()), "train_max": str(train["day"].max()),
+            "train_rows": int(len(train)),
+            "validation_min": str(validation["day"].min()), "validation_max": str(validation["day"].max()),
+            "validation_rows": int(len(validation)),
+            "public_min": str(public_locked["day"].min()), "public_max": str(public_locked["day"].max()),
+            "public_rows": int(len(public_locked)),
+        },
+    }
 
-    public_pass = public_summary["fills"] >= 30 and public_summary["ci_low"] > 0
-    september_pass = september_summary["fills"] >= 30 and september_summary["ci_low"] > 0
-    verdict = "通过两套锁定样本" if public_pass and september_pass else "未通过双锁定门槛"
-    L = [
+
+def _write_combined_report(
+    bundle: dict,
+    *,
+    september: pd.DataFrame,
+    september_summary: dict,
+    september_spot_summary: dict,
+    september_placebo: dict,
+    september_direction: dict,
+    september_metrics: dict,
+    september_perp_count: int,
+    september_perp_metrics: dict,
+    verdict: str,
+    report_out: str | Path,
+) -> None:
+    policy = bundle["policy"]
+    public_summary = bundle["public_summary"]
+    public_spot_summary = bundle["public_spot_summary"]
+    public_placebo = bundle["public_placebo"]
+    public_direction = bundle["public_direction"]
+    public_metrics = bundle["public_metrics"]
+    split = bundle["split"]
+    lines = [
         "# CrossVenue-120：提前预测 + 可成交性联合模型",
         "",
         f"**结论：{verdict}。** 只有 8/17–29 与九月实录两段都达到至少 30 笔成交且按市场聚类的 95% CI 下界大于 0，才允许进入小额实盘。",
@@ -947,9 +992,9 @@ def run_backtest(
         "",
         "## 训练、选参和固定策略",
         "",
-        f"- 训练 A：{train['day'].min()}–{train['day'].max()}，{len(train):,} 个候选。",
-        f"- 选参 B：{validation['day'].min()}–{validation['day'].max()}，{len(validation):,} 个候选；只在这里选择一次门槛。",
-        f"- 锁定 C：{public_locked['day'].min()}–{public_locked['day'].max()}，{len(public_locked):,} 个候选；九月另有 {len(september):,} 个候选。",
+        f"- 训练 A：{split['train_min']}–{split['train_max']}，{split['train_rows']:,} 个候选。",
+        f"- 选参 B：{split['validation_min']}–{split['validation_max']}，{split['validation_rows']:,} 个候选；只在这里选择一次门槛。",
+        f"- 锁定 C：{split['public_min']}–{split['public_max']}，{split['public_rows']:,} 个候选；九月另有 {len(september):,} 个候选。",
         f"- 固定门槛：跳动概率 ≥ {policy['min_jump']:.4f}，成交概率 ≥ {policy['min_fill']:.2f}，"
         f"预测净 edge ≥ {100 * policy['min_expected_edge']:.0f}¢，最多追 {100 * policy['chase']:.0f}¢。",
         f"- B 段选参结果：{policy['validation_fills']:,} 成交，净 edge {100 * policy['validation_edge']:+.2f}¢/份，5 份总收益 ${policy['validation_profit_usd']:+.2f}。",
@@ -983,7 +1028,7 @@ def run_backtest(
         f"| 只看提前方向、盲追当前卖一 | {100 * public_direction['edge']:+.2f}¢ | {public_direction['fills']:,} | {100 * september_direction['edge']:+.2f}¢ | {september_direction['fills']:,} |",
         f"| 打乱提前标签后重新选参 | {100 * public_placebo['edge']:+.2f}¢ | {public_placebo['fills']:,} | {100 * september_placebo['edge']:+.2f}¢ | {september_placebo['fills']:,} |",
         "",
-        (f"九月带 Binance 永续的子集有 {len(september_perp):,} 个候选；其提前预测 AUPRC "
+        (f"九月带 Binance 永续的子集有 {september_perp_count:,} 个候选；其提前预测 AUPRC "
          f"{september_perp_metrics.get('average_precision', np.nan):.3f}，基准率 {september_perp_metrics.get('prevalence', np.nan):.2%}。"),
         "",
         "## 仍然不能从回测中假定的事情",
@@ -996,15 +1041,91 @@ def run_backtest(
         "因此，通过门槛也只代表值得做受限小额实盘；未通过则不部署 CrossVenue-120。",
     ]
     Path(report_out).parent.mkdir(parents=True, exist_ok=True)
-    Path(report_out).write_text("\n".join(L) + "\n", encoding="utf-8")
+    Path(report_out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def finish_backtest_bundle(
+    bundle: dict,
+    september_paths: list[str],
+    *,
+    report_out: str | Path,
+    fills_out: str | Path,
+) -> dict:
+    """Score the untouched September recorder with an already locked public-data bundle."""
+    if bundle.get("schema_version") != 1:
+        raise ValueError("unsupported CrossVenue-120 public bundle")
+    september = _read_unique_frames(september_paths)
+    if september.empty:
+        raise ValueError("September lockbox is empty")
+
+    september_prediction = predict_joint_models(bundle["full"], september)
+    september_summary, _, september_fills = evaluate_policy(september_prediction, bundle["policy"])
+    september_direction, _ = direction_only_control(september_prediction, bundle["policy"])
+    september_metrics = prediction_metrics(september_prediction, bundle["policy"]["min_jump"])
+    september_perp = september_prediction[september_prediction["venue_feature_max_ms"].notna()]
+    september_perp_count = len(september_perp)
+    september_perp_metrics = (
+        prediction_metrics(september_perp, bundle["policy"]["min_jump"]) if len(september_perp) else {}
+    )
+    del september_prediction, september_perp
+    september_spot_summary, _, _ = evaluate_policy(
+        predict_joint_models(bundle["spot"], september), bundle["spot_policy"]
+    )
+    september_placebo, _, _ = evaluate_policy(
+        predict_joint_models(bundle["placebo"], september), bundle["placebo_policy"]
+    )
+    september_summary["candidates"] = len(september)
+    september_spot_summary["candidates"] = len(september)
+    september_placebo["candidates"] = len(september)
+
+    locked_fills = pd.concat([
+        bundle["public_fills"].assign(period="C 2026-08-17..29"),
+        september_fills.assign(period="September recorder lockbox"),
+    ], ignore_index=True)
+    Path(fills_out).parent.mkdir(parents=True, exist_ok=True)
+    locked_fills.to_csv(fills_out, index=False, compression="gzip")
+
+    public_summary = bundle["public_summary"]
+    public_pass = public_summary["fills"] >= 30 and public_summary["ci_low"] > 0
+    september_pass = september_summary["fills"] >= 30 and september_summary["ci_low"] > 0
+    verdict = "通过两套锁定样本" if public_pass and september_pass else "未通过双锁定门槛"
+    _write_combined_report(
+        bundle,
+        september=september,
+        september_summary=september_summary,
+        september_spot_summary=september_spot_summary,
+        september_placebo=september_placebo,
+        september_direction=september_direction,
+        september_metrics=september_metrics,
+        september_perp_count=september_perp_count,
+        september_perp_metrics=september_perp_metrics,
+        verdict=verdict,
+        report_out=report_out,
+    )
     return {
         "verdict": verdict,
-        "policy": policy,
+        "policy": bundle["policy"],
         "public": public_summary,
         "september": september_summary,
-        "public_metrics": public_metrics,
+        "public_metrics": bundle["public_metrics"],
         "september_metrics": september_metrics,
     }
+
+
+def run_backtest(
+    public_paths: list[str],
+    september_paths: list[str],
+    *,
+    report_out: str | Path,
+    fills_out: str | Path,
+) -> dict:
+    """Fit public A/B/C and score September in one process."""
+    return finish_backtest_bundle(
+        fit_public_bundle(public_paths),
+        september_paths,
+        report_out=report_out,
+        fills_out=fills_out,
+    )
 
 
 def cluster_summary(fills: pd.DataFrame, *, bootstrap_reps: int = 10_000, seed: int = 120) -> dict:
@@ -1235,6 +1356,14 @@ def main(argv: list[str] | None = None) -> None:
     fit_report.add_argument("--september", action="append", required=True)
     fit_report.add_argument("--out", required=True)
     fit_report.add_argument("--fills-out", required=True)
+    fit_public = sub.add_parser("fit-public")
+    fit_public.add_argument("--public", action="append", required=True)
+    fit_public.add_argument("--bundle-out", required=True)
+    finish_report = sub.add_parser("finish-report")
+    finish_report.add_argument("--bundle", required=True)
+    finish_report.add_argument("--september", action="append", required=True)
+    finish_report.add_argument("--out", required=True)
+    finish_report.add_argument("--fills-out", required=True)
     args = parser.parse_args(argv)
     if args.command == "extract-public":
         extract_public(out=args.out, workdir=args.workdir, shard=args.shard, start=args.start, end=args.end)
@@ -1247,9 +1376,21 @@ def main(argv: list[str] | None = None) -> None:
             secondary_zips=args.secondary_zip,
             receive_delay_ms=args.receive_delay_ms,
         )
-    else:
+    elif args.command == "fit-report":
         result = run_backtest(
             args.public, args.september, report_out=args.out, fills_out=args.fills_out,
+        )
+        print(result)
+    elif args.command == "fit-public":
+        bundle = fit_public_bundle(args.public)
+        save_public_bundle(bundle, args.bundle_out)
+        print({"policy": bundle["policy"], "public": bundle["public_summary"], "split": bundle["split"]})
+    else:
+        result = finish_backtest_bundle(
+            load_public_bundle(args.bundle),
+            args.september,
+            report_out=args.out,
+            fills_out=args.fills_out,
         )
         print(result)
 

@@ -318,3 +318,14 @@ def test_model_matrix_is_invariant_to_labels_and_future_execution():
     changed = base.assign(jump_direction=-1, up_won=0.0, match_up_ask=0.01, match_down_ask=0.99)
     pd.testing.assert_frame_equal(cv.model_matrix(base), cv.model_matrix(changed))
     assert not any("jump" in c or "match" in c or "won" in c for c in cv.model_matrix(base).columns)
+
+
+def test_public_bundle_round_trip(tmp_path):
+    bundle = {
+        "schema_version": 1,
+        "policy": {"min_jump": 0.9, "chase": 0.03},
+        "public_summary": {"fills": 31, "edge": 0.01},
+    }
+    path = tmp_path / "public-model.joblib"
+    cv.save_public_bundle(bundle, path)
+    assert cv.load_public_bundle(path) == bundle
