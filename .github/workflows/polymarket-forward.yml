@@ -78,6 +78,13 @@ jobs:
             python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
               --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv" || continue
             python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
+            if [ "$c" = btc ] && [ -d "$b/latency" ]; then
+              python theta30.py --latency-dir "$b/latency" \
+                --out "$RUNNER_TEMP/theta30-new.csv" \
+                --manifest forward/theta30-freeze.json \
+                --append forward/theta30.csv \
+                --report forward/theta30.md || true
+            fi
           done
           python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"
           python forward.py report

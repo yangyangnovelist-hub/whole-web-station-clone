@@ -35,6 +35,27 @@ def taker_fee(price, rate=CRYPTO_FEE_RATE):
     return rate * p * (1.0 - p)
 
 
+def long_binary_pnl(won, price, shares=1.0, rate=CRYPTO_FEE_RATE):
+    """Settlement P&L for a long binary claim bought as a taker."""
+    p = np.asarray(price, dtype=float)
+    return np.asarray(shares, dtype=float) * (np.asarray(won, dtype=float) - p - taker_fee(p, rate))
+
+
+def paired_lock_pnl(first_price, hedge_price, shares=1.0, rate=CRYPTO_FEE_RATE):
+    """Outcome-independent P&L after buying equal shares of both outcomes."""
+    first = np.asarray(first_price, dtype=float)
+    hedge = np.asarray(hedge_price, dtype=float)
+    return np.asarray(shares, dtype=float) * (
+        1.0 - first - taker_fee(first, rate) - hedge - taker_fee(hedge, rate)
+    )
+
+
+def can_lock_profit(first_price, hedge_price, rate=CRYPTO_FEE_RATE):
+    """Whether an equal-size opposite-side purchase locks strictly positive P&L."""
+    result = paired_lock_pnl(first_price, hedge_price, rate=rate) > 0
+    return bool(result) if np.ndim(result) == 0 else result
+
+
 def future_samples(t, window=WINDOW_S, twap=TWAP_S):
     """Settlement samples (seconds window-twap+1 .. window) still unknown at second t."""
     return np.clip(window - np.asarray(t), 0, twap)

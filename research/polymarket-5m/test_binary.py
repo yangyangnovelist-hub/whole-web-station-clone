@@ -67,3 +67,21 @@ def test_kelly():
     assert bo.kelly_fraction(0.5, 0.5) == 0.0
     cost = 0.9 + bo.taker_fee(0.9)
     assert bo.kelly_fraction(0.95, 0.9) == pytest.approx((0.95 - cost) / (1 - cost))
+
+
+def test_binary_and_equal_size_insurance_payoffs_include_both_taker_fees():
+    assert bo.long_binary_pnl(True, 0.40, shares=2) == pytest.approx(
+        2 * (1 - 0.40 - bo.taker_fee(0.40))
+    )
+    assert bo.long_binary_pnl(False, 0.40, shares=2) == pytest.approx(
+        -2 * (0.40 + bo.taker_fee(0.40))
+    )
+
+    expected_lock = 1 - 0.40 - bo.taker_fee(0.40) - 0.55 - bo.taker_fee(0.55)
+    assert bo.paired_lock_pnl(0.40, 0.55) == pytest.approx(expected_lock)
+    assert bo.can_lock_profit(0.40, 0.55) is bool(expected_lock > 0)
+
+
+def test_routine_opposite_side_insurance_is_rejected_when_all_in_cost_reaches_one():
+    assert bo.paired_lock_pnl(0.50, 0.50) < 0
+    assert bo.can_lock_profit(0.50, 0.50) is False
