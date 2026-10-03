@@ -1,6 +1,13 @@
 name: polymarket-crossvenue120
 
 on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths:
+      - .github/workflows/polymarket-crossvenue120.yml
+      - research/polymarket-5m/crossvenue120.py
+      - research/polymarket-5m/test_crossvenue120.py
+      - research/polymarket-5m/requirements.txt
   workflow_dispatch:
     inputs:
       scope:
