@@ -31,8 +31,8 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Replayed all five retained eligible BTC artifacts (1,860 market rows; 465 frozen signals). Five-share executable fills and net EV/share were: 300 ms 400 fills, -1.55c; 350 ms 397, -1.67c; 400 ms 396, -1.19c; 500 ms 399, -1.64c. All exact fair-price p-values were 1 across three UTC days. Candidate zoo100 #27 is rejected as robustly negative at every tested latency; the post-protocol stopping sample remains immutably separate and empty."
     },
     {
       "id": "US-003",

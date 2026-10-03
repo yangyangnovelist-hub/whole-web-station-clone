@@ -1,5 +1,6 @@
 # Ralph progress
 
 Completed: US-001 — frozen 5-second momentum replay implementation and adversarial fixes.
-Active: US-002 — backfill every retained post-freeze GitHub recording artifact.
+Completed: US-002 — all retained eligible recordings replayed; zoo100 #27 rejected at 300/350/400/500 ms (400 ms: 396 fills, -1.19¢/share, exact p = 1).
+Active: US-003 — verify the continuous paper workflow appends first-observation evidence idempotently; then proceed directly to US-004 residual-alpha families.
 Safety: paper-only; production HALT remains in force.
