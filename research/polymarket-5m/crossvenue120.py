@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 
-AUG_17_2026_1400_UTC_MS = int(pd.Timestamp("2026-08-17T14:00:00Z").timestamp() * 1000)
+AUG_17_2026_1100_UTC_MS = int(pd.Timestamp("2026-08-17T11:00:00Z").timestamp() * 1000)
 SEP_04_2026_1400_UTC_MS = int(pd.Timestamp("2026-09-04T14:00:00Z").timestamp() * 1000)
 
 RETURN_WINDOWS_MS = (20, 50, 100, 250, 500, 1000, 2000)
@@ -29,7 +29,7 @@ VENUE_WINDOWS_MS = (50, 100, 250, 500)
 
 def taker_hold_ms(timestamp_ms: int) -> int:
     """Return the fixed crypto-market taker hold in force at ``timestamp_ms``."""
-    if timestamp_ms < AUG_17_2026_1400_UTC_MS:
+    if timestamp_ms < AUG_17_2026_1100_UTC_MS:
         return 250
     if timestamp_ms < SEP_04_2026_1400_UTC_MS:
         return 50
@@ -720,7 +720,7 @@ def choose_policy(validation: pd.DataFrame, *, min_fills: int = 30) -> dict:
     for jump in jump_levels:
         for fill in (0.40, 0.60, 0.75):
             for edge in (0.02, 0.04, 0.06, 0.08):
-                for chase in (0.01, 0.03, 0.05):
+                for chase in (0.03,):  # matches the fill model and the existing live order rule
                     signals, fills = replay_joint_predictions(
                         validation,
                         min_jump=float(jump),
@@ -764,9 +764,24 @@ def evaluate_policy(predictions: pd.DataFrame, policy: dict) -> tuple[dict, pd.D
         summary["max_drawdown_usd"] = float(-drawdown.min())
         days = max(1, ordered["day"].nunique()) if "day" in ordered else 1
         summary["profit_per_covered_day"] = float(summary["profit_usd"] / days)
+        delay = fills["match_ms"].to_numpy(float) - fills["decision_ms"].to_numpy(float)
+        summary["match_delay_p50_ms"] = float(np.quantile(delay, 0.50))
+        summary["match_delay_p90_ms"] = float(np.quantile(delay, 0.90))
+        event = fills["jump_direction"].to_numpy(int) != 0
+        if event.any():
+            relative = fills.loc[event, "match_ms"].to_numpy(float) - fills.loc[event, "jump_ts_ms"].to_numpy(float)
+            summary["jump_to_match_p50_ms"] = float(np.quantile(relative, 0.50))
+            summary["jump_to_match_p90_ms"] = float(np.quantile(relative, 0.90))
+        else:
+            summary["jump_to_match_p50_ms"] = np.nan
+            summary["jump_to_match_p90_ms"] = np.nan
     else:
         summary["max_drawdown_usd"] = 0.0
         summary["profit_per_covered_day"] = 0.0
+        summary["match_delay_p50_ms"] = np.nan
+        summary["match_delay_p90_ms"] = np.nan
+        summary["jump_to_match_p50_ms"] = np.nan
+        summary["jump_to_match_p90_ms"] = np.nan
     return summary, signals, fills
 
 
@@ -931,6 +946,17 @@ def run_backtest(
         f"- 固定门槛：跳动概率 ≥ {policy['min_jump']:.4f}，成交概率 ≥ {policy['min_fill']:.2f}，"
         f"预测净 edge ≥ {100 * policy['min_expected_edge']:.0f}¢，最多追 {100 * policy['chase']:.0f}¢。",
         f"- B 段选参结果：{policy['validation_fills']:,} 成交，净 edge {100 * policy['validation_edge']:+.2f}¢/份，5 份总收益 ${policy['validation_profit_usd']:+.2f}。",
+        "",
+        "## 实际重放延迟",
+        "",
+        "| 样本 | 决策→匹配 p50 / p90 | 源跳动→匹配 p50 / p90 |",
+        "|---|---:|---:|",
+        f"| C | {public_summary['match_delay_p50_ms']:.0f} / {public_summary['match_delay_p90_ms']:.0f} ms | "
+        f"{public_summary['jump_to_match_p50_ms']:+.0f} / {public_summary['jump_to_match_p90_ms']:+.0f} ms |",
+        f"| 九月 | {september_summary['match_delay_p50_ms']:.0f} / {september_summary['match_delay_p90_ms']:.0f} ms | "
+        f"{september_summary['jump_to_match_p50_ms']:+.0f} / {september_summary['jump_to_match_p90_ms']:+.0f} ms |",
+        "",
+        "负的“源跳动→匹配”表示订单在该次跳动发生前已完成撮合；正数表示跳动后才撮合。",
         "",
         "## 提前预测本身",
         "",

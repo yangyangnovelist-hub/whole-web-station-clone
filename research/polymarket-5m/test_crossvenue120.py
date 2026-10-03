@@ -10,7 +10,7 @@ def ms(value):
 
 
 def test_historical_taker_hold_boundaries():
-    aug = ms("2026-08-17 14:00:00")
+    aug = ms("2026-08-17 11:00:00")
     sep = ms("2026-09-04 14:00:00")
     assert cv.taker_hold_ms(aug - 1) == 250
     assert cv.taker_hold_ms(aug) == 50
