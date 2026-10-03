@@ -1,6 +1,8 @@
 # Theta30 favourite strategy
 
-**Current verdict:** this is the only candidate promoted to a frozen fresh-forward test. It is not yet proven live-profitable.
+**Current verdict:** research-only, unproven, and not authorised for live trading. It remains a frozen hypothesis solely so the fresh-forward test can accept or reject it without changing parameters.
+
+The raw win rate is not evidence of alpha. A contract bought at 0.80–0.97 is already priced to win most of the time. The relevant null is the exact probability implied by each executable entry price plus fees, not 50%. On that test the delayed-depth history is only p=0.0655, so it fails the 1% gate even before correcting for the wider strategy search.
 
 At 30 seconds before settlement, buy the current favourite only when its ask is 0.80–0.97. The FAK limit is fixed before submission at no more than one cent above that ask, the order is five shares, and the crypto taker fee is charged. Historical fill proxies require five shares of executable depth to remain available from 150 through 350 ms after the decision. There is no routine hedge; an opposite claim is allowed only after the first fill is confirmed and the two all-in costs lock a positive payout.
 
