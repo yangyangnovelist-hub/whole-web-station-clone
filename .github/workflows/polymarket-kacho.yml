@@ -131,7 +131,7 @@ jobs:
           set -u
           rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"; failed=0; expected=0; extracted=0
           ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-                --jq '.artifacts[] | select(.expired == false and (.name | startswith("recording-"))) | .workflow_run.id' \
+                --jq '.artifacts[] | select(.expired == false and .created_at >= "2026-10-01T06:20:50Z" and (.name | startswith("recording-"))) | .workflow_run.id' \
                 | sort -u)
           for id in $ids; do
             expected=$((expected + 1))
