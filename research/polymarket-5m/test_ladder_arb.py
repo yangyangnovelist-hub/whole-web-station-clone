@@ -14,10 +14,22 @@ T = NOON - 3600            # the synthetic recording starts an hour before noon
 FEE = 0.07
 
 
-def mk(cid, typ, lo=None, hi=None, end=NOON, start=None, ref=None, ref_ts=None, event="ev", day="2026-10-04"):
+def unit(p):
+    """Cost of one share of payoff at ask p (the fee taken in shares: the conservative reading)."""
+    return p / (1 - FEE * (1 - p))
+
+
+def kf(p):
+    return 1 - FEE * (1 - p)
+
+
+def mk(cid, typ, lo=None, hi=None, end=NOON, start=None, ref=None, ref_ts=None, event="ev", day="2026-10-04",
+       ref_open12=None):
+    """ref: ladder.py's ref_price (the close of the candle closing at ref_ts: the close12 reading);
+    ref_open12: the close of the candle opening at ref_ts (the open12 reading)."""
     return {"condition_id": cid, "slug": cid, "event_slug": event, "type": typ, "lo": lo, "hi": hi, "end_ts": end,
-            "start_ts": start, "ref_ts": ref_ts, "ref_price": ref, "yes_token": cid + "Y", "no_token": cid + "N",
-            "tick": 0.01, "fee_rate": FEE, "day": day, "neg_risk": typ == "range"}
+            "start_ts": start, "ref_ts": ref_ts, "ref_price": ref, "ref_open12": ref_open12, "yes_token": cid + "Y",
+            "no_token": cid + "N", "tick": 0.01, "fee_rate": FEE, "day": day, "neg_risk": typ == "range"}
 
 
 def hit(cid, typ, level, start=DAY0, end=DAY0 + 86400):
@@ -74,9 +86,11 @@ def test_payoffs_follow_the_rules():
     assert la.payoff(a, "Y", x).tolist() == [0, 0, 1, 1, 1]        # strictly above
     assert la.payoff(r, "Y", x).tolist() == [0, 1, 1, 0, 0]        # [a, b): the higher bracket on a bound
     assert la.payoff(top, "Y", x).tolist() == [0, 0, 0, 0, 1]      # ">92,000" is [92000, inf)
-    u = la.prep_markets([mk("U", "updown_day", end=NOON, ref=80000.0, ref_ts=NOON - 86400)])[0]
+    u = la.prep_markets([mk("U", "updown_day", end=NOON, ref=80000.0, ref_open12=80000.0, ref_ts=NOON - 86400)])[0]
     assert la.payoff(u, "Y", np.array([79999.0, 80000.0, 80001.0])).tolist() == [0, 0.5, 1]
-    assert u["candle"] == NOON - 60                                  # the candle closing at noon
+    # both readings: the candle closing at noon (the text since 10-02) and the one opening at noon (every
+    # official result up to 09-30)
+    assert u["variants"] == [(NOON - 60, 80000.0), (NOON, 80000.0)]
 
 
 def test_above_ladder_basket_and_arb_after_fees():
@@ -91,10 +105,11 @@ def test_above_ladder_basket_and_arb_after_fees():
     assert find(bs, [("A1", "N"), ("A2", "Y")]) is None              # the wrong direction is not a basket
     e = eps_of(eps, [("A1", "Y"), ("A2", "N")])
     assert len(e) == 1
-    fee = FEE * (0.55 * 0.45 + 0.40 * 0.60)
-    assert e[0]["edge"] == pytest.approx(1 - 0.95 - fee)
-    assert e[0]["size"] == 50                                         # min(ask size of Yes A1, bid size of Yes A2)
-    assert e[0]["take"] == pytest.approx(50 * (1 - 0.95 - fee))
+    edge = 1 - unit(0.55) - unit(0.40)
+    assert edge < 1 - 0.95 - FEE * (0.55 * 0.45 + 0.40 * 0.60)        # never cheaper than the fee in USDC
+    assert e[0]["edge"] == pytest.approx(edge)
+    assert e[0]["size"] == pytest.approx(50 * kf(0.55))               # min(ask size of Yes A1, bid size of Yes A2), net of the fee
+    assert e[0]["take"] == pytest.approx(50 * kf(0.55) * edge)
     assert e[0]["later"] and e[0]["dur"] == pytest.approx(10.5, abs=0.02)   # gone when A2's bid drops at T + 10.5
 
 
@@ -105,7 +120,7 @@ def test_fees_remove_a_pre_fee_arb():
     _, bs, summ, eps = run([A1, A2], bk)
     assert not eps_of(eps, [("A1", "Y"), ("A2", "N")])
     best = summ.set_index("label").loc[find(bs, [("A1", "Y"), ("A2", "N")]).label(), "best"]
-    assert best == pytest.approx(1 - 0.98 - FEE * (0.55 * 0.45 + 0.43 * 0.57))
+    assert best == pytest.approx(1 - unit(0.55) - unit(0.43))
 
 
 def test_staleness_and_feed():
@@ -158,7 +173,7 @@ def test_hit_ladders_and_touch():
     assert next(m for m in ms if m["condition_id"] == "U1")["touch"] == T + 5.0
     e = eps_of(eps, [("U1", "Y"), ("U2", "N")])
     assert len(e) == 1 and e[0]["dur"] == pytest.approx(5.0, abs=0.05)
-    assert e[0]["edge"] == pytest.approx(1 - 0.95 - FEE * (0.3 * 0.7 + 0.65 * 0.35))
+    assert e[0]["edge"] == pytest.approx(1 - unit(0.30) - unit(0.65))
     # a level the day's 1m high had reached before the recording is never used
     pre = dict(U1, pre_high=90500.0, pre_low=85000.0, pre_at=T - 100)
     ms = la.prep_markets([pre, U2])
@@ -184,16 +199,29 @@ def test_above_vs_hit_needs_the_noon_candle_inside_the_window():
     assert la.contains((DAY0, DAY0 + 86400), NOON) and not la.contains((NOON + 1, NOON + 86400), NOON)
 
 
-def test_updown_day_uses_the_candle_closing_at_noon():
-    U = mk("U", "updown_day", end=NOON, ref=88000.0, ref_ts=NOON - 86400)
+def test_updown_day_must_pay_under_both_noon_readings():
+    # close12 reference (ladder.py) 88,000, open12 reference 87,900
+    U = mk("U", "updown_day", end=NOON, ref=88000.0, ref_open12=87900.0, ref_ts=NOON - 86400)
     A = mk("A", "above", lo=87000)
     H = hit("H", "hit_up", 87500)
     bs = la.baskets(la.prep_markets([U, A, H]))
-    assert not any({m["type"] for m, _ in b.legs} == {"above", "updown_day"} for b in bs)   # different candles
-    b = find(bs, [("U", "N"), ("H", "Y")])                     # Up (close > 88k, 50-50 on a tie) => High >= 87.5k
-    assert b is not None and b.kind == "hit_up-updown_day"
+    assert not any({m["type"] for m, _ in b.legs} == {"above", "updown_day"} for b in bs)   # no common candle
+    b = find(bs, [("U", "N"), ("H", "Y")])        # Down unless close > ref (either reading) => High >= 87.5k
+    assert b is not None and b.kind == "hit_up-updown_day" and not b.boundary
+    # a level between the two references: under open12 a close in [87,900, 87,950) is Up and no touch
+    mid = hit("M", "hit_up", 87950)
+    assert find(la.baskets(la.prep_markets([U, mid])), [("U", "N"), ("M", "Y")]) is None
+    only_close12 = la.baskets(la.prep_markets([dict(U, ref_open12=88000.0), mid]))
+    assert find(only_close12, [("U", "N"), ("M", "Y")]) is not None   # what the close12 reading alone would accept
+    # the open12 reference from the recorded prints when not given: the last print before ref_ts + 60
+    spot = pd.DataFrame({"trade_ts": [NOON - 86400 - 3.0, NOON - 86400 + 58.0], "receive_ts": [0.0, 0.0],
+                         "price": [88000.0, 87900.0]})
+    u = la.prep_markets([dict(U, ref_open12=None)], spot)[0]
+    assert u["refs"] == {"close12": 88000.0, "open12": 87900.0} and u["t_from"] == NOON - 86400 + 60
     no_ref = mk("V", "updown_day", end=NOON + 86400, ref=None, ref_ts=NOON)
     assert la.prep_markets([no_ref])[0]["candle"] is None      # reference unknown: no relation
+    half = mk("W", "updown_day", end=NOON + 86400, ref=88000.0, ref_ts=NOON)
+    assert la.prep_markets([half])[0]["candle"] is None        # one reading's reference unknown: no relation
 
 
 def test_range_sums_and_partition_check():
@@ -208,8 +236,8 @@ def test_range_sums_and_partition_check():
     _, _, summ, eps = run(R, bk)
     ey = eps_of(eps, [(c, "Y") for c in ("R1", "R2", "R3")])
     en = eps_of(eps, [(c, "N") for c in ("R1", "R2", "R3")])
-    assert ey and ey[0]["edge"] == pytest.approx(1 - 0.9 - 3 * FEE * 0.3 * 0.7)
-    assert en and en[0]["edge"] == pytest.approx(2 - 1.8 - 3 * FEE * 0.6 * 0.4)
+    assert ey and ey[0]["edge"] == pytest.approx(1 - 3 * unit(0.30))
+    assert en and en[0]["edge"] == pytest.approx(2 - 3 * unit(0.60))
     assert np.isnan(en[0]["apy"])                             # converted at once, no lock-up
     bk = books(heartbeat(), *[quotes(c, every(T, T + 60, 1, 0.30, 0.35)) for c in ("R1", "R2", "R3")])
     _, _, _, eps = run(R, bk)
@@ -236,15 +264,49 @@ def test_boxes_and_range_in_above_with_boundaries():
                quotes("B", every(T, T + 60, 1, 0.29, 0.30)))
     _, _, _, eps = run([A, R, B], bk)
     e = eps_of(eps, [("A", "N"), ("R", "Y"), ("B", "Y")])
-    assert e and e[0]["boundary"] and e[0]["edge"] == pytest.approx(1 - 0.9 - 3 * FEE * 0.21)
+    assert e and e[0]["boundary"] and e[0]["edge"] == pytest.approx(1 - 3 * unit(0.30))
+
+
+def _ep(start, edge, legs):
+    """An episode: legs (token, ask, size, since); keep_frac 1 for simple numbers."""
+    return {"start": start, "end": start + 1, "edge": edge, "take": min(min(z for _, _, z, _ in legs), la.TAKE) * edge,
+            "legs": [(t, a, z, s, 1.0) for t, a, z, s in legs], "legs5": None, "edge5": np.nan, "take5": 0.0,
+            "tokens": [t for t, *_ in legs], "boundary": False}
 
 
 def test_dedupe_counts_a_stale_quote_once():
-    e1 = {"start": 0.0, "end": 10.0, "take": 2.0, "tokens": ["a", "b"]}
-    e2 = {"start": 1.0, "end": 5.0, "take": 3.0, "tokens": ["b", "c"]}
-    e3 = {"start": 11.0, "end": 12.0, "take": 1.0, "tokens": ["b", "d"]}
-    kept = la.dedupe([e1, e2, e3])
-    assert kept == [e1, e3]
+    # b: one resting ask 0.99 x 30 seen since t = 0, never taken or replaced
+    e1 = _ep(0.0, 0.01, [("a", 0.005, 50.0, 0.0), ("b", 0.99, 30.0, 0.0)])
+    e2 = _ep(1.0, 0.02, [("b", 0.99, 30.0, 0.0), ("c", 0.004, 80.0, 0.0)])    # b already bought: dropped
+    e3 = _ep(11.0, 0.01, [("b", 0.99, 30.0, 0.0), ("d", 0.003, 80.0, 0.0)])   # still the same order: dropped
+    kept, dropped = la.dedupe([e1, e2, e3])
+    assert [k["start"] for k in kept] == [0.0] and dropped == 2
+    assert kept[0]["take"] == pytest.approx(30 * 0.01)
+    # a refill (a larger size at the same price) frees what was added; a new price frees the level
+    e4 = _ep(12.0, 0.01, [("b", 0.99, 50.0, 0.0), ("d", 0.003, 80.0, 0.0)])
+    e5 = _ep(13.0, 0.01, [("b", 0.98, 10.0, 12.5), ("c", 0.004, 80.0, 0.0)])
+    e6 = _ep(14.0, 0.01, [("b", 0.99, 30.0, 13.5), ("c", 0.004, 80.0, 0.0)])   # back at 0.99 after a change
+    kept, dropped = la.dedupe([e1, e2, e3, e4, e5, e6])
+    assert [(k["start"], round(k["take"], 6)) for k in kept] == [(0.0, 0.3), (12.0, 0.2), (13.0, 0.1), (14.0, 0.3)]
+    # two baskets sharing a bigger level split it
+    f1 = _ep(0.0, 0.01, [("x", 0.5, 150.0, 0.0), ("y", 0.4, 100.0, 0.0)])
+    f2 = _ep(0.0, 0.01, [("x", 0.5, 150.0, 0.0), ("z", 0.4, 100.0, 0.0)])
+    kept, _ = la.dedupe([f1, f2])
+    assert sum(k["take"] for k in kept) == pytest.approx(150 * 0.01)
+
+
+def test_dedupe_on_a_recording_with_one_stale_leg():
+    # No(A2) = one resting order (Yes(A2) bid 0.60 x 100) all along; Yes(A1) flickers between 0.55 and 0.70,
+    # so the basket Yes(A1) + No(A2) opens four episodes (T, T + 20, T + 40, T + 60) on the same order
+    A1, A2 = mk("A1", "above", lo=80000), mk("A2", "above", lo=82000)
+    a1 = [(t, 0.54, 0.55 if int(t - T) % 20 < 5 else 0.70, 100, 100) for t in np.arange(T, T + 60.5, 1.0)]
+    bk = books(heartbeat(), quotes("A1", a1), quotes("A2", every(T, T + 60, 1, 0.60, 0.61, 100, 100)))
+    _, _, _, eps = run([A1, A2], bk)
+    e = eps_of(eps, [("A1", "Y"), ("A2", "N")])
+    assert len(e) == 4
+    kept, dropped = la.dedupe(e)
+    assert len(kept) == 1 and dropped == 3
+    assert kept[0]["take"] == pytest.approx(min(100 * kf(0.55), 100 * kf(0.40)) * e[0]["edge"])
 
 
 # ------------------------------------------------------------------ rewards
@@ -389,3 +451,65 @@ def test_hit_fill_marked_at_one_after_the_touch():
     assert f[0]["m30"] == pytest.approx(0.54 - 0.50)          # +30 s: before the touch, the mid
     assert f[0]["m120"] == pytest.approx(0.54 - 1.0)          # +120 s: resolved Yes at the touch (T + 100)
     assert f[0]["msettle"] == pytest.approx(0.54 - 1.0)
+
+
+# ------------------------------------------------------------------ review fixes
+
+def test_reward_rate_unknown_without_a_snapshot_while_open(tmp_path):
+    A = la.prep_markets([mk("0xa", "above", lo=80000)])[0]                    # ends at NOON
+    B = la.prep_markets([mk("0xb", "above", lo=82000, end=NOON + 86400)])[0]
+
+    def opener(url):
+        if "gamma-api" in url:
+            return [{"conditionId": c, "rewardsMinSize": 50, "rewardsMaxSpread": 4.5, "clobRewards": None} for c in ("0xa", "0xb")]
+        raise urllib.error.HTTPError(url, 404, "no", None, None)              # no live snapshot in this test
+
+    f = la.Fetcher(tmp_path, opener=opener, sleep=lambda s: None)
+    (tmp_path / "rewards-snapshots").mkdir()
+    (tmp_path / "rewards-snapshots" / f"snap-{NOON + 600}.json").write_text(json.dumps({"at": NOON + 600, "markets": {}}))
+    notes = []
+    p = la.reward_params([A, B], f, notes, now=NOON + 700, seen_from=NOON - 3600)
+    assert np.isnan(p["0xa"]["rate"]) and p["0xa"]["src"] == "unknown"       # ended before any snapshot
+    assert p["0xb"]["rate"] == 0.0 and p["0xb"]["src"] == "snapshot: not listed"   # open, not listed: no pool
+    # the report says 'unknown', not 'no pool', and leaves it out of the $/day
+    bk = books(heartbeat(T, T + 600, 5), quotes("0xa", every(T, T + 600, 5, 0.49, 0.51, 200, 200)))
+    res = la.analyze(bk, pd.DataFrame([mk("0xa", "above", lo=80000)]), None, None,
+                     pd.DataFrame(columns=["asset_id", "ts", "price", "size", "side"]), prm={"0xa": p["0xa"]})
+    text = la.report([res], ["syn"])
+    assert "奖励池**未知**的市场 1 个" in text and "奖励池已知的 0 个市场里没有一个有奖励池" in text
+
+
+def test_boundary_baskets_are_left_out_of_the_headline():
+    A, R, B = mk("A", "above", lo=80000), mk("R", "range", lo=80000, hi=82000), mk("B", "above", lo=82000)
+    bk = books(heartbeat(), quotes("A", every(T, T + 60, 1, 0.70, 0.71)), quotes("R", every(T, T + 60, 1, 0.29, 0.30)),
+               quotes("B", every(T, T + 60, 1, 0.29, 0.30)))
+    res = la.analyze(bk, pd.DataFrame([A, R, B]), None)
+    text = la.report([res], ["syn"])
+    head = next(l for l in text.splitlines() if l.startswith("去重（严格口径"))
+    assert "片段 0 个" in head and "$/天 立即 0.00" in head                  # the only arb is a boundary box
+    bnd = next(l for l in text.splitlines() if l.startswith("「边界」篮子"))
+    assert "连同它们去重后 1 个片段" in bnd
+
+
+def test_main_without_recordings_fails_and_keeps_the_report(tmp_path):
+    out = tmp_path / "r.md"
+    out.write_text("old")
+    rc = la.main([str(tmp_path / "none"), "--out", str(out), "--cache", str(tmp_path / "c"), "--offline"])
+    assert rc == 2 and out.read_text() == "old"
+
+
+def test_updown_kline_refs_reads_both_candles(tmp_path):
+    ref_ts = NOON - 86400
+    kl = {ref_ts - 60: 88000.0, ref_ts: 87900.0}
+
+    def opener(url):
+        ms = int(url.split("startTime=")[1].split("&")[0])
+        return [[ms, "0", "0", "0", str(kl[ms // 1000]), "0"]]
+
+    m = pd.DataFrame([mk("U", "updown_day", end=NOON, ref=None, ref_ts=ref_ts),
+                      mk("V", "updown_day", end=NOON + 86400, ref=None, ref_ts=NOON)])
+    out = la.updown_kline_refs(m, la.Fetcher(tmp_path, opener=opener, sleep=lambda s: None), [], now=NOON - 600)
+    assert out.loc[0, "ref_close12"] == 88000.0 and out.loc[0, "ref_open12"] == 87900.0
+    assert np.isnan(out.loc[1, "ref_open12"])                                # its reference candle has not closed
+    u = la.prep_markets(out.iloc[[0]])[0]
+    assert u["variants"] == [(NOON - 60, 88000.0), (NOON, 87900.0)]

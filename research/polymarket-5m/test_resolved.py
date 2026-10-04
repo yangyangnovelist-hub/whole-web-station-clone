@@ -317,3 +317,80 @@ def test_clustered_mean():
     assert G == 3 and abs(mu - x.mean()) < 1e-12 and se > 0
     mu, se, t, G = R.clustered_mean([0.1], [1], ["a"])
     assert G == 1 and math.isnan(se)
+
+
+# ------------------------------------------------------------------ verdict frame (review fixes)
+
+def _w(rows):
+    """Winning-token trades as post_tstar returns them (only the columns daily_dollars reads)."""
+    base = {"dt": 10.0, "price": 0.99, "size": 100.0, "taker_buy": False, "after_close": False}
+    w = pd.DataFrame([{**base, **r} for r in rows])
+    w["notional"] = w["price"] * w["size"]
+    w["profit"] = (1 - w["price"]) * w["size"]
+    w["fee"] = R.FEE * w["price"] * (1 - w["price"]) * w["size"]
+    w["hours"] = 1.0
+    return w
+
+
+def test_daily_dollars_uses_binance_kinds_period_days_and_unsettled_trades_only():
+    first, last = date(2026, 3, 14), date(2026, 3, 16)
+    w = _w([{"kind": "above", "day": "2026-03-14"},                              # counted
+            {"kind": "above", "day": "2026-03-14", "taker_buy": True},          # counted (buy part)
+            {"kind": "updown_4h", "day": "2026-03-15"},                         # Chainlink control: never
+            {"kind": "hit_weekly", "day": "2026-03-10"},                        # before the period: apart
+            {"kind": "range", "day": "2026-03-16", "after_close": True},        # already settled: never
+            {"kind": "range", "day": "2026-03-16", "price": 0.999},             # above the 0.995 cap
+            {"kind": "range", "day": "2026-03-16", "dt": 2.0}])                 # before T* + 5 s
+    dd = R.daily_dollars(w, first=first, last=last)
+    assert list(dd.index) == ["2026-03-14", "2026-03-15", "2026-03-16"]          # every period day, no other
+    assert dd["notional"].tolist() == pytest.approx([198.0, 0.0, 0.0])
+    assert dd["sell_notional"].tolist() == pytest.approx([99.0, 0.0, 0.0])
+    assert dd["buy_profit"].tolist() == pytest.approx([1.0, 0.0, 0.0])
+    st = R.day_stats(dd, "notional")
+    assert st["mean"] == pytest.approx(66.0) and st["median"] == 0.0 and st["ge"] == 1 and st["n"] == 3
+    c = R.daily_dollars(w, first=first, last=last, kinds=("updown_4h",))
+    assert c["notional"].tolist() == pytest.approx([0.0, 99.0, 0.0])
+
+
+def test_post_tstar_flags_after_close_period_and_risk():
+    t0 = lad.et_to_utc(date(2026, 3, 14), 13)
+    mk = _mk([{"cid": "m1", "kind": "above", "type": "above", "official": 1.0, "tstar": t0, "tsec": np.nan,
+               "closed_ts": t0 + 600.5, "end": t0 - 60, "slug": "s1", "excluded": "", "risk": "noon_conv"}])
+    tr = pd.DataFrame({"cid": ["m1"] * 3, "ts": [t0 + 10, t0 + 600, t0 + 601], "taker_buy": [False] * 3,
+                       "is_yes": [True] * 3, "price": [0.99] * 3, "size": [1.0] * 3})
+    pt = R.post_tstar(tr, mk, first=date(2026, 3, 14), last=date(2026, 3, 14))
+    assert pt["after_close"].tolist() == [False, False, True]                  # stamped after closedTime
+    assert pt["in_period"].all() and (pt["risk"] == "noon_conv").all()
+
+
+def test_risk_flags_and_lag_table_all_row_is_binance_only():
+    mk = _mk([{"cid": "a", "kind": "above", "comp_open12": 1.0, "comp_close12": 0.0, "excluded": "", "official": 1.0},
+              {"cid": "b", "kind": "above", "comp_open12": 1.0, "comp_close12": 1.0, "excluded": "", "official": 1.0},
+              {"cid": "c", "kind": "hit_daily", "comp": 1.0, "tstar": 1000.0, "created": 2000.0, "excluded": "",
+               "official": 1.0},
+              {"cid": "d", "kind": "hit_daily", "comp": 1.0, "tstar": 1000.0, "created": 2000.0, "excluded": "mismatch",
+               "official": 0.0},
+              {"cid": "e", "kind": "updown_4h", "excluded": "", "official": 1.0}])
+    assert R.risk_flags(mk).tolist() == ["noon_conv", "", "pre_created", "", ""]
+    w = _w([{"kind": "above", "cid": "a"}, {"kind": "updown_4h", "cid": "e"}])
+    lt = R.lag_table(w, mk)
+    r = lt[(lt["kind"] == "all") & (lt["L"] == 5)].iloc[0]
+    assert r["trades"] == 1 and r["mk"] == 3                                    # the 4h control is its own row
+
+
+def test_t_cell_needs_clusters_and_marks_no_losses():
+    assert R.t_cell(325.07, 2, 0) == "–"                    # two clusters: no t
+    assert R.t_cell(4.0, 25, 0) == "4.00†"                  # no losing cluster: price dispersion only
+    assert R.t_cell(-0.48, 2409, 24) == "-0.48"
+
+
+def test_calibration_counts_distinct_markets_and_days():
+    d1, d2 = lad.noon_et(date(2026, 4, 9)), lad.noon_et(date(2026, 4, 10))
+    mk = _mk([{"cid": c, "kind": "above", "official": o, "event_slug": e} for c, o, e in
+              (("a", 0.0, "e1"), ("b", 0.0, "e1"), ("c", 1.0, "e2"), ("h", 0.0, "e3"))])
+    cp = pd.DataFrame([{"cid": c, "kind": k, "anchor": a, "fav_yes": True, "p_fav": p} for c, k, a, p in
+                       (("a", "above", d1, 0.999), ("a", "above", d1, 0.995), ("b", "above", d1, 0.999),
+                        ("c", "above", d2, 0.999), ("h", "updown_4h", d2, 0.999))])
+    cal = R.calibration(cp, mk)
+    assert cal["points"] == 4 and cal["fail_pts"] == 3 and cal["fail_mk"] == 2 and cal["fail_ev"] == 1
+    assert cal["fail_days"] == 1 and cal["days"] == 2 and cal["expected"] == pytest.approx(0.001 * 3 + 0.005)

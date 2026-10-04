@@ -15,22 +15,34 @@ Settlement, from the Gamma descriptions (read 2026-10-04):
   the higher range bracket"); "<b" is (-inf, b) and ">a" is [a, inf); neg-risk event;
 - hit_up K / hit_down L: Yes iff any 1m candle of the window ("on the date ..., between 12:00 AM ET
   and 11:59 PM ET", i.e. candles opening in [start_ts, end_ts)) has a final High >= K / Low <= L;
-- updown_day: Up iff the Close of the candle *closing* at noon ET (opening 11:59) is above the one
-  closing at noon the day before (the reference), 50-50 if equal: not the above / range candle;
+- updown_day: the text of the markets since 10-02 says Up iff the Close of the candle "closing at 12:00
+  in the ET timezone" (opening 11:59) is above the one closing at noon the day before (the
+  reference), 50-50 if equal; the text up to 09-30 said "12:00 in the ET timezone", and all 200
+  official results 03-14 .. 09-30 followed the candle OPENING at noon (resolved.py: in the 4 days
+  where the two candles disagree, every result followed the noon-opening one), and no market of the
+  new text has resolved where the two disagree. Both readings ("close12", "open12") are kept: an
+  updown_day basket must pay on each (its reference and its candle under each), so updown_day has no
+  relation with above / range (their candle is the noon-opening one, the close12 one differs);
 - updown_4h settles on Chainlink's 60 s TWAP and is left out of every structural relation.
 
 Baskets. Each candidate is a set of tokens bought at their best asks whose payoff is at least `pay`
-on every outcome; it is an arbitrage when pay - sum(ask + fee) > 0, fee = feeRate p (1 - p) per
-share (taker; docs.polymarket.com/trading/fees). A sold leg is written as the bought complement (the
-No book mirrors the Yes book: ask_No = 1 - bid_Yes, same size).
-- pairs on one candle (above, range, updown_day with its reference known): {A, B} where the payoffs
+on every outcome; it is an arbitrage when pay - sum(unit cost) > 0. The taker fee is feeRate p (1 - p)
+per share in USDC terms (docs.polymarket.com/trading/fees); whether a BUY pays it in USDC or in
+shares (rate (1 - p) of the shares bought, as the original CTF exchange charged buy fees on the
+token proceeds) is not documented, so the unit cost of one share of payoff is the larger of the two:
+ask / (1 - feeRate (1 - ask)) >= ask + feeRate ask (1 - ask), and a leg's size in payoff units is
+ask size x (1 - feeRate (1 - ask)) (the cheap legs need ~7% more shares). A sold leg is written as the
+bought complement (the No book mirrors the Yes book: ask_No = 1 - bid_Yes, same size).
+- pairs on one candle (above, range; an updown_day only if every reading in doubt settles it on that
+  candle, which with both noon readings is never): {A, B} where the payoffs
   satisfy f_A(x) + f_B(x) >= 1 for every close x (checked on every strike / bound and between them),
   e.g. above monotonicity Yes(K1) + No(K2), K1 < K2; range-in-above; disjoint ranges;
 - candle vs hit: a hit market whose window contains the candle [c, c + 60): its payoff given the
   close x is at least 1{x >= K} (hit_up Yes; the candle's High >= Close) or 1{x <= L} (hit_down
   Yes; Low <= Close), and at least 0 for No; {A, H} qualifies when f_A(x) + low_H(x) >= 1, e.g.
   No(above K) + Yes(hit_up K'), K' <= K: "above K at noon" implies "hit K' that day" exactly when
-  the day window contains the noon candle (checked per pair);
+  the day window contains the noon candle (checked per pair); updown_day x hit must hold under each
+  reading (each candle inside the window, each reference);
 - hit nesting: hit_up(K2, W2) implies hit_up(K1, W1) when K1 <= K2 and W2 within W1 -> No(K2) +
   Yes(K1); hit_down mirrored (No of the lower level + Yes of the higher one);
 - neg-risk range sums: all Yes (exactly one pays: pay 1) and all No (pay N - 1: hold to settlement,
@@ -39,6 +51,9 @@ No book mirrors the Yes book: ask_No = 1 - bid_Yes, same size).
   needs no split; only when every bracket of the event is in the recording;
 - boxes: No(above a) + Yes([a, b)) + Yes(above b) pays 1 and Yes(above a) + No([a, b)) +
   No(above b) pays 2, except when the Close lands exactly on a or b (cents; flagged "boundary").
+  Binance 1m closes cluster on round prices (03-01 .. 10-01: 320 of 309,600 closes exactly on a
+  $1,000 multiple, ~3 expected; within $5 of one, 9% land exactly on it), so boundary baskets are
+  not riskless: they are reported apart and left out of the headline $/day.
 Evaluation at every book update of a leg (exchange time), using every leg's latest row at or
 before it; valid only while each leg's row is at most MAX_AGE s old (the recorder writes a row when
 the top of book changes, so a quiet leg ages out; the report also gives "feed alive only"), the feed
@@ -47,7 +62,11 @@ market is open (before its end; a hit market before Binance first prints its lev
 day's high / low had reached it before the recording). An episode is a run of instants with a
 positive edge (runs separated only by invalid instants are merged); per episode: duration (time
 with a positive edge), edge after fees, size (min top-of-book size over the legs), the same basket
-0.5 s later, and $ captured taking min(size, 100) shares at the start (or at +0.5 s).
+0.5 s later, and $ captured taking min(size, 100) shares at the start (or at +0.5 s). Deduplicated
+total: episodes in time order take from each leg's ask level; a level keeps what was taken from it
+while its price stays the same (the recorded size, which does not see our take, minus what we took),
+and is fresh again only when the ask price changes (or its size grows beyond what we took), so one
+resting order is bought once however often the other legs flicker.
 
 Liquidity rewards (an estimate; docs.polymarket.com/programs/liquidity-rewards): pools from CLOB
 /rewards/markets/current (native + sponsored daily rates; snapshots are kept in the cache so a
@@ -100,6 +119,8 @@ C_SINGLE = 3.0         # single-sided scaling factor
 MID_BAND = (0.10, 0.90)
 QUOTES = ("edge", "half", "touch")
 TTL_OPEN = 6 * 3600    # s: refetch a response about an open market after this
+UPDOWN_READINGS = ("close12", "open12")       # updown_day settlement candles still in doubt (see notes)
+UPDOWN_OFFSET = {"close12": -60, "open12": 0}  # its candle's open relative to end_ts (the reference: ref_ts)
 FEE = bo.CRYPTO_FEE_RATE
 UA = "polymarket-ladder-arb-research/1.0 (market data only)"
 GAMMA_MARKETS = "https://gamma-api.polymarket.com/markets?{q}"
@@ -135,6 +156,44 @@ def taker_fee(p, rate=FEE):
     return rate * p * (1.0 - p)
 
 
+def keep_frac(p, rate=FEE):
+    """Share of the shares bought at p that are kept if the taker fee is collected in shares."""
+    return 1.0 - rate * (1.0 - np.asarray(p, float))
+
+
+def unit_cost(p, rate=FEE):
+    """Cost of one share of payoff bought at ask p, the larger of the fee in USDC (p + fee) and the
+    fee in shares (p / keep_frac): always the latter."""
+    p = np.asarray(p, float)
+    return p / keep_frac(p, rate)
+
+
+def _print_close(ts, px, t_close, tol=5.0):
+    """Close of the 1m candle closing at t_close from recorded Binance prints: the last print before
+    t_close, if within tol s; NaN otherwise."""
+    if not len(ts) or not np.isfinite(t_close):
+        return np.nan
+    i = np.searchsorted(ts, t_close, "left") - 1
+    return float(px[i]) if i >= 0 and t_close - ts[i] <= tol else np.nan
+
+
+def updown_refs(m, ts=(), px=()):
+    """{reading: reference close} of an updown_day market: ref_<reading> if given (main() fetches them
+    from Binance's 1m klines), ladder.py's ref_price for close12 (it records the close of the candle
+    closing at ref_ts), else the recorded prints; NaN if unknown."""
+    out = {}
+    src = m.get("ref_source")
+    ladder_close12 = not isinstance(src, str) or src == "binance 1m close"
+    for r in UPDOWN_READINGS:
+        v = _fin(m.get(f"ref_{r}"))
+        if not np.isfinite(v) and r == "close12" and ladder_close12:
+            v = _fin(m.get("ref_price"))
+        if not np.isfinite(v) and np.isfinite(_fin(m.get("ref_ts"))):
+            v = _print_close(np.asarray(ts, float), np.asarray(px, float), _fin(m["ref_ts"]) + UPDOWN_OFFSET[r] + 60)
+        out[r] = v
+    return out
+
+
 # ------------------------------------------------------------------ markets
 
 def prep_markets(markets, spot=None):
@@ -162,14 +221,13 @@ def prep_markets(markets, spot=None):
         if typ in ("above", "range"):
             m["candle"] = int(m["end_ts"]) if np.isfinite(m["end_ts"]) else None
         elif typ == "updown_day":
-            ref = m["ref_price"]
-            if not np.isfinite(ref) and len(ts) and np.isfinite(m["ref_ts"]):
-                i = np.searchsorted(ts, m["ref_ts"], "left") - 1   # close of the candle closing at ref_ts
-                ref = float(px[i]) if i >= 0 and m["ref_ts"] - ts[i] <= 5.0 else np.nan
-            m["ref"] = ref
-            if np.isfinite(ref) and np.isfinite(m["end_ts"]):
-                m["candle"] = int(m["end_ts"]) - 60
-                m["t_from"] = m["ref_ts"] if np.isfinite(m["ref_ts"]) else -np.inf
+            m["refs"] = refs = updown_refs(m, ts, px)
+            m["ref"] = np.nan
+            if np.isfinite(m["end_ts"]) and all(np.isfinite(refs[r]) for r in UPDOWN_READINGS):
+                # every reading still in doubt: (settlement candle, reference); a basket must pay on each
+                m["variants"] = [(int(m["end_ts"]) + UPDOWN_OFFSET[r], refs[r]) for r in UPDOWN_READINGS]
+                m["candle"], m["ref"] = m["variants"][0]
+                m["t_from"] = m["ref_ts"] + 60 if np.isfinite(m["ref_ts"]) else -np.inf
         elif typ in HIT_TYPES:
             start = m["start_ts"] if np.isfinite(m["start_ts"]) else -np.inf
             # an unknown start contains no candle and nests only inside its own event (same window)
@@ -290,7 +348,8 @@ def _mname(m):
     if t == "hit_down":
         return f"↓{m['hi']:,.0f} {_wname(m)}"
     if t == "updown_day":
-        return f"updown {d} ref {m['ref']:,.2f}"
+        refs = m.get("refs") or {}
+        return f"updown {d} ref " + " / ".join(f"{refs.get(r, np.nan):,.2f}" for r in UPDOWN_READINGS)
     return t
 
 
@@ -306,8 +365,19 @@ def _kind(legs):
     return "-".join(types) if len(types) == 2 else f"{types[0]}-{types[0]}"
 
 
+def variants(m):
+    """[(settlement candle, reference)] of a close-type market under every reading still in doubt
+    (one for above / range; updown_day: UPDOWN_READINGS)."""
+    return m.get("variants") or [(m["candle"], m.get("ref", np.nan))]
+
+
+def as_variant(m, v):
+    return m if v == (m["candle"], m.get("ref", np.nan)) else dict(m, candle=v[0], ref=v[1])
+
+
 def baskets(ms):
-    """Every candidate basket over prepared markets (see the module notes), deduplicated."""
+    """Every candidate basket over prepared markets (see the module notes), deduplicated. A basket
+    with an updown_day leg must pay under each of its readings."""
     out, seen = [], set()
 
     def add(kind, legs, pay, boundary=False):
@@ -321,25 +391,29 @@ def baskets(ms):
     hits = [m for m in ms if m["type"] in HIT_TYPES and m["touch"] > -np.inf]
     by_candle = {}
     for m in close:
-        by_candle.setdefault(m["candle"], []).append(m)
+        cs = {c for c, _ in variants(m)}
+        if len(cs) == 1:          # settles on one known candle under every reading
+            by_candle.setdefault(cs.pop(), []).append(m)
     for group in by_candle.values():                      # pairs on one candle
         for i, a in enumerate(group):
             for b in group[i + 1:]:
                 for sa in "YN":
                     for sb in "YN":
-                        legs = [(a, sa), (b, sb)]
-                        al, ex = min_pay(legs)
+                        res = [min_pay([(as_variant(a, va), sa), (as_variant(b, vb), sb)])
+                               for va in variants(a) for vb in variants(b)]
+                        al, ex = min(r[0] for r in res), min(r[1] for r in res)
                         if al >= 1 - EPS:
-                            add(_kind(legs), legs, 1.0, ex < al - EPS)
+                            add(_kind([(a, sa), (b, sb)]), [(a, sa), (b, sb)], 1.0, ex < al - EPS)
     for h in hits:                                         # candle vs hit
         for m in close:
-            if not contains(h["window"], m["candle"]):
+            vs = variants(m)
+            if not all(contains(h["window"], c) for c, _ in vs):
                 continue
             for sm in "YN":
-                legs = [(m, sm), (h, "Y")]
-                al, ex = min_pay(legs)
+                res = [min_pay([(as_variant(m, v), sm), (h, "Y")]) for v in vs]
+                al, ex = min(r[0] for r in res), min(r[1] for r in res)
                 if al >= 1 - EPS:
-                    add(_kind(legs), legs, 1.0, ex < al - EPS)
+                    add(_kind([(m, sm), (h, "Y")]), [(m, sm), (h, "Y")], 1.0, ex < al - EPS)
     for a in hits:                                         # hit nesting: a implies b
         for b in hits:
             if a is b or a["type"] != b["type"]:
@@ -395,6 +469,10 @@ class Books:
                 a[c] = g[c].to_numpy(float) if c in g else np.full(len(g), np.nan)
             a["mark"] = np.where(np.isfinite(a["bid"]) | np.isfinite(a["ask"]),
                                  (np.nan_to_num(a["bid"], nan=0.0) + np.nan_to_num(a["ask"], nan=1.0)) / 2, np.nan)
+            ask = a["ask"]
+            new = np.r_[True, ~(ask[1:] == ask[:-1])] if len(ask) else np.array([], bool)   # NaN starts a run
+            first = np.maximum.accumulate(np.where(new, np.arange(len(ask)), 0)) if len(ask) else np.array([], int)
+            a["since"] = a["ts"][first]          # when the current ask price level was first seen
             self.by[str(tok)] = a
 
     def asof(self, tok, t, col):
@@ -434,7 +512,8 @@ class Feed:
 # ------------------------------------------------------------------ scanning
 
 def evaluate(b, arrs, times, feed, max_age=MAX_AGE):
-    """valid, edge, size, cost of basket b at `times` from the legs' latest rows."""
+    """valid, edge, size, cost of basket b at `times` from the legs' latest rows (per share of payoff:
+    cost = sum of unit_cost, size = min over legs of ask size x keep_frac)."""
     times = np.asarray(times, float)
     n = len(times)
     valid = np.ones(n, bool)
@@ -448,8 +527,8 @@ def evaluate(b, arrs, times, feed, max_age=MAX_AGE):
         ask = np.where(ok, a["ask"][j], np.nan)
         lts = np.where(ok, a["ts"][j], -np.inf)
         valid &= ok & np.isfinite(ask) & (times - lts <= max_age)
-        cost += ask + taker_fee(ask, fee)
-        size = np.fmin(size, np.where(ok, a["ask_size"][j], np.nan))
+        cost += unit_cost(ask, fee)
+        size = np.fmin(size, np.where(ok, a["ask_size"][j] * keep_frac(ask, fee), np.nan))
         oldest = np.minimum(oldest, lts)
     valid &= feed.alive(times) & feed.no_close(oldest, times) & (times >= b.t_from) & (times < b.t_to)
     return valid, b.pay - cost, size, cost
@@ -505,6 +584,7 @@ def scan(b, books, feed, max_age=MAX_AGE, later=LATER):
         ok5 = bool(v5[0] and e5[0] > EPS and ts + later < t1)
         legs_ask = [float(a["ask"][np.searchsorted(a["ts"], ts, "right") - 1]) for a in arrs]
         eps.append({"kind": b.kind, "label": b.label(), "tokens": list(b.tokens), "boundary": b.boundary,
+                    "legs": _levels(b, arrs, ts), "legs5": _levels(b, arrs, ts + later) if ok5 else None,
                     "start": ts, "end": te, "censored": e >= len(times), "dur": held, "edge": float(edge[s]),
                     "peak": float(edge[s:e][hold[s:e]].max()), "size": float(size[s]), "cost": float(cost[s]),
                     "pay": b.pay, "asks": legs_ask, "later": ok5, "edge5": float(e5[0]) if ok5 else np.nan,
@@ -516,16 +596,46 @@ def scan(b, books, feed, max_age=MAX_AGE, later=LATER):
     return summ, eps
 
 
-def dedupe(eps):
-    """Episodes that do not reuse a token another counted episode holds at their start (one stale
-    quote is taken once, whatever basket shows it)."""
-    busy, keep = {}, []
-    for e in sorted(eps, key=lambda e: (e["start"], -e["take"])):
-        if all(busy.get(t, -np.inf) <= e["start"] for t in e["tokens"]):
-            keep.append(e)
-            for t in e["tokens"]:
-                busy[t] = max(e["end"], e["start"] + LATER)
-    return keep
+def _levels(b, arrs, t):
+    """Per leg at time t: (token, ask, ask size, since = when that ask price level was first seen
+    without a change, keep_frac)."""
+    out = []
+    for tok, a, fee in zip(b.tokens, arrs, b.fees):
+        j = int(np.searchsorted(a["ts"], t, "right") - 1)
+        ask = float(a["ask"][j])
+        out.append((tok, ask, float(a["ask_size"][j]), float(a["since"][j]), float(keep_frac(ask, fee))))
+    return out
+
+
+def dedupe(eps, which="take", take=TAKE):
+    """(kept episodes with `which` recomputed, episodes dropped): episodes in time order take
+    q = min(take, what is left on every leg's ask level) shares of payoff at their edge. A level keeps
+    the shares taken from it while its ask price is unchanged (the leg's level `since` is not after
+    the take); what is left is the recorded size minus that, so one resting order is bought once
+    however many baskets or episodes show it; a new ask price (or a size larger than what was taken)
+    makes it available again. which = 'take' (at the start) or 'take5' (0.5 s later)."""
+    legs_key, edge_key = ("legs", "edge") if which == "take" else ("legs5", "edge5")
+    used, keep, dropped = {}, [], 0      # token -> (ask, time taken, shares taken)
+    for e in sorted(eps, key=lambda e: (e["start"], -e[which])):
+        legs = e.get(legs_key)
+        if not legs or not e[which] > 0:
+            continue
+        t0 = e["start"] + (0.0 if which == "take" else LATER)
+        left = []
+        for tok, ask, size, since, kf in legs:
+            u = used.get(tok)
+            same = u is not None and u[0] == ask and since <= u[1]
+            left.append(max(0.0, size - (u[2] if same else 0.0)) * kf)
+        q = min(min(left), take)
+        if not q > 1e-9:
+            dropped += 1
+            continue
+        for tok, ask, size, since, kf in legs:
+            u = used.get(tok)
+            same = u is not None and u[0] == ask and since <= u[1]
+            used[tok] = (ask, t0, (u[2] if same else 0.0) + q / kf)
+        keep.append({**e, which: q * e[edge_key]})
+    return keep, dropped
 
 
 SUMM_COLS = ["kind", "valid_s", "best", "med_cost", "label", "n", "pay", "event", "candle"]
@@ -808,9 +918,15 @@ def _resolved(d):
     return isinstance(d, dict) and bool(d.get("closed")) and any(t.get("winner") for t in d.get("tokens") or [])
 
 
-def reward_params(ms, fetcher, notes, now=None):
+def reward_params(ms, fetcher, notes, now=None, seen_from=-np.inf):
     """{condition id: {rate, min_size, max_spread, src}} from the reward snapshots (CLOB
-    /rewards/markets/current, kept in the cache's snapshot files) and Gamma."""
+    /rewards/markets/current, kept in the cache's snapshot files) and Gamma. The rate is known when a
+    snapshot lists the market (src 'snapshot'), when a snapshot taken while it was open and recorded
+    (seen_from <= at < end) does not list it (no pool then: 0, 'snapshot: not listed'), or when Gamma
+    clobRewards gives a positive rate for a program running through its end ('gamma'); otherwise it
+    is unknown (NaN, 'unknown'): Gamma leaves out sponsored pools, so an empty clobRewards is not 'no
+    pool'. ladder.py does not snapshot pools while it records, so markets that ended before any run
+    of this report are unknown."""
     now = time.time() if now is None else now
     cids = sorted({m["condition_id"] for m in ms})
     gamma = {}
@@ -847,33 +963,74 @@ def reward_params(ms, fetcher, notes, now=None):
         (snap_dir / f"snap-{int(at)}.json").write_text(json.dumps({"at": int(at), "n_all": len(allr), "markets": snap}))
     except Exception as e:
         notes.append(f"CLOB rewards/markets/current: {type(e).__name__}: {e}（用缓存里以前的快照）")
-    seen = {}
+    seen, snaps = {}, []
     for f in sorted(snap_dir.glob("snap-*.json")):
         try:
             s = json.loads(f.read_text())
         except ValueError:
             continue
+        if np.isfinite(_fin(s.get("at"))):
+            snaps.append(float(s["at"]))
         for cid, r in (s.get("markets") or {}).items():
             seen[cid] = (s.get("at"), r)        # the latest snapshot listing it wins
+    snaps = np.array(sorted(snaps))
+    end_of = {m["condition_id"]: m["end_ts"] for m in ms}
     out = {}
     for cid in cids:
         g = gamma.get(cid) or {}
+        end = end_of.get(cid, np.nan)
+        day = time.strftime("%Y-%m-%d", time.gmtime(min(now, end) if np.isfinite(end) else now))
         rate_g = 0.0
         for c in g.get("clobRewards") or []:
-            end = c.get("endDate")
-            if not end or end >= time.strftime("%Y-%m-%d", time.gmtime(now)):
+            e, b = c.get("endDate"), c.get("startDate")
+            if (not e or e >= day) and (not b or b <= day):        # the program ran through the market's end
                 rate_g += _fin(c.get("rewardsDailyRate")) if np.isfinite(_fin(c.get("rewardsDailyRate"))) else 0.0
         at, s = seen.get(cid, (None, {}))
-        rate = _fin(s.get("total_daily_rate"))
-        rate = rate if np.isfinite(rate) else rate_g
+        open_snap = bool(len(snaps) and ((snaps >= seen_from) & (snaps < (end if np.isfinite(end) else np.inf))).any())
+        if s and np.isfinite(_fin(s.get("total_daily_rate"))):
+            rate, src = _fin(s.get("total_daily_rate")), "snapshot"
+        elif open_snap:
+            rate, src = 0.0, "snapshot: not listed"
+        elif rate_g > 0:
+            rate, src = rate_g, "gamma"
+        else:
+            rate, src = np.nan, "unknown"
         ms_ = _fin(s.get("rewards_min_size")) if s else np.nan
         ms_ = ms_ if np.isfinite(ms_) else _fin(g.get("rewardsMinSize"))
         mx = _fin(s.get("rewards_max_spread")) if s else np.nan
         mx = mx if np.isfinite(mx) else _fin(g.get("rewardsMaxSpread"))
-        out[cid] = {"rate": float(rate) if np.isfinite(rate) else 0.0, "min_size": ms_, "max_spread": mx,
-                    "src": "snapshot" if s else ("gamma" if g else "none"), "snap_at": at,
+        out[cid] = {"rate": float(rate), "min_size": ms_, "max_spread": mx, "src": src, "snap_at": at,
                     "sponsored": _fin(s.get("sponsored_daily_rate")) if s else np.nan}
     return out
+
+
+def updown_kline_refs(markets, fetcher, notes, now=None):
+    """markets (DataFrame) with ref_close12 / ref_open12 for the updown_day rows: the Close of the
+    Binance 1m kline opening at ref_ts - 60 / ref_ts (data-api.binance.vision, ladder.KLINE; a closed
+    kline is cached for good). Left NaN when not closed yet or not fetched (prep_markets then falls
+    back to ladder.py's ref_price for close12 and to the recorded prints)."""
+    now = time.time() if now is None else now
+    markets = markets.copy()
+    for r in UPDOWN_READINGS:
+        markets[f"ref_{r}"] = np.nan
+    if "type" not in markets:
+        return markets
+    for i, m in markets[markets["type"] == "updown_day"].iterrows():
+        t = _fin(m.get("ref_ts"))
+        for r in UPDOWN_READINGS:
+            o = t + UPDOWN_OFFSET[r]
+            if not np.isfinite(o) or now < o + 65:
+                continue
+            ms_ = int(o) * 1000
+            try:
+                k = fetcher.get(ld.KLINE.format(ms=ms_), ttl=TTL_OPEN,
+                                final=lambda d, ms_=ms_: bool(d) and int(d[0][0]) == ms_)
+            except Exception as e:
+                notes.append(f"{m.get('slug')}: Binance 1m kline {r}: {type(e).__name__}: {e}")
+                continue
+            if k and int(k[0][0]) == ms_:
+                markets.at[i, f"ref_{r}"] = float(k[0][4])
+    return markets
 
 
 def settlements(ms, cids, fetcher, notes, now=None):
@@ -988,8 +1145,9 @@ def _n(x, nd=0):
 
 
 def kind_table(summ, eps, hours):
-    L = ["| 类型 | 篮子 | 可评估 篮子·时 | 最好边际 ¢ | 套利片段 | 时长中位 / 最长 s | 边际中位 ¢ | 份数中位 | 0.5 s 后仍在 | $/天（立即） | $/天（+0.5 s） | 距结算 h | 年化中位 |",
-         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    L = ["| 类型 | 篮子 | 可评估 篮子·时 | 最好边际 ¢ | 套利片段 | 其中边界 | 时长中位 / 最长 s | 边际中位 ¢ | 份数中位 | 0.5 s 后仍在 | "
+         "$/天（立即，非边界） | $/天（+0.5 s，非边界） | 距结算 h | 年化中位 |",
+         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     e = pd.DataFrame(eps)
     per_day = 24.0 / hours if hours > 0 else np.nan
     kinds = list(KIND_NAMES) + sorted(set(summ["kind"]) - set(KIND_NAMES) if len(summ) else [])
@@ -1000,13 +1158,31 @@ def kind_table(summ, eps, hours):
         q = e[e["kind"] == k] if len(e) else e
         best = s["best"].max() if s["best"].notna().any() else np.nan
         if len(q):
+            nb = q[~q["boundary"].astype(bool)]
             L.append(f"| {KIND_NAMES.get(k, k)} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | {len(q)} | "
-                     f"{q['dur'].median():.1f} / {q['dur'].max():.1f} | {_c(q['edge'].median())} | {_n(q['size'].median())} | "
-                     f"{100 * q['later'].mean():.0f}% | {q['take'].sum() * per_day:,.2f} | {q['take5'].sum() * per_day:,.2f} | "
-                     f"{q['to_settle_h'].median():.1f} | {_pct(q['apy'].median())} |")
+                     f"{int(q['boundary'].sum())} | {q['dur'].median():.1f} / {q['dur'].max():.1f} | {_c(q['edge'].median())} | "
+                     f"{_n(q['size'].median())} | {100 * q['later'].mean():.0f}% | {nb['take'].sum() * per_day:,.2f} | "
+                     f"{nb['take5'].sum() * per_day:,.2f} | {q['to_settle_h'].median():.1f} | {_pct(q['apy'].median())} |")
         else:
-            L.append(f"| {KIND_NAMES.get(k, k)} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | 0 | – | – | – | – | 0 | 0 | – | – |")
+            L.append(f"| {KIND_NAMES.get(k, k)} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | 0 | 0 | – | – | – | – | 0 | 0 | – | – |")
     return L
+
+
+def _dedupe_lines(eps, per_day, name):
+    """The deduplicated $/day: non-boundary baskets (the headline) and, apart, with the boundary ones."""
+    nb = [e for e in eps if not e["boundary"]]
+    k, d = dedupe(nb)
+    k5, d5 = dedupe(nb, "take5")
+    a, da = dedupe(eps)
+    a5, _ = dedupe(eps, "take5")
+    usd = lambda x, c: sum(e[c] for e in x) * per_day if x else 0.0
+    return [f"去重（{name}；同一张挂单只按它的量吃一次：每个代币的卖一档在价格不变时扣掉已经吃掉的份数，价格变了或挂单量增加才补回；"
+            f"不含「边界」篮子）：片段 {len(k)} 个（{len(nb)} 个里因挂单已被前面的片段吃完而去掉 {d} 个），$/天 立即 {usd(k, 'take'):,.2f}，"
+            f"+0.5 s {usd(k5, 'take5'):,.2f}。",
+            f"「边界」篮子（结算价恰好等于某个整数价位时少付；不是无风险）另算：{len(eps) - len(nb)} 个片段；连同它们去重后 {len(a)} 个片段"
+            f"（去掉 {da} 个），$/天 立即 {usd(a, 'take'):,.2f}，+0.5 s {usd(a5, 'take5'):,.2f}。币安 1 分钟收盘价在整数价位上明显聚集"
+            "（2026-03-01–10-01 的 309,600 个收盘里恰好落在 $1,000 整数倍的有 320 个，均匀分布约 3 个；离整数千位 $5 以内时 9% 恰好落在上面），"
+            "边界离现价近时，这个概率和这里的边际是同一个量级。"]
 
 
 def report(results, names, notes=(), note=None, max_age=MAX_AGE):
@@ -1023,7 +1199,6 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
     relax = [r["scans"].get(np.inf) for r in results]
     summ = pd.concat([s for s, _ in strict], ignore_index=True) if strict else pd.DataFrame(columns=SUMM_COLS)
     eps = [e for _, x in strict for e in x]
-    ded = dedupe(eps)
     L = [f"# 无延迟 BTC 阶梯市场：结构性套利与流动性奖励（{time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC）", ""]
     if note:
         L += [f"> {note}", ""]
@@ -1034,21 +1209,19 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
           "只用市场数据，不下单。", ""]
     L += ["## 1. 吃单套利（全部腿按卖一买入，扣 taker 费）", "",
           f"每条腿的最新盘口不超过 {max_age:g} 秒、数据流活着（任何代币 {QUIET:g} 秒内有更新、最老一条腿之后没有 CLOB 断线）、市场未结束；"
-          f"边际 = 保底支付 − Σ(卖一 + 0.07·p·(1−p))；份数 = 各腿卖一量的最小值；$/天 = 每个片段开始时买 min(份数, {TAKE:g}) 份的边际之和 ÷ 小时 × 24；"
-          "「+0.5 s」= 0.5 秒后同一篮子仍有正边际时按那时的价和量买。", ""]
+          "边际 = 保底支付 − Σ 每份支付的成本；手续费按文档是 0.07·p·(1−p) USDC，但买单的费可能按份额收（买到的份数少 0.07·(1−p)，"
+          "p = 0.001 时少 7%），所以每份支付的成本取两种收法里较大的 p ÷ (1 − 0.07·(1−p))（≥ p + 0.07·p·(1−p)），份数也按扣费后的算；"
+          f"份数 = 各腿（扣费后）卖一量的最小值；$/天 = 每个片段开始时买 min(份数, {TAKE:g}) 份的边际之和 ÷ 小时 × 24（按类型的表未去重，"
+          "边界篮子不计入 $/天）；「+0.5 s」= 0.5 秒后同一篮子仍有正边际时按那时的价和量买。", ""]
     L += kind_table(summ, eps, hours)
-    dd = pd.DataFrame(ded)
-    L += ["", f"去重（同一个代币的卖一同一时间只算一次）：片段 {len(dd)} 个，"
-          f"$/天 立即 {dd['take'].sum() * per_day if len(dd) else 0:,.2f}，+0.5 s {dd['take5'].sum() * per_day if len(dd) else 0:,.2f}"
-          + (f"；其中 {int(dd['boundary'].sum())} 个是「边界」篮子（结算价恰好等于某个整数价位时少付）" if len(dd) and dd["boundary"].any() else "") + "。"]
+    L += [""] + _dedupe_lines(eps, per_day, "严格口径")
     rs = [r for r in relax if r is not None]
     if rs:
         rsumm = pd.concat([s for s, _ in rs], ignore_index=True)
         reps = [e for _, x in rs for e in x]
-        rd = pd.DataFrame(dedupe(reps))
         L += ["", f"敏感性：不限制单条腿的盘口年龄（录制机只在买一/卖一变动时写一行，安静的腿会「变老」但并没有错；仍要求数据流活着、没断线）："
-              f"可评估 {rsumm['valid_s'].sum() / 3600:,.1f} 篮子·时（严格口径 {summ['valid_s'].sum() / 3600:,.1f}），片段 {len(reps)} 个，"
-              f"去重后 {len(rd)} 个，$/天 立即 {rd['take'].sum() * per_day if len(rd) else 0:,.2f}，+0.5 s {rd['take5'].sum() * per_day if len(rd) else 0:,.2f}。"]
+              f"可评估 {rsumm['valid_s'].sum() / 3600:,.1f} 篮子·时（严格口径 {summ['valid_s'].sum() / 3600:,.1f}），片段 {len(reps)} 个。"]
+        L += _dedupe_lines(reps, per_day, "不限年龄")
     if eps:
         top = sorted(eps, key=lambda e: -e["take"])[:12]
         L += ["", "最大的片段（严格口径，按立即可得 $ 排序）：", "",
@@ -1092,14 +1265,20 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
     wins = sorted({w for r in results for w in r["windows"]}, key=lambda x: (x[1], x[0]))
     L += ["", "## 近似和注意事项", "",
           "- above / range 按 12:00 ET 那根 1 分钟 K 线（正午开盘、12:01 收盘）的收盘价；above 是严格大于，range 是 [a, b)（恰好落在边界算较高的区间）。"
-          "box 和与 above 共用边界的 range 篮子在收盘价恰好等于整数价位（到分）时会少付，标为「边界」；概率约为百万分之几，但不是零。",
+          "box 和与 above 共用边界的 range 篮子在收盘价恰好等于整数价位（到分）时会少付，标为「边界」：收盘价在整数价位上明显聚集（见第 1 节），"
+          "边界离现价近时概率可到千分之一，所以边界篮子单列，不计入去重后的 $/天。",
           "- hit 窗口：当天 12:00 AM ET 到 11:59 PM ET 开盘的所有 1 分钟 K 线（[start_ts, end_ts)）。正午 K 线收盘 > K ⇒ 那根 K 线最高价 ≥ K ⇒ 当天 hit_up(K) 为 Yes，"
           "只在窗口包含这根 K 线时成立（逐对检查）；本次检查到的 K 线 ⊂ 窗口："
           + ("；".join(f"{t} {_t(c, '%m-%d %H:%M')}–{_t(c + 60, '%H:%M')} ⊂ [{_t(w[0], '%m-%d %H:%M')}, {_t(w[1], '%m-%d %H:%M')})" for t, c, w in wins[:6]) or "无")
-          + "。updown_day 用的是「12:00 收盘」的那根（11:59 开盘），和 above / range 不是同一根，所以两者之间没有结构关系；updown_4h 按 Chainlink TWAP 结算，全部排除。",
+          + "。updown_day：10-02 起的描述写「closing at 12:00」（11:59 开盘那根），参考价是前一天同一根；但 09-30 之前的描述写「12:00」，"
+          "那 200 个市场的官方结果全部按 12:00 开盘那根结算（resolved.py：两根结果不同的 4 天都按 12:00 开盘那根），新写法下还没有能区分两者的已结算市场。"
+          "所以两种读法（各自的结算 K 线和参考价）都保留，updown_day 的篮子必须在两种读法下都保底支付；两种读法的 K 线不同，"
+          "所以 updown_day 和 above / range 之间没有结构关系。updown_4h 按 Chainlink TWAP 结算，全部排除。",
           "- hit 市场一旦币安成交价到达价位就立即结算（盘口失效），从那一刻起不再用；录制前当天已到过的价位整段不用。",
           "- 份数只看买一/卖一那一档（built 表只有第一档），吃更多要走更深的价位，所以 $/天 是上限；同一个错价会出现在很多篮子里，看去重那一行。",
-          "- 手续费按文档的 fee = C·feeRate·p·(1−p)（crypto 0.07）以 USDC 计；实际按 5 位小数取整，买单的费可能以份额扣除，两腿份数会差一点点。",
+          "- 手续费按文档的 fee = C·feeRate·p·(1−p)（crypto 0.07），5 位小数取整。文档说按 USDC 计算，但没说买单的费从哪里扣；"
+          "若像原来的 CTF 交易所那样从买到的份额里扣，买到的份数少 0.07·(1−p)（便宜的腿少约 7%，等份数买入时篮子在任何结果下都不到 1）。"
+          "这里按较保守的份额口径算成本和份数（便宜的腿要多买约 7%），两种口径的边际差 ≤ p·a²/(1−a)，a = 0.07·(1−p)，在 0.001 或 0.99 附近小于 0.001¢。",
           "- 两条以上的腿不是原子成交：0.5 秒后仍在的比例是腿风险的粗略指标。资金要锁到结算（above/range/updown 正午，hit 当天结束；全买 No 可以马上 convert）。",
           "- 交易所时间戳；两个交易所之间的时钟偏差没测。正式结果来自 CI（polymarket-ladder-arb）在 polymarket-ladder 每段 5.5 小时录制（ladder-<run id> 产物）上的运行；$/天 是按录制时长线性外推的。"]
     if notes:
@@ -1121,20 +1300,28 @@ def _reward_section(results, hours):
     samples = [r.get("samples") for r in results if r.get("samples") is not None and len(r.get("samples"))]
     fills = [r.get("fills") for r in results if r.get("fills") is not None and len(r.get("fills"))]
     depth = sorted({r.get("depth") for r in results if r.get("depth")})
-    mk, pools = {}, {}
+    mk, pools, unknown = {}, {}, {}
     for r in results:
         for m in r["markets"]:
             p = (r.get("prm") or {}).get(m["condition_id"]) or {}
             mk[m["condition_id"]] = m
-            if p.get("rate", 0) > 0:
+            rate = _fin(p.get("rate"))
+            if rate > 0:
                 pools[m["condition_id"]] = (m, p)
+            elif not np.isfinite(rate):
+                unknown[m["condition_id"]] = m
     if not samples:
         return L + ["没有可用的奖励参数或采样（离线且缓存里没有，或没有市场）。"]
     s = pd.concat(samples, ignore_index=True)
     f = pd.concat(fills, ignore_index=True) if fills else \
         pd.DataFrame(columns=["type", "how", "qty", "m30", "m120", "msettle", "rebate", "cid"])
     L += [f"盘口深度来源：{' / '.join({'full': '原始消息的完整盘口', 'L1': 'built 表的第一档（缺深层挂单，份额偏高）'}[d] for d in depth)}；"
-          f"采样 {len(s):,} 个（市场 × 分钟）；有奖励池的市场 {len(pools)} 个，池合计 ${sum(p['rate'] for _, p in pools.values()):,.2f}/天。", "",
+          f"采样 {len(s):,} 个（市场 × 分钟）；有奖励池的市场 {len(pools)} 个，池合计 ${sum(p['rate'] for _, p in pools.values()):,.2f}/天；"
+          + (f"奖励池**未知**的市场 {len(unknown)} 个（"
+             + "，".join(f"{t} {n}" for t, n in pd.Series([m["type"] for m in unknown.values()]).value_counts().items())
+             + "；它们开着、被录制时没有取到 /rewards/markets/current 快照，Gamma 的 clobRewards 又不含赞助池；ladder.py 录制时不存奖励快照，"
+             "所以这份报告运行之前就结束的市场都是未知），不算“没有池”，其奖励 $/天 记为未知、不计入合计。" if unknown else
+             "每个市场的奖励池都已知（开着时取到过快照）。"), "",
           "| 类型 | 报价 | 市场（有池） | 池 $/天 | 平均份额（全部 / 有池） | 奖励 $/天 | 成交笔 / 份 | 30 s 标记 $/天 | 120 s 标记 $/天 | 结算标记 $/天（已结算的） | 返佣 $/天 |",
           "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for typ in ld.TYPES:
@@ -1163,7 +1350,9 @@ def _reward_section(results, hours):
                         + " / ".join(f"{g[f'usd_{h}'].sum() * per_day:,.2f}" for h in QUOTES) + " |" if len(g) else
                         "– | 没有可计分的采样（单边盘口：中价无定义，双边报价放不下） | 0 |"))
     else:
-        L += ["", "录到的市场里没有一个有奖励池（/rewards/markets/current 快照和 Gamma clobRewards 都没有日奖励额）。"]
+        n_known = len(mk) - len(unknown)
+        L += ["", f"奖励池已知的 {n_known} 个市场里没有一个有奖励池（开着时取到的 /rewards/markets/current 快照不列它们，Gamma clobRewards 也没有日奖励额）"
+              + (f"；另有 {len(unknown)} 个市场奖励池未知（见上）。" if unknown else "。")]
     return L
 
 
@@ -1210,9 +1399,11 @@ def main(argv=None):
         if books.empty or markets.empty:
             notes.append(f"{_name(d)}: 没有盘口或市场")
             continue
+        markets = updown_kline_refs(markets, fetcher, notes)
         loaded.append((d, books, markets, spot, trades, closes))
     allm = prep_markets(pd.concat([x[2] for x in loaded], ignore_index=True).drop_duplicates("condition_id")) if loaded else []
-    prm = reward_params(allm, fetcher, notes) if allm else {}
+    t0 = min((float(np.nanmin(x[1]["recv"] if "recv" in x[1] else x[1]["ts"])) for x in loaded), default=np.inf)
+    prm = reward_params(allm, fetcher, notes, seen_from=t0) if allm else {}
     results, names = [], []
     for d, books, markets, spot, trades, closes in loaded:
         try:
@@ -1226,12 +1417,16 @@ def main(argv=None):
             continue
         results.append(res)
         names.append(_name(d))
-    notes.append(f"Gamma / CLOB 网络请求 {fetcher.requests} 次（其余来自缓存）")
+    notes.append(f"Gamma / CLOB / Binance 网络请求 {fetcher.requests} 次（其余来自缓存）")
+    if not results:   # nothing to report: keep the existing report and fail, so a CI run is not green
+        print("没有可用的录制（built 目录）：不写报告。" + ("".join(f"\n- {n}" for n in notes)))
+        return 2
     text = report(results, names, notes, a.note, a.max_age)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(text, encoding="utf-8")
     print(text)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

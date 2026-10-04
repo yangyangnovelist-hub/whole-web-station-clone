@@ -82,6 +82,12 @@ jobs:
           done
           echo "built: $(ls -d "$rec"/*/built 2>/dev/null | wc -l), with raw CLOB messages: $kept"
           du -sh "$rec" 2>/dev/null || true
+          # no finished recording yet (e.g. the request was pushed before the first ladder-<id> artifact
+          # was uploaded): fail instead of committing an empty report over the existing one
+          if [ "$(ls "$rec"/*/built/books.csv.gz 2>/dev/null | wc -l)" -eq 0 ]; then
+            echo "::error::no ladder recording with built books yet; push ci/ladder_arb.request again after a polymarket-ladder run has uploaded ladder-<run id>"
+            exit 1
+          fi
 
       - name: Structural arbitrage and liquidity rewards (market data only, no orders)
         run: |
