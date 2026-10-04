@@ -4,7 +4,7 @@ name: polymarket-late-ms
 # snapshot of the same books (late_ms.py; exploratory, market data only, no orders, no keys).
 # Its own workflow so the shadow job keeps its time budget. Changing
 # research/polymarket-5m/ci/late_ms.request runs it on every forward recording so far and commits
-# real/late-ms.md.
+# real/late-ms.md, and rt_ms.py (round trips after a Binance jump at real latency) -> real/rt-ms.md.
 on:
   push:
     branches: [claude/polymarket-options-strategy-1lc7i4]
@@ -53,13 +53,14 @@ jobs:
             rm -f "$rec/$id/raw.tgz"
           done
           ls -d "$rec"/*/x/bundle-btc/latency 2>/dev/null | wc -l
-          python late_ms.py "$rec" --out real/late-ms.md
+          python late_ms.py "$rec" --out real/late-ms.md || true
+          python rt_ms.py "$rec" --out real/rt-ms.md || true
 
       - name: Commit the report
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add real/late-ms.md
+          for f in real/late-ms.md real/rt-ms.md; do if [ -e "$f" ]; then git add "$f"; fi; done
           git diff --cached --quiet && exit 0
           git commit -q -m "research: late entry on the millisecond books, run $(date -u +%m-%d\ %H:%M) UTC" \
             -m "Workflow run ${{ github.run_id }}." \
