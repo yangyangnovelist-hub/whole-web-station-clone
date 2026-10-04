@@ -218,7 +218,7 @@ def limit(t, k):
     return s
 
 
-def run(root, notes=None):
+def run(root, notes=None, z0=Z0):
     """All rows of every recording under ROOT (latency._per_recording, test G's coins, feed and
     start), the recorded markets with book rows and the number of jumps found in them; `first`
     marks each market's first jump over all recordings."""
@@ -228,7 +228,7 @@ def run(root, notes=None):
     def make(mk, sp, sg, bk):
         mk = mk[mk["market_id"].isin(set(bk.by))]  # a market with no book row has nothing to trade
         seen_markets.append(mk[["market_id", "start_ts"]])
-        jp = jumps(mk, sp, sg)
+        jp = jumps(mk, sp, sg, z0=z0)
         seen_jumps.append(jp[["market_id", "t0"]])
         return entries(jp, bk)
 
@@ -278,7 +278,7 @@ def _utc(x):
     return pd.to_datetime(x, unit="s", utc=True).strftime("%m-%d %H:%M")
 
 
-def report(t, markets, n_jumps, notes, sends=SENDS, ks=KS, ds=DS):
+def report(t, markets, n_jumps, notes, sends=SENDS, ks=KS, ds=DS, z0=Z0):
     ok = t[t["ok"]]
 
     def sel(variant, arm, x, frame=ok):
@@ -289,7 +289,7 @@ def report(t, markets, n_jumps, notes, sends=SENDS, ks=KS, ds=DS):
     span = f"{_utc(st[0])} – {_utc(st[-1])} UTC" if len(st) else "无"
     L = ["# 毫秒级下单能拿到 kacho 每秒盘口上“晚 1–2 秒”的钱吗（GitHub 前向录制，探索性，事先写定）", "",
          f"录制：市场开始于 {span}（约 {days:.1f} 天），{len(markets):,} 个有盘口的 BTC 5m 市场；"
-         f"币安 2σ 一秒急动 {n_jumps:,} 次（逐笔成交触发，剩 240–15 秒，每个市场每 10 秒取第一次）。", "",
+         f"币安 {z0:g}σ 一秒急动 {n_jumps:,} 次（逐笔成交触发，剩 240–15 秒，每个市场每 10 秒取第一次）。", "",
          f"真实执行：触发成交（币安交易所时间）后 s 秒发单，再过 {1000 * M:.0f} ms 撮合（试点实测发单→撮合，含 150 ms 冻结），"
          "按撮合时刻交易所显示的卖一买（0.02–0.98、至少 5 份），付 taker 费，持有到结算。"
          "kacho 模拟：同一批急动和盘口，按 kacho 的做法用急动秒 S 之后第 d 秒的“行”，行内报价取该行最晚可能的状态（行末）"
@@ -372,9 +372,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root")
     ap.add_argument("--out", default="real/late-ms.md")
+    ap.add_argument("--z0", type=float, default=Z0, help="jump threshold in sigma (default %(default)s)")
     a = ap.parse_args(argv)
-    t, markets, n_jumps, notes = run(a.root)
-    text = report(t, markets, n_jumps, notes)
+    t, markets, n_jumps, notes = run(a.root, z0=a.z0)
+    text = report(t, markets, n_jumps, notes, z0=a.z0)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(text, encoding="utf-8")
     print(text)

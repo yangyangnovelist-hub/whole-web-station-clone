@@ -56,12 +56,14 @@ jobs:
           python late_ms.py "$rec" --out real/late-ms.md || true
           python rt_ms.py "$rec" --out real/rt-ms.md || true
           python rt_fwd.py "$rec" --out real/rt-fwd.md || true
+          python late_ms.py "$rec" --z0 4 --out real/late-ms-z4.md || true
+          python late_ms.py "$rec" --z0 5.83 --out real/late-ms-z6.md || true
 
       - name: Commit the report
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for f in real/late-ms.md real/rt-ms.md real/rt-fwd.md real/rt-fwd.verdict.md real/rt-fwd.trades.csv; do if [ -e "$f" ]; then git add "$f"; fi; done
+          for f in real/late-ms.md real/late-ms-z4.md real/late-ms-z6.md real/rt-ms.md real/rt-fwd.md real/rt-fwd.verdict.md real/rt-fwd.trades.csv; do if [ -e "$f" ]; then git add "$f"; fi; done
           git diff --cached --quiet && exit 0
           git commit -q -m "research: late entry on the millisecond books, run $(date -u +%m-%d\ %H:%M) UTC" \
             -m "Workflow run ${{ github.run_id }}." \
