@@ -78,7 +78,9 @@ jobs:
             [ "$unresolved" = 0 ] && break
             sleep 30
           done
-          [ "$unresolved" = 0 ]
+          if [ "$unresolved" != 0 ]; then
+            echo "::warning::$unresolved markets are still unresolved; preserve them as pending and backfill outcomes during replay"
+          fi
           for c in ${{ steps.cfg.outputs.coins }}; do
             b="$RUNNER_TEMP/paper/bundle-$c"
             echo "== $c"
@@ -150,7 +152,7 @@ jobs:
           exit 1
 
       - name: Keep the converted bundles (the raw messages run to gigabytes)
-        if: steps.cfg.outputs.enabled == 'true'
+        if: always() && steps.cfg.outputs.enabled == 'true'
         run: |
           cd "$RUNNER_TEMP/paper"
           shopt -s nullglob
@@ -162,7 +164,7 @@ jobs:
           tar tzf "$RUNNER_TEMP/raw.tgz" >/dev/null
           test -s "$RUNNER_TEMP/raw.tgz"
       - uses: actions/upload-artifact@v4
-        if: steps.cfg.outputs.enabled == 'true'
+        if: always() && steps.cfg.outputs.enabled == 'true'
         with:
           name: recording-${{ github.run_id }}
           path: ${{ runner.temp }}/raw.tgz
