@@ -2,6 +2,7 @@
 import io
 import json
 import tarfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -154,6 +155,30 @@ def test_no_feature_uses_data_after_the_decision_time():
     assert one(r3, "jump", 1, T0)["imb"] == pytest.approx(one(base, "jump", 1, T0)["imb"])
 
 
+def test_jump_reference_and_klines_use_only_prints_received_by_then():
+    # print 2 (traded at 2.0, received 2.1): its trade-time reference is print 1 (traded 1.0) which arrived at
+    # 5.0, after it -> the reference is print 0 (received 0.1)
+    ts, rv = np.array([0.0, 1.0, 2.0, 3.0]), np.array([0.1, 5.0, 2.1, 3.1])
+    assert list(M.received_ref(ts, rv)) == [-1, 0, 0, 2]
+    sp = M.Spot(pd.DataFrame({"trade_ts_ms": ts * 1000, "recv_ts_ms": rv * 1000, "price": [1.0, 1.0, 1.0, 1.0]}))
+    # latest exchange time received: 2.0 by 2.5 (prints 0 and 2), 3.0 from 3.1; print 1 arrived 2 s after a
+    # print traded 1 s later
+    assert sp.seen_through([0.0, 2.5, 3.5, 6.0]) == pytest.approx([np.nan, 2.0, 3.0, 3.0], nan_ok=True)
+    assert sp.disorder == pytest.approx(2.0) and list(sp.in_flight([2.5, 6.0], [1.5, 1.5])) == [True, False]
+    # a day: a -2.5 bp move at +98.5 s and +2.5 bp at +100 s; the prints traded in [98.5, 99.5) arrive only at
+    # +100.5 s. The +99.5 s print (received +99.6 s) is measured against the last reference received by then
+    # (+98.25 s): the -2.5 bp move, a Down jump at +99.6 s. At the +100.1 s receipt of the +100 s print its
+    # trade-time reference (+99.0 s) has not arrived; against +98.25 s there is no move, so the Up jump a
+    # trade-time reference would give at +100.1 s does not exist (and +100.6 s is within 5 s of +99.6 s)
+    b = binance(steps=((98.5, -2.5), (JUMP, 2.5)))
+    rel = (b["trade_ts_ms"] - MS) / 1000
+    b.loc[(rel >= 98.5) & (rel < 99.5), "recv_ts_ms"] = MS + 100_500
+    rows, info = day(b=b)
+    j = rows[rows["kind"] == "jump"]
+    assert info["jump"] == 1 and sorted(j["t"].unique() - S) == pytest.approx([99.6])
+    assert (j["jdir"] == -1).all() and one(rows, "jump", -1, S + 99.6)["jump_bp"] == pytest.approx(2.5, abs=0.05)
+
+
 def test_dvol_and_factor_inputs_are_known_before_t():
     dv = pd.DataFrame({"hour": [S - 7200, S - 3600, S], "dvol": [40.0, 50.0, 60.0]})
     assert M.dvol_at(dv, [S - 1, S, S + 3599, S + 3600]) == pytest.approx([40, 50, 50, 60])
@@ -190,17 +215,59 @@ def test_entry_at_t_plus_half_second_and_taker_exits():
     assert one(r, "jump", 1, T0)["price"] == pytest.approx(0.95)
 
 
-def test_exit_after_the_end_or_on_a_stale_book_holds_to_settlement():
+def test_exit_waits_for_a_usable_bid_and_holds_only_when_none_comes_before_the_end():
     rows, _ = day(won=0.0)
-    f = one(rows, "fixed", 1, END - 60)  # te = end - 59.5
+    f = one(rows, "fixed", 1, END - 60)  # te = end - 59.5: the 60 s exit would be after the end
     cost = f["price"] + fee(f["price"])
     assert f["how_tk60"] == 0 and f["pnl_tk60"] == pytest.approx(-cost) and f["hold_tk60"] == pytest.approx(59.5)
     assert f["how_tk30"] == 1 and f["hold_tk30"] == pytest.approx(30.5)
-    # the book stops changing 1.5 s before the 5 s exit (+106.1 s): no bid, held
+    c5 = 0.5 + fee(0.5)
+    # the book stops changing 1.5 s before the 5 s exit (+106.1 s): not settlement (a different exit), but
+    # the sale waits for the next change at +107.0 s and sells at that bid
     r, _ = day(f=book(frozen=lambda rel: (rel > 104.6 + 1e-9) & (rel < 107)), won=0.0)
     u = one(r, "jump", 1, T0)
-    assert u["how_tk5"] == 0 and u["pnl_tk5"] == pytest.approx(-(0.5 + fee(0.5)))
-    assert u["how_tk10"] == 1
+    bid = 0.30 + 107.0 / 1000
+    assert u["how_tk5"] == 1 and u["pnl_tk5"] == pytest.approx(bid - fee(bid) - c5) and u["hold_tk5"] == pytest.approx(6.4)
+    assert u["how_tk10"] == 1 and u["hold_tk10"] == pytest.approx(10.5)
+    # a thin bid (3 shares) at the exit: the sale waits for the first bid with >= 5 shares (+106.5 s)
+    f2 = book()
+    f2.loc[(f2["timestamp_ms"] >= MS + 105_000) & (f2["timestamp_ms"] <= MS + 106_400), "up_bid_size"] = 3.0
+    u2 = one(day(f=f2, won=0.0)[0], "jump", 1, T0)
+    bid2 = 0.30 + 106.5 / 1000
+    assert u2["how_tk5"] == 1 and u2["pnl_tk5"] == pytest.approx(bid2 - fee(bid2) - c5) and u2["hold_tk5"] == pytest.approx(5.9)
+    assert u2["sh20_tk5"] in (10, 11)
+    # no bid from +105 s to the end: held to settlement (the only case a taker exit before the end is held)
+    f3 = book()
+    f3.loc[f3["timestamp_ms"] >= MS + 105_000, ["up_best_bid", "down_best_ask"]] = np.nan
+    u3 = one(day(f=f3, won=0.0)[0], "jump", 1, T0)
+    for h in M.HOLDS:
+        assert u3[f"how_tk{h}"] == 0 and u3[f"pnl_tk{h}"] == pytest.approx(-c5) and u3[f"hold_tk{h}"] == pytest.approx(199.4)
+        assert u3[f"pnl_eff_tk{h}"] == pytest.approx(-c5)
+
+
+def test_effective_bid_sensitivity_uses_the_other_tokens_ask():
+    # the Up bid drops to 0.05 from +105 s to +107 s (a hole in its own book) while the Down ask stays at
+    # 1 - 0.40x: the verdict sells at 0.05, the sensitivity at 1 - Down ask
+    f = book()
+    hole = (f["timestamp_ms"] >= MS + 105_000) & (f["timestamp_ms"] < MS + 107_000)
+    f.loc[hole, "up_best_bid"] = 0.05
+    u = one(day(f=f, won=0.0)[0], "jump", 1, T0)
+    c5 = 0.5 + fee(0.5)
+    eff = 0.30 + 106.1 / 1000  # Down ask at +106.1 s is 1 - (0.30 + 0.1061)
+    assert u["pnl_tk5"] == pytest.approx(0.05 - fee(0.05) - c5)
+    assert u["pnl_eff_tk5"] == pytest.approx(eff - fee(eff) - c5, abs=1e-6)
+    assert u["pnl_eff_tk10"] == pytest.approx(u["pnl_tk10"])  # outside the hole the two agree
+    # a taker SELL of the Down token at 0.485 (= a buy of Up at 0.515 >= 0.51) fills the +1c resting sell in
+    # the sensitivity only; the verdict falls back to the 5 s taker exit
+    rows, _ = day(pr=[(103.6, "dn", 0.485, "sell")])
+    v = one(rows, "jump", 1, T0)
+    assert v["how_mk1_5"] == 1 and v["pnl_mk1_5"] == pytest.approx(v["pnl_tk5"])
+    assert v["pnl_eff_mk1_5"] == pytest.approx(0.51 - c5)
+    # Down ask below 1 - L on arrival: the resting sell would cross through the other token (taker)
+    g = book()
+    g.loc[(g["timestamp_ms"] >= MS + 101_000) & (g["timestamp_ms"] < MS + 101_300), "down_best_ask"] = 0.44
+    w = one(day(f=g)[0], "jump", 1, T0)
+    assert w["how_mk1_5"] != 3 and w["pnl_eff_mk1_5"] == pytest.approx(0.56 - fee(0.56) - c5)
 
 
 def test_entry_needs_a_fresh_book_five_shares_and_the_band():
@@ -353,13 +420,13 @@ def test_freeze_is_written_from_A_alone_before_B_and_C_are_read(tmp_path, monkey
     seen = []
     real_freeze, real_eval = M.freeze, M.evaluate
 
-    def freeze(A, path, log=print):
+    def freeze(A, path, log=print, full=True):
         seen.append(("freeze", set(M.segment_of(A["start"].to_numpy(float)))))
-        return real_freeze(A, path, log)
+        return real_freeze(A, path, log, full)
 
-    def evaluate(rows_, spec, complete_c=True, log=print):
+    def evaluate(rows_, spec, open_c=True, log=print):
         seen.append(("evaluate", Path_exists(tmp_path)))
-        return real_eval(rows_, spec, complete_c, log)
+        return real_eval(rows_, spec, open_c, log)
 
     def Path_exists(p):
         return sorted(x.name for x in p.rglob("*frozen.json"))
@@ -385,7 +452,7 @@ def test_freeze_is_written_from_A_alone_before_B_and_C_are_read(tmp_path, monkey
     assert (tmp_path / "a" / "mix-frozen.json").read_text() == before
     assert not any(o["c_open"] for o in res3)
     text = (tmp_path / "a" / "mix-hf.md").read_text(encoding="utf-8")
-    assert "冻结文件已存在" in text and "指纹不符" in text
+    assert "冻结文件已存在" in text and "指纹不符" in text and "这不是判定" in text
     assert (tmp_path / "a" / "mix-rows.csv.gz").exists()
     tr = pd.read_csv(tmp_path / "b" / "mix-rows.csv.gz")
     assert set(tr["segment"]) == {"A", "B"} and list(tr.columns) == M.TRADED_COLS
@@ -399,6 +466,108 @@ def test_lockbox_stays_closed_when_an_archive_of_C_was_not_read(tmp_path, fast_m
     _, _, res2 = M.analyze(rows, tmp_path / "g" / "mix-hf.md", failed=["2026-06-20"], skipped=["2026-08-30"],
                            log=lambda s: None)
     assert res2[0]["c_open"]
+
+
+def test_trial_run_never_writes_the_committed_freeze_nor_opens_C(tmp_path, fast_models):
+    rows = synth_rows()
+    out = tmp_path / "real" / "cross-mix-hf.md"
+    trial = tmp_path / "wd" / M.TRIAL_FROZEN
+    trial.parent.mkdir()
+    # a trial on the C rows alone (as `mix 3` would read): nothing frozen where the lane commits, C closed
+    _, spec, res = M.analyze(rows[M.segment_of(rows["start"].to_numpy(float)) == "C"], out, full_a=False,
+                             trial_frozen=trial, log=lambda s: None)
+    assert not (tmp_path / "real" / "cross-mix-frozen.json").exists() and trial.exists() and spec["rules"] == []
+    assert "试跑，不是判定" in out.read_text(encoding="utf-8")
+    # a trial with part of A freezes rules (in the workdir), rewrites its file each time, never opens C
+    _, spec, res = M.analyze(rows, out, full_a=False, trial_frozen=trial, log=lambda s: None)
+    assert len(spec["rules"]) == 3 and res[0]["b_pass"] and not any(o["c_open"] for o in res)
+    assert not (tmp_path / "real" / "cross-mix-frozen.json").exists() and not spec["full"]
+    assert not (tmp_path / "real" / "cross-mix-lockbox.json").exists()
+    # the full run afterwards freezes on its own and opens C
+    _, spec, res = M.analyze(rows, out, log=lambda s: None)
+    assert spec["full"] and len(spec["rules"]) == 3 and res[0]["c_open"]
+    assert (tmp_path / "real" / "cross-mix-lockbox.json").exists()
+
+
+def test_a_frozen_file_that_cannot_give_a_verdict_is_reported_as_such(tmp_path, fast_models):
+    rows = synth_rows()
+    out = tmp_path / "real" / "cross-mix-hf.md"
+    frozen = tmp_path / "real" / "cross-mix-frozen.json"
+    frozen.parent.mkdir()
+    # an empty freeze written by an old trial (`mix 3`): no rules, no A rows, no "full"
+    frozen.write_text(json.dumps(dict(made="2026-10-01", a_rows=0, a_fingerprint="empty", rules=[], candidates=[])))
+    _, spec, res = M.analyze(rows, out, log=lambda s: None)
+    text = out.read_text(encoding="utf-8")
+    assert spec["rules"] == [] and json.loads(frozen.read_text())["a_rows"] == 0  # not overwritten
+    assert "这不是判定" in text and "试跑" in text and "A 段没有行" in text and "指纹不符" in text
+    assert "没有一个候选规则" not in text and "冻结时 A 段 0 行" in text
+    # a full freeze whose segments differ from the code's: C stays closed
+    frozen.unlink()
+    M.analyze(rows, out, log=lambda s: None)
+    s = json.loads(frozen.read_text())
+    s["segments"] = [["A", "2026-05-25", "2026-07-16"], ["B", "2026-07-16", "2026-08-20"], ["C", "2026-08-20", "2026-08-30"]]
+    frozen.write_text(json.dumps(s))
+    (tmp_path / "real" / "cross-mix-lockbox.json").unlink()
+    _, _, res = M.analyze(rows, out, log=lambda s: None)
+    assert res[0]["b_pass"] and not any(o["c_open"] for o in res) and "segments" in out.read_text(encoding="utf-8")
+
+
+def test_lockbox_first_opening_is_recorded_and_not_repeated_on_other_C_rows(tmp_path, fast_models):
+    rows = synth_rows()
+    out = tmp_path / "real" / "cross-mix-hf.md"
+    _, _, res = M.analyze(rows, out, log=lambda s: None)
+    lock = tmp_path / "real" / "cross-mix-lockbox.json"
+    rec = json.loads(lock.read_text())
+    assert res[0]["c_open"] and rec["results"][0]["rule"] == "R1" and rec["c_fingerprint"] != "empty"
+    # the same frozen file and the same C rows: a repeat of the same computation
+    _, _, res2 = M.analyze(rows, out, log=lambda s: None)
+    assert res2[0]["c_open"] and res2[0]["stats"]["C"] == pytest.approx(res[0]["stats"]["C"])
+    assert json.loads(lock.read_text()) == rec and "重复计算" in out.read_text(encoding="utf-8")
+    # other C rows (e.g. a changed C label) with the same A: C is not read again; the first result is shown
+    other = rows.copy()
+    c = M.segment_of(other["start"].to_numpy(float)) == "C"
+    other.loc[c, "pnl_settle"] = other.loc[c, "pnl_settle"] - 0.01
+    _, _, res3 = M.analyze(other, out, log=lambda s: None)
+    text = out.read_text(encoding="utf-8")
+    assert res3[0]["b_pass"] and not any(o["c_open"] for o in res3) and "锁箱已在" in text
+    assert json.loads(lock.read_text()) == rec
+
+
+def test_report_shows_the_sensitivities_settlement_split_and_stacking(tmp_path, fast_models):
+    rows = synth_rows()
+    out = tmp_path / "x" / "mix-hf.md"
+    M.analyze(rows, out, log=lambda s: None)
+    text = out.read_text(encoding="utf-8")
+    for s in ("严格排队", "有效买一", "按结算方式拆开", "60 秒均价结算", "同一时点两方都买", "叠在一起",
+              "在这些行上挑的，样本内", "（急动这一方 − 反方向）÷ 2"):
+        assert s in text, s
+
+
+def test_download_is_checked_against_the_manifest_and_retried(tmp_path, monkeypatch):
+    import hashlib
+    monkeypatch.setattr(M, "FETCH_WAIT_S", 0)
+    body = b"x" * 1000
+    sha = hashlib.sha256(body).hexdigest()
+    calls = []
+
+    class Fake:
+        @staticmethod
+        def fetch(name, dest):
+            calls.append(name)
+            Path(dest).write_bytes(body[:10] if len(calls) == 1 else body)  # the first body is cut short
+            return dest
+
+    logs = []
+    dest = tmp_path / "a.tar.gz"
+    assert M._fetch(Fake, "a.tar.gz", dest, logs.append, size=1000, sha256=sha) == dest
+    assert len(calls) == 2 and dest.read_bytes() == body and "10 bytes" in logs[0]
+    calls.clear()
+    with pytest.raises(OSError):  # the wrong sha256 three times: failed (a C archive keeps the lockbox closed)
+        M._fetch(Fake, "a.tar.gz", dest, logs.append, size=1000, sha256="0" * 64)
+    assert len(calls) == 3 and not dest.exists()
+    assert M.manifest_sha(f"market_parquet_2026-06-10.tar.gz  {sha}  1000\n") == {"market_parquet_2026-06-10.tar.gz": sha}
+    assert M.coverage(["2026-06-10", "2026-06-11", "2026-08-20"], ["2026-06-10", "2026-08-20"]) == \
+        {"A": (1, 2), "B": (0, 0), "C": (1, 1)}
 
 
 def test_q_cut_comes_from_the_A_out_of_sample_scores(fast_models):
@@ -506,3 +675,36 @@ def test_subcommand_end_to_end(tmp_path, monkeypatch):
     for s in ("## 判定", "没有一个候选规则", "## 成本结构", "| 2026-06-10 | 1 | 0 |", "K 线缺"):
         assert s in text, s
     assert (tmp_path / "real" / "mix-rows.csv.gz").exists()
+
+
+def test_partial_run_is_a_trial_and_a_truncated_archive_is_failed(tmp_path, monkeypatch):
+    src = archive(tmp_path / "src.tar.gz", "2026-06-10")
+    names = [f"market_parquet_2026-06-{d}.tar.gz" for d in ("10", "11")]
+    monkeypatch.setattr(M, "FETCH_WAIT_S", 0)
+    cut = {"on": False}
+
+    def fetch(n, dest=None):
+        if n == "MANIFEST.txt":
+            return "".join(f"{x}  abc  {src.stat().st_size}\n" for x in names).encode()
+        raw = src.read_bytes()
+        dest.write_bytes(raw[:1000] if cut["on"] else raw)  # cut short: urllib would not raise
+        return dest
+
+    monkeypatch.setattr(cross, "fetch", fetch)
+    monkeypatch.setattr(hf, "download", lambda url, dest: (_ for _ in ()).throw(OSError("offline")))
+    wd, out = tmp_path / "wd", tmp_path / "real" / "cross-mix-hf.md"
+    cross.main(["mix", "1", "--workdir", str(wd), "--out", str(out)])  # `mix 1`: one of the two A archives
+    assert not (tmp_path / "real" / "cross-mix-frozen.json").exists() and (wd / M.TRIAL_FROZEN).exists()
+    assert "试跑，不是判定" in out.read_text(encoding="utf-8")
+    cut["on"] = True
+    cross.main(["mix", "--workdir", str(wd), "--out", str(out)])
+    text = out.read_text(encoding="utf-8")
+    assert "读失败 2 个" in text and not (wd / names[0]).exists()
+    assert not (tmp_path / "real" / "cross-mix-frozen.json").exists()  # A not read: still a trial
+
+
+def test_cross_mix_default_output_is_committed_by_the_lane(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(M, "run", lambda wd, out, days, dataset=None: seen.update(out=out))
+    cross.main(["mix"])
+    assert seen["out"] == "real/cross-mix-hf.md"  # the polymarket-cross lane commits real/cross-* only
