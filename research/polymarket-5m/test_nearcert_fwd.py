@@ -339,45 +339,68 @@ def test_clustered_standard_error():
 def test_pinned_verdict_once(tmp_path):
     out = tmp_path / "real" / "nf.md"
     pinned = tmp_path / "real" / "nf.verdict.md"
-    base = [entry(c, T10 + i, official=1.0) for i, c in enumerate("ABC")] + \
-        [entry("A", T10 + 300, check=5), entry("Z", T10 + 1, kind="updown_4h", official=0.0)]
+    base = [entry(c, T10 + 86400 * i, ask=0.10, official=1.0) for i, c in enumerate("ABC")] + \
+        [entry("A", T10 + 300, ask=0.10, check=5), entry("Z", T10 + 1, kind="updown_4h", official=0.0)]
     cp = pd.DataFrame(base)
     e = pd.DataFrame(base)
+    covered = float(e["end"].max() + 1)
+    now = covered + 86400
     # too few Binance-settled markets (the 4-hour control does not count)
-    assert "不到 4 个" in nf.judge(out, e, cp, END + 9999, n=4) and not pinned.exists()
+    assert "不到 4 个" in nf.judge(out, e, cp, covered, n=4, min_days=3) and not pinned.exists()
     # the first 3 are not all resolved yet
     late = e.copy()
     late.loc[late["cid"] == "B", "official"] = np.nan
-    assert "还没结算" in nf.judge(out, late, cp, END + 9999, n=3) and not pinned.exists()
+    assert "还没结算" in nf.judge(out, late, cp, covered, n=3, min_days=3) and not pinned.exists()
     # an earlier checkpoint still undetermined
     cp2 = pd.concat([cp, pd.DataFrame([{"cid": "U", "kind": "updown_day", "t": T10 - 5, "end": END,
                                         "status": "ref_pending"}])])
-    assert "待定" in nf.judge(out, e, cp2, END + 9999, n=3, now=END + 86400) and not pinned.exists()
-    assert "待定" not in nf.judge(tmp_path / "old.md", e, cp2, END + 9999, n=3, now=END + 4 * 86400)
+    assert "待定" in nf.judge(out, e, cp2, covered, n=3, min_days=3, now=END + 86400) and not pinned.exists()
+    assert "待定" not in nf.judge(tmp_path / "old.md", e, cp2, covered, n=3, min_days=3,
+                                   now=END + 4 * 86400)
     assert (tmp_path / "old.verdict.md").exists()       # an old undetermined checkpoint stays skipped
     # recordings not yet past the markets' end
-    assert "录制" in nf.judge(out, e, cp, T10, n=3) and not pinned.exists()
+    assert "录制" in nf.judge(out, e, cp, T10, n=3, min_days=3) and not pinned.exists()
     # development runs never judge
-    assert "开发运行" in nf.judge(out, e, cp, END + 9999, n=3, design=False) and not pinned.exists()
-    v = nf.judge(out, e, cp, END + 9999, n=3)
+    assert "开发运行" in nf.judge(out, e, cp, covered, n=3, min_days=3, design=False) and not pinned.exists()
+    v = nf.judge(out, e, cp, covered, n=3, min_days=3, now=now)
     assert pinned.exists() and "前 3 个市场，4 笔" in v and "通过" in v
+    assert "99%" in v and "精确" in v
     judged = pd.read_csv(tmp_path / "real" / "nf.trades.csv")
     assert sorted(judged["cid"]) == ["A", "A", "B", "C"]
     text = pinned.read_text(encoding="utf-8")
     # later data never changes it
     worse = pd.DataFrame([entry(c, T10 + i, official=0.0) for i, c in enumerate("ABCDE")])
-    again = nf.judge(out, worse, worse, END + 9999, n=3)
+    again = nf.judge(out, worse, worse, covered, n=3, min_days=3)
     assert again == text.strip() + "（已判定，不再重算）"
     assert pinned.read_text(encoding="utf-8") == text
 
 
-def test_verdict_rule_needs_positive_mean_and_t_of_two(tmp_path):
-    lose = [entry(c, T10 + i, official=0.0 if c == "A" else 1.0) for i, c in enumerate("ABCDEFGHIJ")]
-    v = nf.judge(tmp_path / "a.md", pd.DataFrame(lose), pd.DataFrame(lose), END + 9999, n=10)
+def test_verdict_requires_tail_robust_daily_lower_bound_and_exact_p(tmp_path):
+    lose = [entry(c, T10 + 86400 * i, ask=0.10, official=0.0) for i, c in enumerate("ABCDEFGHIJ")]
+    covered = max(r["end"] for r in lose) + 1
+    v = nf.judge(tmp_path / "a.md", pd.DataFrame(lose), pd.DataFrame(lose), covered, n=10,
+                 now=covered + 86400)
     assert "没通过" in v
-    win = [entry(c, T10 + i, ask=0.95 + 0.001 * i) for i, c in enumerate("ABCDEFGHIJ")]
-    v = nf.judge(tmp_path / "b.md", pd.DataFrame(win), pd.DataFrame(win), END + 9999, n=10)
+    priced_fair = [entry(c, T10 + 86400 * i, ask=0.95) for i, c in enumerate("ABCDEFGHIJ")]
+    covered = max(r["end"] for r in priced_fair) + 1
+    v = nf.judge(tmp_path / "b.md", pd.DataFrame(priced_fair), pd.DataFrame(priced_fair), covered, n=10,
+                 now=covered + 86400)
+    assert "没通过" in v and "精确" in v
+    win = [entry(c, T10 + 86400 * i, ask=0.10) for i, c in enumerate("ABCDEFGHIJ")]
+    covered = max(r["end"] for r in win) + 1
+    v = nf.judge(tmp_path / "c.md", pd.DataFrame(win), pd.DataFrame(win), covered, n=10,
+                 now=covered + 86400)
     assert "→ 通过" in v
+
+
+def test_exact_p_counts_a_market_once_even_with_multiple_checkpoints():
+    rows = pd.DataFrame([
+        entry("A", T10, ask=0.10), entry("A", T10 + 1, ask=0.30, check=5),
+        entry("B", T10 + 86400, ask=0.20),
+    ])
+    qa = rows.loc[rows["cid"] == "A", "ask"].iloc[0] + rows.loc[rows["cid"] == "A", "fee"].iloc[0]
+    qb = rows.loc[rows["cid"] == "B", "ask"].mean() + rows.loc[rows["cid"] == "B", "fee"].mean()
+    assert nf.market_exact_pvalue(rows) == pytest.approx(qa * qb)
 
 
 # ------------------------------------------------------------------ end to end
@@ -417,7 +440,8 @@ def test_run_end_to_end(tmp_path):
     write_built(tmp_path / "rec" / "111" / "built", books, ms, SPOT)
     net = FakeNet({"A": '["1", "0"]', "B": '["1", "0"]', "Z": '["1", "0"]'}, open_=["H"])
     out = tmp_path / "real" / "nearcert-forward.md"
-    text = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 3600, net=net, n=1, log=lambda *a: None)
+    text = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 3600, net=net, n=1,
+                  min_days=1, log=lambda *a: None)
     assert out.exists() and text == out.read_text(encoding="utf-8")
     assert "检验 2" in text and "| 买入 |" in text and "模拟成交率" in text
     assert "不含队列竞争" in text
@@ -438,7 +462,7 @@ def test_run_end_to_end(tmp_path):
     # second run: the verdict is read back, and resolved markets are not asked again
     net2 = FakeNet({})
     text2 = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 7200, net=net2, n=1,
-                   log=lambda *a: None)
+                   min_days=1, log=lambda *a: None)
     assert "已判定，不再重算" in text2
     assert not any("condition_ids=A" in u for u in net2.urls)
 

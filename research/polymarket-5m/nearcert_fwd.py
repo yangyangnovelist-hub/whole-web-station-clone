@@ -59,10 +59,11 @@ Side and entry
   Not yet closed or resolved: pending, counted. Per-share pnl = result - ask - fee; means with
   standard errors clustered by market.
 
-Verdict (as latency._judge): once 300 Binance-settled markets have an entry, ordered by their first
-entry's checkpoint time, judged once on every entry of the first 300: pass iff the per-share mean is
-> 0 and t >= 2. (*) Only when all 300 are resolved, a loaded recording reaches past the last of their
-ends (the chained recordings before it are then all in) and no checkpoint up to the 300th market's
+Verdict: ordered by first entry time, stop once at least 300 Binance-settled markets with entries span
+at least 7 UTC days, and judge every entry of those markets. Pass only when mean P&L/share > 0, the
+one-sided 99% UTC-day-cluster lower bound > 0, and a one-observation-per-market exact fair-price
+Poisson-binomial p < 0.01. (*) Only when all selected markets are resolved, a loaded recording reaches past the last of their
+ends (the chained recordings before it are then all in) and no checkpoint up to the stopping market's
 first entry is still undetermined (ref_pending, gamma_na; one whose market ended more than 3 days ago
 stays skipped instead, so a record Gamma never returns cannot hold the verdict forever). Written to <out>.verdict.md (with the
 judged entries in <out>.trades.csv) and afterwards only read back. Runs with parameters other than
@@ -86,6 +87,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import t as student_t
 
 import ladder as ld
 import ladder_check as lc
@@ -104,7 +106,8 @@ FEED_AGE = 5.0            # CLOB feed: no silence longer than this from the toke
 CLOSE_WIN = (10.0, 1.0)   # no CLOB disconnect in [te - 10, te + 1]
 HIT_GAP = 30.0            # hit coverage: longest allowed hole (pre_at -> first trade, between trades)
 N_VERDICT = 300
-T_PASS = 2.0
+MIN_DAYS = 7
+ALPHA = 0.01
 CONV = "open12"           # resolved.py's validated noon candle
 RATE = 4.0                # requests per second, all hosts
 SETTLED_AFTER = 60        # ask Gamma for a result only this long after the end
@@ -608,7 +611,48 @@ def clustered(pnl, groups):
     return mu, se, (mu / se if se > 0 else NAN), G
 
 
-def judge(out, entries, cp, data_end, n=N_VERDICT, design=True, now=None):
+def daily_lower_99(entries, alpha=ALPHA):
+    """One-sided cluster lower bound for equal-size entries grouped by UTC decision day."""
+    if not len(entries):
+        return NAN
+    e = entries.copy()
+    e["day"] = [_utc(t, "%Y-%m-%d") for t in e["t"]]
+    groups = e.groupby("day")["pnl"].agg(["sum", "size"])
+    if len(groups) < 2:
+        return NAN
+    estimate = float(groups["sum"].sum() / groups["size"].sum())
+    influence = groups["sum"] - estimate * groups["size"]
+    se = math.sqrt(len(groups) / (len(groups) - 1) * float((influence * influence).sum())) / groups["size"].sum()
+    return estimate - float(student_t.ppf(1.0 - alpha, len(groups) - 1)) * se
+
+
+def market_exact_pvalue(entries):
+    """Poisson-binomial fair-price test with one Bernoulli observation per market.
+
+    Several checkpoints share one outcome and the favoured side can even flip, so only the first
+    filled checkpoint of each market enters this test. Later entries still enter P&L and the daily
+    cluster bound, but are never mislabelled as independent Bernoulli observations.
+    """
+    if not len(entries):
+        return 1.0
+    e = entries.copy()
+    e["cost"] = e["ask"] + e["fee"]
+    markets = e.sort_values(["t", "cid"], kind="stable").drop_duplicates("cid")[["cost", "won"]]
+    markets = markets[markets["won"].isin((0.0, 1.0))]
+    if not len(markets):
+        return 1.0
+    probabilities = markets["cost"].clip(0.0, 1.0).to_numpy(float)
+    observed = int(markets["won"].sum())
+    pmf = np.zeros(len(probabilities) + 1)
+    pmf[0] = 1.0
+    for index, probability in enumerate(probabilities):
+        for wins in range(index + 1, 0, -1):
+            pmf[wins] = pmf[wins] * (1.0 - probability) + pmf[wins - 1] * probability
+        pmf[0] *= 1.0 - probability
+    return float(np.clip(pmf[observed:].sum(), 0.0, 1.0))
+
+
+def judge(out, entries, cp, data_end, n=N_VERDICT, min_days=MIN_DAYS, design=True, now=None):
     """The once-only verdict (latency._judge): pinned in <out>.verdict.md with the judged entries in
     <out>.trades.csv, then only read back. See the module notes for when it is written."""
     pinned = Path(out).with_suffix(".verdict.md")
@@ -620,7 +664,15 @@ def judge(out, entries, cp, data_end, n=N_VERDICT, design=True, now=None):
     order = e.sort_values(["t", "cid"], kind="stable").drop_duplicates("cid") if len(e) else e
     if len(order) < n:
         return f"目前 {len(order):,} 个市场有买入，不到 {n:,} 个，不判定。"
-    first = order.head(n)
+    chosen, days = [], set()
+    for row in order.itertuples(index=False):
+        chosen.append(row)
+        days.add(_utc(row.t, "%Y-%m-%d"))
+        if len(chosen) >= n and len(days) >= min_days:
+            break
+    if len(days) < min_days:
+        return f"目前 {len(order):,} 个市场有买入，但只覆盖 {len(days)} 个 UTC 日，不到 {min_days} 日，不判定。"
+    first = pd.DataFrame(chosen, columns=order.columns)
     cut = float(first["t"].max())
     sel = e[e["cid"].isin(set(first["cid"]))].sort_values(["t", "cid"], kind="stable")
     wait = []
@@ -637,10 +689,14 @@ def judge(out, entries, cp, data_end, n=N_VERDICT, design=True, now=None):
     if wait:
         return f"已有 {len(order):,} 个市场有买入；前 {n:,} 个里" + "，".join(wait) + "，暂不判定。"
     mu, se, t, G = clustered(sel["pnl"], sel["cid"])
-    ok = mu > 0 and np.isfinite(t) and t >= T_PASS
+    lower = daily_lower_99(sel)
+    exact_p = market_exact_pvalue(sel)
+    ok = mu > 0 and np.isfinite(lower) and lower > 0 and exact_p < ALPHA
     runs = sorted({str(x) for x in sel["run"]})
-    v = (f"前向检验（NEARCERT.md 检验 2，前 {n:,} 个市场，{len(sel):,} 笔）：每份 {100 * mu:+.2f}¢"
-         f"（按市场聚类标准误 {100 * se:.2f}¢，t = {t:.2f}，{G} 个市场）→ {'通过' if ok else '没通过'}"
+    v = (f"前向检验（NEARCERT.md 检验 2，前 {len(first):,} 个市场，{len(sel):,} 笔，{len(days)} 个 UTC 日）："
+         f"每份 {100 * mu:+.2f}¢（按市场聚类标准误 {100 * se:.2f}¢，t = {t:.2f}，{G} 个市场；"
+         f"单侧 99% 日聚类下界 {100 * lower:+.2f}¢；市场级精确公平价格 p = {exact_p:.4g}）"
+         f"→ {'通过' if ok else '没通过'}"
          f"（录制段 {len(runs)} 个：{', '.join(runs)}；第 {n:,} 个市场的首次买入时点 {_utc(cut, '%Y-%m-%d %H:%M')} UTC）")
     pinned.parent.mkdir(parents=True, exist_ok=True)
     pinned.write_text(v + "\n", encoding="utf-8")
@@ -682,8 +738,8 @@ def report(cp, entries, verdict, recs_meta, since, notes=(), dev=None, checks=CH
           f"{_utc(ts_of(since), '%Y-%m-%d %H:%M')} UTC 之后结束的币安结算市场 {nm:,} 个，每个看 {len(checks)} 个时点"
           f"（结束前 {'/'.join(map(str, checks))} 分钟）。", "",
           "## 判定", "", verdict, "",
-          f"规则：攒满 {N_VERDICT} 个有买入的市场（按首次买入的时点排序）后，对这 {N_VERDICT} 个市场的全部买入判定一次："
-          f"每份 > 0 且按市场聚类的 t ≥ {T_PASS:g} 为通过。", "",
+          f"规则：按首次买入时点取到至少 {N_VERDICT} 个有买入市场且覆盖至少 {MIN_DAYS} 个 UTC 日后，对这些市场的全部买入判定一次："
+          f"每份 > 0、单侧 99% 日聚类下界 > 0、市场级精确公平价格 p < {ALPHA:g} 才通过。", "",
           "## 计数", "",
           "| 时点状态 | 币安结算 | 4 小时（对照） |", "|---|---:|---:|"]
     for s, name in STATUS.items():
@@ -757,7 +813,7 @@ def scope_markets(dirs, since):
 
 
 def run(roots, out, cache=CACHE, since=SINCE, now=None, checks=CHECKS, sigma_s=SIGMA_S, net=None, n=N_VERDICT,
-        log=print):
+        min_days=MIN_DAYS, log=print):
     """Everything; writes `out` (and the pinned verdict when due). Returns the report text, or None
     when there is no recording to read (nothing is written then)."""
     now = time.time() if now is None else now
@@ -792,7 +848,7 @@ def run(roots, out, cache=CACHE, since=SINCE, now=None, checks=CHECKS, sigma_s=S
     data_end = max((b for _, _, b in meta if np.isfinite(b)), default=NAN)
     cp = combine(rows, scope, checks, data_end)
     entries = settle(cp, lambda c: gamma.fetch(c), now)
-    verdict = judge(out, entries, cp, data_end, n=n, design=design, now=now)
+    verdict = judge(out, entries, cp, data_end, n=n, min_days=min_days, design=design, now=now)
     text = report(cp, entries, verdict, meta, since, notes, dev, checks)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(text, encoding="utf-8")
