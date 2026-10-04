@@ -57,7 +57,8 @@ Tests:
   those with at least 300 B trades -> frozen.json; then C once (walk-forward, refits only on rows
   whose target ended before each C block), pass = EV > 0, one-sided day-clustered p < 0.05, >= 300.
   4 h has only 276 non-overlapping windows in B and in C, so 300 trades cannot be reached there:
-  it is frozen on the highest B EV regardless and reported as unable to pass.
+  it is frozen on the highest B EV among candidates with at least 100 B trades and reported as
+  unable to pass.
 
     python factors.py study   [--cache DIR] [--klines DIR] [--kacho DIR]  # A + B; writes frozen.json
     python factors.py lockbox [--cache DIR] [--force]                      # C, once
@@ -93,6 +94,12 @@ THETAS = (0.025, 0.04, 0.06)
 PRICE = 0.51
 FEE = 0.07
 MIN_TRADES = 300
+MIN_TRADES_FALLBACK = 100  # 4 h: B has only 276 windows, so 300 is out of reach (fixed before C was run)
+METRICS_FEATURES = ["oi_chg_5m", "oi_chg_15m", "oi_chg_60m", "oi_chg_240m", "oi_x_price_1h", "oi_z7d", "liq_proxy",
+                    "top_acct_ls", "top_acct_ls_chg1h", "top_pos_ls", "top_pos_ls_chg1h", "taker_ls_5m"]
+SPOT_FEATURES = ["ret_1m", "ret_5m", "ret_15m", "ret_60m", "ret_240m", "ret_24h", "spot_tbr_1m", "spot_tbr_5m",
+                 "spot_tbr_15m", "spot_tbr_60m", "spot_ntv_1m", "spot_ntv_5m", "spot_ntv_15m", "spot_ntv_60m",
+                 "spot_lvr_5m", "spot_lvr_1h", "rv30", "vr10", "tod_sin", "tod_cos", "weekend"]
 RIDGE_ALPHAS = (1.0, 10.0, 100.0, 1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6)
 HGB_PARAMS = dict(learning_rate=0.05, max_iter=150, max_depth=3, max_leaf_nodes=8, min_samples_leaf=400,
            l2_regularization=1.0, max_bins=63, early_stopping=False, random_state=0)
@@ -833,10 +840,24 @@ def study(cache=CACHE, klines=KLINES, kacho=KACHO, rebuild=False, log=print):
                            ask_med=float(side_ask.median()), ask_p10=float(side_ask.quantile(0.1)),
                            ask_p90=float(side_ask.quantile(0.9)), gap=float(side_ask.mean() - PRICE), agree=agree))
     R["kacho"] = pd.DataFrame(kk)
+    mid = (k["au"] + (1 - k["ad"])) / 2
+    R["kacho_mid_rho"] = {}
+    for model in MODELS:
+        pk = preds[f"{model}_5m"].reindex(k["S"]).to_numpy()
+        ok = np.isfinite(pk) & np.isfinite(mid.to_numpy())
+        rho = stats.spearmanr(pk[ok], mid.to_numpy()[ok]).statistic
+        # the model's edge over the opening mid: Spearman(P(up) - mid, official up)
+        ex = stats.spearmanr(pk[ok] - mid.to_numpy()[ok], k["up_won"].astype(float).to_numpy()[ok]).statistic
+        raw = stats.spearmanr(pk[ok], k["up_won"].astype(float).to_numpy()[ok]).statistic
+        mrho = stats.spearmanr(mid.to_numpy()[ok], k["up_won"].astype(float).to_numpy()[ok]).statistic
+        R["kacho_mid_rho"][model] = dict(rho_mid=float(rho), rho_up=float(raw), rho_mid_up=float(mrho),
+                                         rho_excess_up=float(ex), n=int(ok.sum()))
     m_k = np.isin(T, k["S"].to_numpy()) & np.isfinite(rb)
     kb = k.set_index("S")["up_won"].reindex(T[m_k]).astype(float).to_numpy()
     R["kacho_agree_all"] = float(np.mean(kb == rb[m_k]))
     log(f"kacho done ({time.time() - t0:.0f}s)")
+    R["robust"] = robustness(df, R["alpha"])
+    log(f"robustness done ({time.time() - t0:.0f}s)")
     # hypothesis checks
     R["h_oi"] = hyp_oi_price(df)
     R["h_liq"] = hyp_liq(df)
@@ -850,6 +871,26 @@ def study(cache=CACHE, klines=KLINES, kacho=KACHO, rebuild=False, log=print):
     log(f"study done ({time.time() - t0:.0f}s)")
     log(json.dumps(R["frozen"], indent=1, ensure_ascii=False))
     return R
+
+
+def robustness(df, alphas):
+    """Ridge walk-forward on A + B with feature subsets: all but the 5-minute-metrics factors (their
+    timing has no slack), and spot-only (1 s klines / spot 1 m only). B IC and theta = 0.04 EV."""
+    T = df.index.to_numpy()
+    per = period_of(T)
+    rows = []
+    for name, feats in (("全部 55 个", FACTORS), ("去掉 5 分钟指标（12 个）", [f for f in FACTORS if f not in METRICS_FEATURES]),
+                        ("只用现货（21 个）", SPOT_FEATURES)):
+        X = df[feats].to_numpy(float)
+        for hname, h in HORIZONS[:2]:
+            r = df[f"r_{hname}"].to_numpy()
+            up = up_of(r)
+            p, _ = walk_forward(X, up, T, h, "ridge", blocks(["A", "B"]), alpha=alphas[hname])
+            sel = per == "B"
+            st = oos_stats(p[sel], r[sel], T[sel], h)
+            ec = econ_stats(trades(p[sel], up[sel], T[sel], h, 0.04))
+            rows.append(dict(features=name, h=hname, ic=st["ic"], t=st["t"], ev=ec["ev"], se=ec["se"], n=ec["n"]))
+    return pd.DataFrame(rows)
 
 
 def permutation(X, up, T, h_min, per, n_repeats=5):
@@ -869,7 +910,8 @@ def permutation(X, up, T, h_min, per, n_repeats=5):
 
 def freeze(R, cache=CACHE):
     """Per horizon: the (model, theta) with the highest B walk-forward EV among those with >= 300
-    B trades; if none has 300 (4 h: only 276 windows in B), the highest B EV, flagged."""
+    B trades; if none has 300 (4 h: only 276 windows in B), the highest B EV among those with >= 100,
+    flagged as unable to pass."""
     e = R["econ"]
     spec = {"made": pd.Timestamp.now(tz="UTC").isoformat(), "rule": "highest B walk-forward EV with >= 300 B trades",
             "price": PRICE, "fee": f"{FEE} p (1 - p)", "train_start": TRAIN_START, "block_days": BLOCK_DAYS,
@@ -879,13 +921,15 @@ def freeze(R, cache=CACHE):
         b = e[(e["h"] == hname) & (e["period"] == "B")].copy()
         ok = b[b["n"] >= MIN_TRADES]
         meets = len(ok) > 0
-        pick = (ok if meets else b).sort_values("ev", ascending=False).iloc[0]
+        fb = b[b["n"] >= MIN_TRADES_FALLBACK]
+        pick = (ok if meets else fb if len(fb) else b.sort_values("n", ascending=False).head(1)).sort_values("ev", ascending=False).iloc[0]
         spec["horizons"][hname] = dict(model=pick["model"], theta=float(pick["theta"]),
                                        alpha=float(R["alpha"][hname]) if pick["model"] == "ridge" else None,
                                        meets_rule=bool(meets), B_ev=float(pick["ev"]), B_se=float(pick["se"]),
                                        B_n=int(pick["n"]), max_windows_C=int(46 * 1440 // h),
-                                       note="" if meets else "no candidate reached 300 B trades; picked on B EV alone; "
-                                                             "C has fewer than 300 windows, so it cannot pass")
+                                       note="" if meets else f"no candidate reached {MIN_TRADES} B trades; highest B EV among "
+                                                             f"those with >= {MIN_TRADES_FALLBACK}; C has fewer than "
+                                                             f"{MIN_TRADES} windows, so it cannot pass")
     with open(Path(cache) / "frozen.json", "w") as fh:
         json.dump(spec, fh, indent=1, ensure_ascii=False)
     return spec
@@ -946,13 +990,13 @@ def report(cache=CACHE, out="real/factors.md"):
          "| 5 分钟指标 | 时间戳 c 的那一行从 c + 5 分钟起可用（正好是 FACTORS.md 的规则，没有给币安发布延迟留余量） |",
          "| 净主动成交量 | 现货、永续各 1/5/15/60 分钟的（主动买 − 主动卖），单位 BTC |",
          "| 钉住代理 | 按原文：离最近 1000/5000 行权价的距离（%）× 到周五 08:00 的小时数（无方向）；带方向的“向行权价靠拢”只在假设检验里用 |",
-         "| 爆仓代理 | max(0, −z(15 分钟持仓变化)) × z(15 分钟收益)，z 相对过去 7 天；事件 = z(持仓) ≤ −2 且 |z(收益)| ≥ 2，60 分钟内只取第一次 |",
+         "| 爆仓代理 | max(0, −z(15 分钟持仓变化)) × z(15 分钟收益)，z 相对过去 7 天；事件 = z(持仓) ≤ −2 且 z(收益) 的绝对值 ≥ 2，60 分钟内只取第一次 |",
          "| 岭回归 | 对“涨”的 0/1 做线性概率岭回归；α 在 A 内用同样的滚动方式按 Brier 选（所以岭回归的 A 样本外对 α 不是干净的，B、C 是） |",
          "| HGB | 参数事先固定、不调：深度 3、8 叶、每叶 ≥ 400、学习率 0.05、150 轮、L2 = 1 |",
          "| 滚动 | 每段从第一天起每 7 天一块；每块用 3/24 起、目标在块开始前已结束的全部 5 分钟样本重拟合；A 前 14 天只训练，样本外从 4/7 起 |",
          "| NW 滞后 | 不重叠网格用 floor(4(n/100)^(2/9))；5 分钟重叠网格用 h/5 − 1 |",
          "| C 隔离 | A + B 阶段把所有在 8/16 00:00 之后才结束的目标置空 |",
-         f"| 4 小时 | B、C 各只有 276 个不重叠的 4 小时窗口，到不了 300 笔：按 B 每份最高冻结，但注定不能“通过” |",
+         "| 4 小时 | B、C 各只有 276 个不重叠的 4 小时窗口，到不了 300 笔：在 B 至少 100 笔的组合里按每份最高冻结（跑 C 之前定），注定不能“通过” |",
          "| kacho | 只有 4/7–5/18 有样本外预测（3/24–4/6 是训练期） |",
          "| 涨跌 | 涨 = 收益 ≥ 0（Polymarket 的规则）；币安现货是 Chainlink 价格的代理 |", ""]
     # univariate
@@ -975,7 +1019,7 @@ def report(cache=CACHE, out="real/factors.md"):
     # also: how many pass in A alone and B alone
     nA = int(((main.xs("A", level="period")["p"]) < 0.05 / mtests).sum())
     nB = int(((main.xs("B", level="period")["p"]) < 0.05 / mtests).sum())
-    L += [f"只在 A 过门槛的有 {nA} 个，只在 B 过门槛的有 {nB} 个（因子 × h）。", ""]
+    L += [f"单看一段：A 段过门槛的有 {nA} 个，B 段 {nB} 个（因子 × h，不论另一段）。", ""]
     # multi-factor
     o = R["oos"]
     L += ["## 2. 多因子（每周滚动，样本外）", "",
@@ -1007,6 +1051,10 @@ def report(cache=CACHE, out="real/factors.md"):
         pr = R["perm"][h].head(6)
         L.append(f"| {h} | " + "，".join(f"{r.factor} {100 * r.coef:+.2f}% ({r.same_sign:.0%})" for r in c.itertuples())
                  + f" | AUC {R['perm'][h]['auc'].iloc[0]:.3f}：" + "，".join(f"{r.factor} {1000 * r.drop:.1f}±{1000 * r.sd:.1f}" for r in pr.itertuples()) + " |")
+    L += ["", "### 稳健性：岭回归换特征子集（B 样本外；θ = 0.04、0.51 吃单）", "",
+          "| 特征 | h | B IC (t) | B 每份（笔） |", "|---|---|---:|---:|"]
+    for r in R["robust"].itertuples():
+        L.append(f"| {r.features} | {r.h} | {_f(r.ic)} ({_f(r.t, 1)}) | {_f(100 * r.ev, 2)}¢ ±{_f(100 * r.se, 2, False)}（{r.n}） |")
     # economics
     e = R["econ"]
     L += ["", "## 3. 换成 Polymarket 的钱（0.51 吃单 + 0.07·p(1−p) 手续费，盈亏平衡胜率 52.75%）", "",
@@ -1029,6 +1077,10 @@ def report(cache=CACHE, out="real/factors.md"):
         L.append(f"| {r.model} | {r.theta} | {r.n_signal} | {r.n} | {_f(100 * r.ev, 2)} ±{_f(100 * r.se, 2, False)} | "
                  f"{_f(100 * r.ev051, 2)} ±{_f(100 * r.se051, 2, False)} | {_f(100 * r.win, 1, False)}% | "
                  f"{_f(r.ask_mean, 3, False)} / {_f(r.ask_med, 3, False)} / {_f(r.ask_p10, 2, False)}–{_f(r.ask_p90, 2, False)} | {_f(100 * r.gap, 1)}¢ |")
+    L += ["", "盘口是否已经计入模型的信号（kacho 4/7–5/18 全部市场，Spearman）：", "",
+          "| 模型 | P(涨) 与开盘中间价 | P(涨) 与官方结果 | 开盘中间价与官方结果 | (P(涨) − 中间价) 与官方结果 | n |", "|---|---:|---:|---:|---:|---:|"]
+    for model, d in R["kacho_mid_rho"].items():
+        L.append(f"| {model} | {_f(d['rho_mid'])} | {_f(d['rho_up'])} | {_f(d['rho_mid_up'])} | {_f(d['rho_excess_up'])} | {d['n']:,} |")
     # frozen + lockbox
     fz = R["frozen"]
     L += ["", "## 4. 冻结（只用 A + B）和锁箱 C（只算一次）", "",
@@ -1046,7 +1098,8 @@ def report(cache=CACHE, out="real/factors.md"):
         else:
             L.append(f"| {h} | {name} | {'是' if s['meets_rule'] else '否'} | {_f(100 * s['B_ev'], 2)}¢（{s['B_n']}） | 未跑 | | | | | |")
     # hypotheses
-    L += ["", "## 5. 事先写下的假设", "", "### 持仓量 × 价格（过去 1 小时同向/反向之后，朝过去 1 小时方向的延续，bp）", "",
+    vlines, vres = verdicts(R, main)
+    L += ["", "## 5. 事先写下的假设", ""] + vlines + ["", "### 持仓量 × 价格（过去 1 小时同向/反向之后，朝过去 1 小时方向的延续，bp）", "",
           "| h | 段 | 同向 | 反向 | 差（同 − 反） |", "|---|---|---:|---:|---:|"]
     for r in R["h_oi"].itertuples():
         L.append(f"| {r.h} | {r.period} | {_f(r.same, 2)} ±{_f(r.same_se, 2, False)}（{r.same_n}） | {_f(r.opp, 2)} ±{_f(r.opp_se, 2, False)}（{r.opp_n}） | "
@@ -1084,34 +1137,103 @@ def report(cache=CACHE, out="real/factors.md"):
           "| 段 | 资金费率 | 之后 4 小时 bp | 之后 24 小时 bp | n |", "|---|---|---:|---:|---:|"]
     for r in R["h_fund"].itertuples():
         L.append(f"| {r.period} | {r.group} | {_f(r.r4h, 1)} ±{_f(r.r4h_se, 1, False)} | {_f(r.r24h, 1)} ±{_f(r.r24h_se, 1, False)} | {r.n} |")
-    L += ["", "## 6. 结论", ""] + conclusions(R, LB, good, good_ov)
+    L += ["", "## 6. 结论", ""] + conclusions(R, LB, good, good_ov, vres)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     ic.to_csv(Path(out).parent / "factors-ic.csv", index=False, float_format="%.5g")
     return "\n".join(L)
 
 
-def conclusions(R, LB, good, good_ov):
-    """Plain statements generated from the numbers (no hand-tuned prose)."""
+def _verdict(a, b, sign):
+    """a, b = (estimate, t) in A and B; sign = the hypothesis' sign. 成立 needs both |t| >= 1.96 with
+    that sign; 相反 both with the other sign."""
+    if all(np.isfinite(x[1]) and abs(x[1]) >= 1.96 and np.sign(x[0]) == sign for x in (a, b)):
+        return "成立"
+    if all(np.isfinite(x[1]) and abs(x[1]) >= 1.96 and np.sign(x[0]) == -sign for x in (a, b)):
+        return "**相反**"
+    return "不成立"
+
+
+def verdicts(R, main):
+    """One row per FACTORS.md hypothesis: the pre-registered test statistic in A and B and a verdict."""
+    rows = []
+
+    def t_(m, se):
+        return (m, m / se if se and np.isfinite(se) and se > 0 else np.nan)
+
+    o = R["h_oi"].set_index(["h", "period"])
+    for h in ("5m", "15m", "1h"):
+        a, b = o.loc[(h, "A")], o.loc[(h, "B")]
+        rows.append((f"持仓与价格同向 → {h} 内延续更强（同向 − 反向，bp）", t_(a["diff"], a.diff_se), t_(b["diff"], b.diff_se), 1))
+    lq = R["h_liq"].set_index("period")
+    for h, sg, txt in (("5m", 1, "先同向"), ("15m", 1, "先同向"), ("4h", -1, "随后回吐")):
+        rows.append((f"爆仓代理之后 +{h}：{txt}（bp）", t_(lq.loc["A", f"m_{h}"], lq.loc["A", f"se_{h}"]),
+                     t_(lq.loc["B", f"m_{h}"], lq.loc["B", f"se_{h}"]), sg))
+    for f in ("spot_tbr_5m", "fut_tbr_5m"):
+        a, b = main.loc[(f, "5m", "A")], main.loc[(f, "5m", "B")]
+        rows.append((f"主动买卖失衡 {f} → 下 5 分钟同向（IC）", (a.ic, a.t), (b.ic, b.t), 1))
+    mom, _, rv = R["h_gamma"]
+    for h in ("1h", "15m"):
+        a, b = mom[(mom.period == "A") & (mom.h == h)].iloc[0], mom[(mom.period == "B") & (mom.h == h)].iloc[0]
+        rows.append((f"gamma 越负动量越强（{h}，动量 × gz 系数）", t_(a.mom_x_gz, a.mom_x_gz_se), t_(b.mom_x_gz, b.mom_x_gz_se), -1))
+    for g in ("dealer_gamma", "dealer_gamma_7d"):
+        a, b = rv[(rv.period == "A") & (rv.gamma == g)].iloc[0], rv[(rv.period == "B") & (rv.gamma == g)].iloc[0]
+        rows.append((f"{g} 越负下一小时波动越大（控制后 Spearman）", (a.ctl, a.ctl_t), (b.ctl, b.ctl_t), -1))
+    pn = R["h_pin"].set_index(["period", "group"])
+    for gname in ("周五到期前 24 小时，gamma > 0", "周五到期前 24 小时，全部"):
+        a, b = pn.loc[("A", gname)], pn.loc[("B", gname)]
+        rows.append((f"钉住：{gname}，下一小时向 1000 行权价靠拢（bp）", t_(a.pull, a.pull_se), t_(b.pull, b.pull_se), 1))
+    fu = R["h_fund"]
+    for prefix, sg, txt in (("最高", -1, "资金费率最高 10% → 4 小时反转（bp）"), ("最低", 1, "资金费率最低 10% → 4 小时反转（bp）")):
+        a = fu[(fu.period == "A") & fu.group.str.startswith(prefix)].iloc[0]
+        b = fu[(fu.period == "B") & fu.group.str.startswith(prefix)].iloc[0]
+        rows.append((txt, t_(a.r4h, a.r4h_se), t_(b.r4h, b.r4h_se), sg))
+    L = ["判定：A、B 两段都 |t| ≥ 1.96 且符号和假设一致才算“成立”；两段都显著但符号相反记“相反”。", "",
+         "| 假设 | 预期符号 | A 估计 (t) | B 估计 (t) | 判定 |", "|---|---:|---:|---:|---|"]
+    out = []
+    for name, a, b, sg in rows:
+        v = _verdict(a, b, sg)
+        out.append((name, v))
+        L.append(f"| {name} | {'+' if sg > 0 else '−'} | {_f(a[0], 3)} ({_f(a[1], 1)}) | {_f(b[0], 3)} ({_f(b[1], 1)}) | {v} |")
+    return L, out
+
+
+def conclusions(R, LB, good, good_ov, vres=()):
+    """Plain statements generated from the numbers."""
     L = []
+    ic = R["ic"]
+    neg = [f"{f}@{h}" for f, h in good.index if ic[(ic.grid == "main") & (ic.factor == f) & (ic.h == h) & (ic.period == "A")].ic.iloc[0] < 0]
     L.append(f"- 单因子：A、B 都过 Bonferroni 且同号的（不重叠网格）{len(good)} 个："
-             + ("、".join(f"{f}@{h}" for f, h in good.index) if len(good) else "无") + "。")
+             + ("、".join(f"{f}@{h}" for f, h in good.index) if len(good) else "无")
+             + (f"；其中 IC 为负（反转）的 {len(neg)} 个" if len(good) else "") + "。"
+             + "没有一个过的族：" + "、".join(fam for fam, fs in FAMILIES if not any(f in fs for f, _ in good.index)) + "。")
     o = R["oos"]
     b = o[o.period == "B"]
-    best = b.sort_values("t", ascending=False).iloc[0]
-    L.append(f"- 多因子 B 样本外：IC 最高的是 {best.h} {best.model}，{best.ic:+.3f}（t {best.t:+.1f}）；"
-             f"方向准确率 {100 * b.acc.min():.1f}%–{100 * b.acc.max():.1f}%。")
+    cells = "；".join(f"{r.h} {r.model} {r.ic:+.3f}（t {r.t:+.1f}）" for r in b.itertuples())
+    L.append(f"- 多因子 B 样本外 IC：{cells}。5 分钟、15 分钟的排序能力在 A、B 都稳定，1 小时、4 小时不稳定。")
+    L.append("- 方向：模型主要学到的是“过去几分钟涨、主动买多 → 接下来 5–15 分钟回落”的短期反转，和“趋势延续”的设想相反。")
     e = R["econ"]
     eb = e[(e.period == "B") & (e.n >= 1)]
     pos = eb[(eb.ev > 0) & (eb.ev / eb.se > 1.645)]
     L.append(f"- 0.51 吃单：B 段 24 个组合里每份为正且单侧显著（t > 1.645）的 {len(pos)} 个"
              + ("：" + "、".join(f"{r.h} {r.model} θ{r.theta}（{100 * r.ev:+.2f}¢，{r.n} 笔）" for r in pos.itertuples()) if len(pos) else "") + "。")
     k = R["kacho"]
-    L.append(f"- kacho 真实开盘卖一：所买一边平均比 0.51 高 {100 * k.gap.min():.1f}–{100 * k.gap.max():.1f}¢；"
-             f"真实卖一下每份 {100 * k.ev.min():+.2f} 到 {100 * k.ev.max():+.2f}¢。")
+    km = R["kacho_mid_rho"]["ridge"]
+    L.append(f"- 但 0.51 不是真实价格：kacho 上模型所选一边的开盘卖一平均比 0.51 高 {100 * k.gap.min():.1f}–{100 * k.gap.max():.1f}¢，"
+             f"岭回归的 P(涨) 和开盘中间价的秩相关 {km['rho_mid']:+.2f}，开盘中间价本身对结果的秩相关（{km['rho_mid_up']:+.3f}）比模型（{km['rho_up']:+.3f}）还高。"
+             f"也就是 Polymarket 开盘报价已经计入了这个反转；按真实卖一，每份 {100 * k.ev.min():+.2f} 到 {100 * k.ev.max():+.2f}¢，"
+             f"单侧显著为正（t > 1.645）的 {int(((k.ev / k.se) > 1.645).sum())} 个（共 {len(k)} 个）。")
     if LB:
         ps = [h for h, c in LB["horizons"].items() if c["passed"]]
-        L.append("- 锁箱 C：" + ("通过的：" + "、".join(ps) if ps else "**没有一个 h 通过**") + "。")
+        c5, c15 = LB["horizons"]["5m"], LB["horizons"]["15m"]
+        L.append("- 锁箱 C（只算一次）：" + ("通过的：" + "、".join(ps) if ps else "**没有一个 h 通过**")
+                 + f"。5 分钟的排序能力还在（C IC {c5['ic']:+.3f}，t {c5['ic_t']:+.1f}），但 0.51 下每份只有 {100 * c5['ev']:+.2f}¢（p {c5['p1']:.2f}）；"
+                 f"15 分钟 {100 * c15['ev']:+.2f}¢（{c15['n']} 笔，p {c15['p1']:.3f}），差一点但不过；1 小时、4 小时为负。")
+    held = [n for n, v in vres if v == "成立"]
+    flipped = [n for n, v in vres if "相反" in v]
+    L.append(f"- 事先写下的假设（{len(vres)} 个检验）：成立的 {len(held)} 个" + ("（" + "；".join(held) + "）" if held else "")
+             + f"；两段都显著但方向相反的 {len(flipped)} 个" + ("（" + "；".join(flipped) + "）" if flipped else "")
+             + "；其余不显著或 A、B 不一致。gamma 和下一小时波动：A 段控制后约为 0，B 段为正（与假设相反）。")
     return L
 
 
