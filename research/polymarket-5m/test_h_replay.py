@@ -413,3 +413,17 @@ def test_feed_disconnect_without_market_id_clears_every_market():
 
     assert {row["market_id"] for row in rows} == {"a", "b"}
     assert {row["reason"] for row in rows} == {"disconnect"}
+
+
+def test_unforced_finish_keeps_unobserved_evaluation_censored():
+    machine = hr.HReplay(hr.ReplayConfig(evaluation_ms=(300.0,)))
+    machine.feed({"kind": "snapshot", "market_id": "m", "receive_ms": 100,
+                  "source_ms": 100, "up_asks": [[0.33, 10]], "down_asks": [[0.67, 10]]})
+    machine.feed({"kind": "signal", "market_id": "m", "receive_ms": 106,
+                  "direction": "Up", "fair": 0.63})
+
+    assert machine.finish(force=False) == []
+    assert machine.pending_evaluations()[0]["evaluation_ms"] == 300.0
+
+    forced = machine.finish()
+    assert len(forced) == 1

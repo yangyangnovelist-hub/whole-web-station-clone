@@ -180,7 +180,7 @@
       ],
       "priority": 8,
       "passes": false,
-      "notes": "Sunday calibration found the six-spot median about 2.6 seconds ahead of the received Chainlink stream with 0.15 bp mean absolute level error; Deribit index was 1.6-2.1 seconds ahead with 0.22 bp error. These are calibration facts, not trading edge. The co-recorded Monday Polymarket L2 is the first executable holdout."
+      "notes": "Sunday calibration found the six-spot median about 2.6 seconds ahead of the received Chainlink stream with 0.15 bp mean absolute level error; Deribit index was 1.6-2.1 seconds ahead with 0.22 bp error. These are calibration facts, not trading edge. The executable holdout cutoff is frozen at 2026-10-05T13:00:00Z. The receipt-causal replay is implemented with exact opening reconstruction, pre-cutoff offset/error calibration, official outcomes only for scoring, direct dual-token L2 on receipt time, partial-FAK PnL, 300/500 ms, five-share depth, recorded 0.07 fee validation, per-source ablations, a timing placebo, delayed-Chainlink baseline, censoring at the recording edge, and 1,000-fill/7-day corrected significance gates. Numeric holdout scoring waits for finalized Monday recordings."
     },
     {
       "id": "US-010",

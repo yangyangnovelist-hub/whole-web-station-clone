@@ -342,7 +342,7 @@ def _strict_market_tables(markets):
         recorded_at = float(recorded_at) / 1000 if recorded_at is not None else None
         registry.append({"market_id": market_id, "start_ts": market["start"],
                          "up_token_id": market["up_token"], "down_token_id": market["down_token"],
-                         "updated_at": recorded_at})
+                         "updated_at": recorded_at, "fee_rate": market.get("fee_rate")})
         token_market[market["up_token"]] = market_id
         token_market[market["down_token"]] = market_id
         market_tokens[market_id] = (market["up_token"], market["down_token"])
@@ -651,7 +651,7 @@ def write_strict_bundle(src, out, coin, markets):
         raise ValueError(f"strict {coin} recording has no valid market metadata")
     registry, outcomes, token_market, market_tokens = _strict_market_tables(markets)
     with gzip.open(strict / "market_registry.csv.gz", "wt", newline="") as stream:
-        fields = ("market_id", "start_ts", "up_token_id", "down_token_id", "updated_at")
+        fields = ("market_id", "start_ts", "up_token_id", "down_token_id", "updated_at", "fee_rate")
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(registry)

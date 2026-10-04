@@ -532,10 +532,34 @@ class HReplay:
             branch.last_fill_signal_ms = attempt.signal_ms
         return record
 
-    def finish(self) -> list[dict[str, Any]]:
+    def finish(self, *, force: bool = True) -> list[dict[str, Any]]:
+        """Drain evaluations.
+
+        ``force=False`` is for strict finite recordings: requests whose target
+        time was never crossed by the observed watermark remain censored rather
+        than being evaluated against a stale terminal book.
+        """
         before = len(self.records)
-        self._drain(math.inf, inclusive=True, force=True)
+        self._drain(math.inf, inclusive=True, force=force)
         return self.records[before:]
+
+    def pending_evaluations(self) -> list[dict[str, Any]]:
+        """Return immutable metadata for end-of-recording censored requests."""
+        return [
+            {
+                "market_id": attempt.market_id,
+                "direction": attempt.direction,
+                "evaluation_ms": evaluation_ms,
+                "evaluation_time_ms": attempt.signal_ms + evaluation_ms,
+                "signal_receive_ms": attempt.signal_receive_ms,
+                "send_ms": attempt.send_ms,
+                "sent": attempt.sent,
+                "decision_reason": attempt.decision_reason,
+                "fixed_limit": attempt.fixed_limit,
+                "target_shares": self.config.base_shares * attempt.size_multiplier,
+            }
+            for _, _, evaluation_ms, attempt in sorted(self._pending)
+        ]
 
 
 def replay_events(events: Iterable[dict[str, Any]], config: ReplayConfig | None = None) -> list[dict[str, Any]]:

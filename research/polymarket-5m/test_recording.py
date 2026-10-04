@@ -278,7 +278,9 @@ def test_binance_trades_reach_the_latency_files(recorded, tmp_path):
     counts = rc.build(out, tmp_path / "bundle")
     assert counts["latency_binance_ws"] == 2
     import gzip as gz
-    rows = [json.loads(l) for l in gz.open(tmp_path / "bundle" / "latency" / "binance_trades.jsonl.gz", "rt")]
+    rows = [json.loads(line) for line in gz.open(
+        tmp_path / "bundle" / "latency" / "binance_trades.jsonl.gz", "rt",
+    )]
     assert [r["price"] for r in rows] == [80000.5, 80001.0] and rows[0]["trade_ts"] == S0 + 100
 
 
@@ -395,6 +397,7 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     outcomes = list(archive.iter_outcomes(strict / "market_outcomes.csv.gz"))
     assert mappings[0]["market_id"] == outcomes[0]["market_id"] == "0xstrict"
     assert mappings[0]["up_token_id"] == parsed["up_token"] and outcomes[0]["winner"] == "Up"
+    assert mappings[0]["fee_rate"] == 0.07
 
 
 def test_strict_json_reader_rejects_a_partial_line(tmp_path):

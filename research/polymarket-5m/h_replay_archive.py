@@ -303,7 +303,7 @@ def iter_market_mappings(path):
         with gzip.open(path, "rt", encoding="utf-8", newline="") as stream:
             for seq, row in enumerate(csv.DictReader(stream)):
                 try:
-                    yield {
+                    mapping = {
                         "kind": "market_mapping",
                         "recv_ms": float(row["updated_at"]) * 1_000 if row.get("updated_at") else None,
                         "seq": seq,
@@ -313,6 +313,9 @@ def iter_market_mappings(path):
                         "up_token_id": row["up_token_id"],
                         "down_token_id": row["down_token_id"],
                     }
+                    if row.get("fee_rate") not in (None, ""):
+                        mapping["fee_rate"] = float(row["fee_rate"])
+                    yield mapping
                 except (KeyError, TypeError, ValueError) as exc:
                     raise ArchiveFormatError(f"{path.name}:{seq + 2}: invalid market registry row") from exc
         return
