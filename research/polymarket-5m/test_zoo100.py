@@ -38,6 +38,7 @@ def test_exactly_100_rules():
     rules = zoo100.make_rules()
     assert len(rules) == 100 and [r[0] for r in rules] == list(range(1, 101))
     assert len({r[2] for r in rules}) == 100  # every rule is described differently
+    assert zoo100.FILL_MS == 500
 
 
 def test_state_grid_and_model_price():
@@ -45,6 +46,7 @@ def test_state_grid_and_model_price():
     S = zoo100.build_state(feat, mkts, binance, trades)
     assert set(S["market_id"]) == {f"m{i}" for i in range(6)} and len(S) == 6 * len(zoo100.GRID_TAUS)
     assert S["ok"].all() and S["fair_m"].between(0, 1).all()
+    assert S["decision_ok"].all() and S["fill_ok"].all()
     assert S.loc[S["market_id"] == "m2", "p15"].notna().all() and S.loc[S["market_id"] != "m2", "p15"].isna().all()
     m0 = S[S["market_id"] == "m0"].set_index("tau")
     assert m0.loc[101, "flow10"] == 0.0 and m0.loc[100, "flow10"] == 120.0  # a print is known when it arrives
@@ -56,15 +58,39 @@ def test_state_grid_and_model_price():
     assert S["prev_up"].notna().sum() == 5 * len(zoo100.GRID_TAUS)
 
 
-def test_evaluate_takes_the_first_healthy_second_at_the_later_ask():
-    S = pd.DataFrame({"market_id": ["a"] * 3 + ["b"] * 2, "end": [1] * 3 + [2] * 2, "tau": [60, 59, 58, 60, 59],
-                      "ok": [False, True, True, True, True], "mid": 0.8, "ua_f": [0.81, 0.82, 0.83, 0.70, 0.71],
-                      "da_f": 0.2, "uas_f": 10.0, "das_f": 10.0, "up_won": [1.0] * 3 + [0.0] * 2})
+def test_evaluate_freezes_first_signal_even_when_it_does_not_fill():
+    S = pd.DataFrame({"market_id": ["a"] * 3 + ["b"] * 2 + ["c"], "end": [1] * 3 + [2] * 2 + [3],
+                      "tau": [60, 59, 58, 60, 59, 60],
+                      "ok": [True, True, True, True, True, True], "mid": 0.8,
+                      "ua_0": [0.40, 0.42, 0.43, 0.70, 0.71, 0.50],
+                      "da_0": 0.2,
+                      # a@60 has a cheap surviving quote but only four shares; b@60 moved above
+                      # the limit.  Later rows would fill, but a one-order protocol cannot use that
+                      # future fact to replace the first signal.  c is a normal fill.
+                      "ua_f": [0.39, 0.41, 0.42, 0.72, 0.70, 0.49],
+                      "da_f": 0.2, "uas_f": [4.0, 10.0, 10.0, 10.0, 10.0, 6.0], "das_f": 10.0,
+                      "fee_rate": [0.07, 0.07, 0.07, 0.07, 0.07, 0.072],
+                      "up_won": [1.0] * 3 + [0.0] * 2 + [1.0]})
     rule = [(7, "x", "buy Up when mid >= 0.8", lambda S: (S["mid"] >= 0.8, S["mid"] > 0.5))]
     t = zoo100.evaluate(S, rule).set_index("market_id")
-    assert t.loc["a", "tau"] == 59 and t.loc["a", "price"] == 0.82 and t.loc["b", "price"] == 0.70
-    assert t.loc["a", "pnl"] == pytest.approx(1 - 0.82 - 0.07 * 0.82 * 0.18)
-    assert t.loc["b", "pnl"] == pytest.approx(-0.70 - 0.07 * 0.70 * 0.30)
+    assert t.loc["a", "tau"] == 60 and not t.loc["a", "filled"]
+    assert t.loc["a", "no_fill_reason"] == "insufficient_depth"
+    assert t.loc["b", "tau"] == 60 and not t.loc["b", "filled"]
+    assert t.loc["b", "no_fill_reason"] == "above_limit"
+    assert t.loc["c", "filled"] and t.loc["c", "limit"] == 0.50 and t.loc["c", "price"] == 0.49
+    assert t.loc["c", "pnl"] == pytest.approx(1 - 0.49 - 0.072 * 0.49 * 0.51)
+
+
+def test_model_edge_rule_uses_decision_ask_not_future_ask():
+    S = pd.DataFrame({
+        "tau": [180], "fair_m": [0.70],
+        "ua_0": [0.69], "da_0": [0.31],
+        "ua_f": [0.40], "da_f": [0.60],
+        "fee_rate": [0.07],
+    })
+    rule46 = next(rule for rule in zoo100.make_rules() if rule[0] == 46)
+    mask, _ = rule46[3](S)
+    assert not bool(mask.iloc[0])
 
 
 def test_report_selects_on_a_and_checks_b_and_c():
@@ -73,11 +99,14 @@ def test_report_selects_on_a_and_checks_b_and_c():
     for per, day in (("A", "2026-06-01"), ("B", "2026-07-20"), ("C", "2026-08-20")):
         for rid, win in ((1, 0.9), (2, 0.5)):
             for i in range(300):
+                filled = i < 200
                 rows.append({"rule": rid, "day": day, "price": 0.5, "fee": 0.0175,
-                             "pnl": (1.0 if rng.random() < win else 0.0) - 0.5175})
+                             "filled": filled,
+                             "pnl": ((1.0 if rng.random() < win else 0.0) - 0.5175) if filled else 0.0})
     rules = [(1, "f", "good", None), (2, "f", "coin", None)] + [(i, "f", f"r{i}", None) for i in range(3, 101)]
     text = "\n".join(zoo100.report(pd.DataFrame(rows), rules, reps=500))
     assert "候选 1 条" in text and "都赚钱、且 B+C 合起来 p < 0.05/1 的：1 条" in text
+    assert "200/300" in text  # fills/signals, not a leaked assumption that every send filled
 
 
 def test_zoo_uses_the_dataset_given_on_the_command_line(monkeypatch):

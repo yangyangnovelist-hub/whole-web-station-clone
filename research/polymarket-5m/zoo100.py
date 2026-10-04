@@ -7,10 +7,11 @@ the 10 min per-second sigma, the realized volatility of the last 60 s against th
 Polymarket taker flow of the last 10/30 s, the book's top-of-book imbalance, a TWAP model price
 (Binance with the market's own basis against the reference, binary.prob_up), the 5m price the
 15m market ending at the same moment implies (both settle on the same TWAP), the hour, and the
-previous market's result. Each rule says when to buy which side; the first such second in a
-market is bought at that side's ask 300 ms later, if the book was healthy then (cross.book_health,
-changed within 2 s before the second and after the fill), and held to settlement with the taker
-fee 0.07 p (1 - p).
+previous market's result. Each rule says when to buy which side; its first decision-time signal
+freezes that side's current ask as a FAK limit. Five hundred milliseconds later it fills only when
+the book is healthy, the ask has not crossed that limit, and at least five shares remain. A killed
+first order is not replaced with a hindsight-selected later signal. Filled shares are held to
+settlement and pay the fee rate active at the simulated fill time.
 
 Rules are compared on May 25 - Jul 15 (A) only. A rule is a candidate when it made money there
 with an exact p < 0.05 on at least 50 trades; a candidate passes when it also made money on
@@ -21,7 +22,8 @@ from __future__ import annotations
 from pathlib import Path
 
 GRID_TAUS = tuple(range(295, 9, -1))  # seconds before the end, once a second
-FILL_MS = 300
+FILL_MS = 500
+MIN_FILL_SHARES = 5.0
 
 
 def _snap(fts, xs, max_age=1000):
@@ -96,16 +98,20 @@ def build_state(feat, mkts, binance, trades=None, fill_ms=FILL_MS):
         kf = np.searchsorted(fts, xs + fill_ms, "left")
         okf = (kf < len(fts)) & (fts[np.minimum(kf, len(fts) - 1)] <= xs + fill_ms + 1000)
         kf = np.where(okf, kf, -1)
-        good = (k0 >= 0) & (kf >= 0)
-        if not good.any():
+        decision_present = k0 >= 0
+        if not decision_present.any():
             continue
         i_b = np.searchsorted(changes, xs, "right")
         fill_t = np.where(kf >= 0, fts[np.maximum(kf, 0)], 0)
         i_a = np.searchsorted(changes, fill_t, "right")
-        alive = (i_b > 0) & (xs - changes[np.maximum(i_b - 1, 0)] <= cross.HEALTH_ALIVE[0]) & \
-                (i_a < len(changes)) & (changes[np.minimum(i_a, len(changes) - 1)] - fill_t <= cross.HEALTH_ALIVE[1])
+        pre_alive = (i_b > 0) & (xs - changes[np.maximum(i_b - 1, 0)] <= cross.HEALTH_ALIVE[0])
+        post_alive = ((kf >= 0) & (i_a < len(changes)) &
+                      (changes[np.minimum(i_a, len(changes) - 1)] - fill_t <= cross.HEALTH_ALIVE[1]))
         k0c, kfc = np.maximum(k0, 0), np.maximum(kf, 0)
-        ok = good & sane[k0c] & sane[kfc] & alive & np.isfinite(ub[k0c]) & np.isfinite(ua[k0c])
+        decision_ok = (decision_present & sane[k0c] & pre_alive &
+                       np.isfinite(ub[k0c]) & np.isfinite(ua[k0c]))
+        fill_ok = (kf >= 0) & sane[kfc] & post_alive
+        ok = decision_ok & fill_ok
 
         def mid_at(off):
             k = _snap(fts, xs + off)
@@ -150,19 +156,27 @@ def build_state(feat, mkts, binance, trades=None, fill_ms=FILL_MS):
         ci_lo, ci_hi = np.searchsorted(changes, xs - 30000, "left"), np.searchsorted(changes, xs, "right")
         st = pd.DataFrame({
             "market_id": mk.market_id, "end": mk.end, "tau": taus, "ok": ok,
+            "decision_ok": decision_ok, "fill_ok": fill_ok,
             "mid": mids[k0c], "spread": ua[k0c] - ub[k0c], "mid_m2": mid_at(-2000), "mid_m10": mid_at(-10000),
             "mid_m30": mid_at(-30000), "imb": (ubs - uas) / (ubs + uas),
             "r1": rets[1], "r5": rets[5], "r30": rets[30], "r60": rets[60], "rv60": rv60,
             "fair_m": fair_m, "p15": p15, "flow10": net[10], "flow30": net[30], "chg30": ci_hi - ci_lo,
             "hour": int((mk.end // 1000 - 300) % 86400 // 3600), "prev_up": prev_won.get(mk.end - 300_000, np.nan),
+            "fee_rate": cross.taker_rate(xs + fill_ms),
+            "ua_0": ua[k0c], "da_0": da[k0c],
             "ua_f": ua[kfc], "da_f": da[kfc], "uas_f": col["up_ask_size"][kfc], "das_f": col["down_ask_size"][kfc],
             "up_won": float(mk.up_won)})
-        out.append(st[good])
+        out.append(st[decision_present])
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
 def _band(x, lo, hi):
     return (x >= lo) & (x < hi)
+
+
+def _fee_cost(S, price):
+    rate = S["fee_rate"] if "fee_rate" in S else 0.07
+    return rate * price * (1 - price)
 
 
 def make_rules():
@@ -206,15 +220,15 @@ def make_rules():
     for lo_t, hi_t in ((240, 121), (120, 31), (30, 10)):
         for th in (0.03, 0.06, 0.10, 0.15):
             def fn(S, lo_t=lo_t, hi_t=hi_t, th=th):
-                fee_u, fee_d = 0.07 * S["ua_f"] * (1 - S["ua_f"]), 0.07 * S["da_f"] * (1 - S["da_f"])
-                eu, ed = S["fair_m"] - S["ua_f"] - fee_u, (1 - S["fair_m"]) - S["da_f"] - fee_d
+                fee_u, fee_d = _fee_cost(S, S["ua_0"]), _fee_cost(S, S["da_0"])
+                eu, ed = S["fair_m"] - S["ua_0"] - fee_u, (1 - S["fair_m"]) - S["da_0"] - fee_d
                 return (S["tau"] <= lo_t) & (S["tau"] >= hi_t) & ((eu >= th) | (ed >= th)), eu >= ed
             add("模型定价", f"TWAP 模型价 − 卖一 − 费 ≥ {100 * th:.0f}¢（剩 {lo_t}–{hi_t}s）", fn)
     # 5. the 15m market's implied price (3)
     for th in (0.03, 0.06, 0.10):
         def fn(S, th=th):
-            eu = S["p15"] - S["ua_f"] - 0.07 * S["ua_f"] * (1 - S["ua_f"])
-            ed = (1 - S["p15"]) - S["da_f"] - 0.07 * S["da_f"] * (1 - S["da_f"])
+            eu = S["p15"] - S["ua_0"] - _fee_cost(S, S["ua_0"])
+            ed = (1 - S["p15"]) - S["da_0"] - _fee_cost(S, S["da_0"])
             return (S["tau"] <= 240) & ((eu >= th) | (ed >= th)), eu >= ed
         add("跨周期", f"同时结束的 15m 市场隐含价 − 卖一 − 费 ≥ {100 * th:.0f}¢", fn)
     # 6. book imbalance (6)
@@ -244,8 +258,8 @@ def make_rules():
         add("波动率", f"剩 {T}s、近 60s 波动 ≤ 0.7 倍平时，买强势方 [0.70,0.90)", fn)
     # 9. spread (2)
     def fn_wide(S):
-        eu = S["fair_m"] - S["ua_f"] - 0.07 * S["ua_f"] * (1 - S["ua_f"])
-        ed = (1 - S["fair_m"]) - S["da_f"] - 0.07 * S["da_f"] * (1 - S["da_f"])
+        eu = S["fair_m"] - S["ua_0"] - _fee_cost(S, S["ua_0"])
+        ed = (1 - S["fair_m"]) - S["da_0"] - _fee_cost(S, S["da_0"])
         return (S["tau"] <= 240) & (S["tau"] >= 20) & (S["spread"] >= 0.04) & ((eu >= 0.05) | (ed >= 0.05)), eu >= ed
     add("价差", "价差 ≥ 4¢ 时模型价 − 卖一 − 费 ≥ 5¢", fn_wide)
 
@@ -269,7 +283,7 @@ def make_rules():
         def fn(S, T=T):
             up = S["fair_m"] >= 0.5
             sure = np.where(up, S["fair_m"], 1 - S["fair_m"]) >= 0.97
-            ask = np.where(up, S["ua_f"], S["da_f"])
+            ask = np.where(up, S["ua_0"], S["da_0"])
             return (S["tau"] <= T) & sure & (ask <= 0.95), up
         add("TWAP 锁定", f"剩 ≤ {T}s、模型 ≥ 97% 而卖一 ≤ 0.95", fn)
     # 13. one-second jumps on the second grid (2, late by up to a second: reference only)
@@ -291,14 +305,14 @@ def make_rules():
     # 16. opening mispricing against the model (3)
     for th in (0.03, 0.06, 0.10):
         def fn(S, th=th):
-            eu = S["fair_m"] - S["ua_f"] - 0.07 * S["ua_f"] * (1 - S["ua_f"])
-            ed = (1 - S["fair_m"]) - S["da_f"] - 0.07 * S["da_f"] * (1 - S["da_f"])
+            eu = S["fair_m"] - S["ua_0"] - _fee_cost(S, S["ua_0"])
+            ed = (1 - S["fair_m"]) - S["da_0"] - _fee_cost(S, S["da_0"])
             return (S["tau"] >= 241) & ((eu >= th) | (ed >= th)), eu >= ed
         add("开盘", f"开盘第一分钟 模型价 − 卖一 − 费 ≥ {100 * th:.0f}¢", fn)
     # 17. combinations (6)
     def model_edge(S, th):
-        eu = S["fair_m"] - S["ua_f"] - 0.07 * S["ua_f"] * (1 - S["ua_f"])
-        ed = (1 - S["fair_m"]) - S["da_f"] - 0.07 * S["da_f"] * (1 - S["da_f"])
+        eu = S["fair_m"] - S["ua_0"] - _fee_cost(S, S["ua_0"])
+        ed = (1 - S["fair_m"]) - S["da_0"] - _fee_cost(S, S["da_0"])
         return ((eu >= th) | (ed >= th)) & (S["tau"] <= 240) & (S["tau"] >= 15), eu >= ed
     add("组合", "模型价差 ≥ 6¢ 且盘口失衡同向（≥ 0.3）",
         lambda S: (lambda m, u: (m & (np.where(u, S["imb"], -S["imb"]) >= 0.3), u))(*model_edge(S, 0.06)))
@@ -319,8 +333,8 @@ def make_rules():
     return R
 
 
-def evaluate(S, rules):
-    """First qualifying healthy second per market and rule, bought at that side's ask FILL_MS later."""
+def evaluate(S, rules, min_fill_shares=MIN_FILL_SHARES):
+    """First decision-time signal per market and rule under a frozen FAK limit."""
     import numpy as np
     import pandas as pd
     if S.empty:
@@ -328,24 +342,41 @@ def evaluate(S, rules):
     parts = []
     for rid, fam, desc, fn in rules:
         mask, up = fn(S)
-        mask = np.asarray(mask, bool) & S["ok"].to_numpy(bool)
+        decision_ok = S["decision_ok"] if "decision_ok" in S else S["ok"]
+        fill_ok = S["fill_ok"] if "fill_ok" in S else S["ok"]
+        mask = np.asarray(mask, bool) & decision_ok.to_numpy(bool)
         up = np.asarray(up, bool)
+        limit = np.where(up, S["ua_0"], S["da_0"])
         px = np.where(up, S["ua_f"], S["da_f"])
-        mask &= np.isfinite(px) & (px >= 0.02) & (px <= 0.98)
+        size = np.where(up, S["uas_f"], S["das_f"])
+        mask &= np.isfinite(limit) & (limit >= 0.02) & (limit <= 0.98)
         if not mask.any():
             continue
         d = S.loc[mask, ["market_id", "end", "tau", "up_won"]].copy()
-        d["up"], d["price"] = up[mask], px[mask]
-        d["size"] = np.where(up, S["uas_f"], S["das_f"])[mask]
+        d["up"], d["limit"] = up[mask], limit[mask]
+        d["observed_ask"], d["size"] = px[mask], size[mask]
+        fee_rate = S["fee_rate"].to_numpy(float) if "fee_rate" in S else np.full(len(S), 0.07)
+        d["fee_rate"] = fee_rate[mask]
+        d["fill_ok"] = fill_ok.to_numpy(bool)[mask]
         d = d.sort_values(["market_id", "tau"], ascending=[True, False]).drop_duplicates("market_id")
+        executable = (d["fill_ok"] & np.isfinite(d["observed_ask"]) & np.isfinite(d["size"]) &
+                      (d["observed_ask"] <= d["limit"] + 1e-12) & (d["size"] >= min_fill_shares))
+        d["filled"] = executable
+        d["price"] = np.where(executable, d["observed_ask"], np.nan)
+        d["no_fill_reason"] = np.select(
+            [~d["fill_ok"], ~np.isfinite(d["observed_ask"]), d["observed_ask"] > d["limit"] + 1e-12,
+             ~np.isfinite(d["size"]) | (d["size"] < min_fill_shares)],
+            ["book_unavailable", "no_ask", "above_limit", "insufficient_depth"],
+            default="filled",
+        )
         d["rule"] = rid
         parts.append(d)
     if not parts:
         return pd.DataFrame()
     t = pd.concat(parts, ignore_index=True)
-    t["fee"] = 0.07 * t["price"] * (1 - t["price"])
+    t["fee"] = np.where(t["filled"], t["fee_rate"] * t["price"] * (1 - t["price"]), 0.0)
     t["won"] = np.where(t["up"], t["up_won"], 1 - t["up_won"])
-    t["pnl"] = t["won"] - t["price"] - t["fee"]
+    t["pnl"] = np.where(t["filled"], t["won"] - t["price"] - t["fee"], 0.0)
     return t.drop(columns=["up_won"])
 
 
@@ -355,6 +386,9 @@ def report(t, rules, reps=5000):
     import binary as bo
     t = t.copy()
     t["period"] = np.select([t["day"] <= "2026-07-15", t["day"] <= "2026-08-16"], ["A", "B"], "C")
+    if "filled" not in t:
+        t["filled"] = True
+    fills = t[t["filled"]].copy()
     info = {rid: (fam, desc) for rid, fam, desc, _ in rules}
 
     def pv(g):
@@ -364,37 +398,40 @@ def report(t, rules, reps=5000):
 
     rows = []
     for rid in sorted(info):
-        g = t[t["rule"] == rid]
+        g = fills[fills["rule"] == rid]
+        sent = t[t["rule"] == rid]
         r = {"rule": rid}
         for per in ("A", "B", "C"):
             h = g[g["period"] == per]
+            r[f"s{per}"] = int((sent["period"] == per).sum())
             r[f"n{per}"], r[f"ev{per}"] = len(h), (h["pnl"].mean() if len(h) else np.nan)
             r[f"px{per}"] = h["price"].mean() if len(h) else np.nan
         r["pA"] = pv(g[g["period"] == "A"])
         rows.append(r)
     cand = [r for r in rows if r["nA"] >= 50 and r["evA"] > 0 and r["pA"] < 0.05]
     for r in cand:
-        bc = t[(t["rule"] == r["rule"]) & (t["period"] != "A")]
+        bc = fills[(fills["rule"] == r["rule"]) & (fills["period"] != "A")]
         r["pBC"] = pv(bc)
         r["pass"] = (r["evB"] > 0) and (r["evC"] > 0) and r["pBC"] < 0.05 / max(len(cand), 1)
-    L = [f"100 条规则，A 段（5/25–7/15）笔数 ≥ 50、赚钱且 p < 0.05 的候选 {len(cand)} 条；"
+    L = [f"100 条规则，A 段（5/25–7/15）实际成交 ≥ 50、赚钱且 p < 0.05 的候选 {len(cand)} 条；"
          f"B（7/16–8/16）和 C（8/17–8/29）都赚钱、且 B+C 合起来 p < 0.05/{max(len(cand), 1)} 的："
          f"{sum(r.get('pass', False) for r in cand)} 条。", ""]
     if cand:
-        L += ["## 候选（A 段选出）", "", "| # | 类别 | 规则 | A 笔数 | A 每份 | A p | B 笔数 | B 每份 | C 笔数 | C 每份 | B+C p | 通过 |",
+        L += ["## 候选（A 段选出）", "", "| # | 类别 | 规则 | A 成交/发送 | A 每份 | A p | B 成交/发送 | B 每份 | C 成交/发送 | C 每份 | B+C p | 通过 |",
               "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:-:|"]
         for r in sorted(cand, key=lambda r: r["pBC"]):
             fam, desc = info[r["rule"]]
-            L.append(f"| {r['rule']} | {fam} | {desc} | {r['nA']:,} | {100 * r['evA']:+.2f}¢ | {r['pA']:.4f} | {r['nB']:,} | "
-                     f"{100 * r['evB']:+.2f}¢ | {r['nC']:,} | {100 * r['evC']:+.2f}¢ | {r['pBC']:.4f} | {'✓' if r['pass'] else ''} |")
-    L += ["", "## 全部 100 条", "", "| # | 类别 | 规则 | A 笔数 | A 均价 | A 每份 | A p | B 笔数 | B 每份 | C 笔数 | C 每份 |",
+            L.append(f"| {r['rule']} | {fam} | {desc} | {r['nA']:,}/{r['sA']:,} | {100 * r['evA']:+.2f}¢ | {r['pA']:.4f} | "
+                     f"{r['nB']:,}/{r['sB']:,} | {100 * r['evB']:+.2f}¢ | {r['nC']:,}/{r['sC']:,} | "
+                     f"{100 * r['evC']:+.2f}¢ | {r['pBC']:.4f} | {'✓' if r['pass'] else ''} |")
+    L += ["", "## 全部 100 条", "", "| # | 类别 | 规则 | A 成交/发送 | A 均价 | A 每份 | A p | B 成交/发送 | B 每份 | C 成交/发送 | C 每份 |",
           "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     fmt = lambda v: "–" if not np.isfinite(v) else f"{100 * v:+.2f}¢"
     for r in rows:
         fam, desc = info[r["rule"]]
         px = "–" if not np.isfinite(r["pxA"]) else f"{r['pxA']:.3f}"
-        L.append(f"| {r['rule']} | {fam} | {desc} | {r['nA']:,} | {px} | {fmt(r['evA'])} | {r['pA']:.4f} | "
-                 f"{r['nB']:,} | {fmt(r['evB'])} | {r['nC']:,} | {fmt(r['evC'])} |")
+        L.append(f"| {r['rule']} | {fam} | {desc} | {r['nA']:,}/{r['sA']:,} | {px} | {fmt(r['evA'])} | {r['pA']:.4f} | "
+                 f"{r['nB']:,}/{r['sB']:,} | {fmt(r['evB'])} | {r['nC']:,}/{r['sC']:,} | {fmt(r['evC'])} |")
     return L
 
 
@@ -421,21 +458,23 @@ def run(workdir, out, days=None, reps=5000, dataset=None):
             t = evaluate(S, rules)
             t["day"] = name[15:25]
             parts.append(t)
-            print(f"{name}: {len(S):,} market-seconds, {len(t):,} trades over {t['rule'].nunique() if len(t) else 0} rules",
+            print(f"{name}: {len(S):,} market-seconds, {len(t):,} sends over {t['rule'].nunique() if len(t) else 0} rules",
                   flush=True)
         except Exception:
             import traceback
             print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
     t = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     if len(t):  # a market is its end time; won and the fee follow from pnl and price
-        t[["rule", "day", "end", "tau", "up", "price", "size", "pnl"]].round(4).to_csv(
+        t[["rule", "day", "end", "tau", "up", "limit", "observed_ask", "filled", "no_fill_reason",
+           "price", "size", "pnl"]].round(4).to_csv(
             Path(out).with_suffix(".csv.gz"), index=False)
-    L = [f"# 100 条规则（{cross.DS}，5m 市场，每秒看一次，0.3 秒后按卖一成交）", "",
+    L = [f"# 100 条规则（{cross.DS}，5m 市场，每秒看一次，500ms 固定限价 FAK）", "",
          "每个 5m 市场从剩 295 秒到剩 10 秒每秒看一次记录机已经收到的状态：两边盘口（最优价和数量）、Up 中间价 2/10/30 秒前的值、"
          "币安 1/5/30/60 秒涨跌（以 10 分钟的每秒 σ 为单位）、近 60 秒波动相对平时、Polymarket 近 10/30 秒的净主动买入、"
          "买一卖一量失衡、TWAP 模型价（币安价格减去本市场相对参考价的基差，binary.prob_up）、同时结束的 15m 市场隐含的 5m 价格"
-         "（两者按同一个 TWAP 结算）、时段、上一局结果。每条规则说什么时候买哪一边；每个市场取第一次满足的那一秒，"
-         "0.3 秒后按那一边的卖一买（两个快照都健康、盘口在之前 2 秒和成交后 2 秒内变过），付 taker 费 0.07·p(1−p)，持有到结算。", "",
+         "（两者按同一个 TWAP 结算）、时段、上一局结果。每条规则锁定每个市场第一次满足的那一秒，以决策时卖一作为不可放宽的 "
+         "FAK 限价。500ms 后只有盘口仍健康、卖一不高于该限价且至少有 5 份时才成交；首单被 kill 后不以后见方式换成后续信号。"
+         "成交后按模拟成交时有效的 taker 费率付费，持有到结算。", "",
          "只在 A 段（5/25–7/15）比较：A 段至少 50 笔、赚钱且精确 p < 0.05 的算候选；候选在 B 段（7/16–8/16）和 C 段（8/17–8/29）"
          "都赚钱，并且 B+C 合起来 p < 0.05 /（候选数）才算通过。通过也只是有资格开一个事先写死规则的实盘检验。", ""]
     L += report(t, rules, reps) if len(t) else ["没有成交。"]
