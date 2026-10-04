@@ -307,9 +307,14 @@ def test_maker_snapshot_through_and_quotes_follow_each_tokens_mid():
         c["down_best_ask"] = np.where(dip, 0.46, np.round(1 - c["up_best_bid"], 6))
         c["down_best_bid"] = np.where(dip, 0.45, np.round(1 - c["up_best_ask"], 6))
     rows, tr, _ = day(f=book(over), strats=("maker",))
-    m = trades_of(tr, "maker")
+    # REGIME.md's maker: only a print through our bid fills it, so the book's dip alone does not
+    assert trades_of(tr, "maker").empty and rows["trades_maker"].iloc[0] == 0 and rows["pnl_maker"].iloc[0] == 0
+    # the sensitivity column counts the snapshot's ask strictly through our bid as a fill
+    m = trades_of(tr, R.SENS)
     assert len(m) == 1 and m["side"].iloc[0] == -1 and m["te"].iloc[0] - S == pytest.approx(80.0)
     assert m["price"].iloc[0] == pytest.approx(0.48) and m["sh20"].iloc[0] == 20
+    assert rows[f"trades_{R.SENS}"].iloc[0] == 1 and rows[f"shares_{R.SENS}"].iloc[0] == 5
+    assert rows[f"pnl_{R.SENS}"].iloc[0] == pytest.approx(5 * (1 - 0.48))
     # the Up mid moves to 0.55 at +100: the Up bid is replaced at 0.53 (live +100.5); a print at 0.52 fills it
     def move(rel, c):
         up = rel >= 100
@@ -318,11 +323,15 @@ def test_maker_snapshot_through_and_quotes_follow_each_tokens_mid():
     assert [(o[0], round(o[1] - S, 3), round(o[2] - S, 3)) for o in orders] == [(0.48, 15.5, 100.2), (0.53, 100.5, 280.2)]
     _, tr2, _ = day(f=book(move), pr=[(130.0, "up", 0.52, "sell")], strats=("maker",))
     m2 = trades_of(tr2, "maker").set_index("side")
-    # the same 5c move took the Down book's ask (0.46) through our Down bid 0.48 in one snapshot: filled, adverse
-    assert m2.loc[-1, "price"] == pytest.approx(0.48) and m2.loc[-1, "te"] - S == pytest.approx(100.0)
-    assert m2.loc[-1, "pps"] == pytest.approx(-0.48)
+    assert list(m2.index) == [1]  # no print went through the Down bid
     assert m2.loc[1, "price"] == pytest.approx(0.53) and m2.loc[1, "te"] - S == pytest.approx(130.0)
     assert m2.loc[1, "pps"] == pytest.approx(1 - 0.53)
+    # in the sensitivity, the same 5c move took the Down book's ask (0.46) through our Down bid 0.48 in one
+    # snapshot: filled, adverse
+    b2 = trades_of(tr2, R.SENS).set_index("side")
+    assert b2.loc[-1, "price"] == pytest.approx(0.48) and b2.loc[-1, "te"] - S == pytest.approx(100.0)
+    assert b2.loc[-1, "pps"] == pytest.approx(-0.48)
+    assert b2.loc[1, "price"] == pytest.approx(0.53) and b2.loc[1, "te"] - S == pytest.approx(130.0)
 
 
 def test_maker_cancels_on_a_binance_jump_with_latency_and_pauses_a_second():
@@ -337,6 +346,33 @@ def test_maker_cancels_on_a_binance_jump_with_latency_and_pauses_a_second():
     assert trades_of(late, "maker").empty
     again = trades_of(day(b=b, pr=[(102.5, "dn", 0.47, "sell")], strats=("maker",))[1], "maker")
     assert len(again) == 1 and again["te"].iloc[0] - S == pytest.approx(102.5) and again["t"].iloc[0] - S == pytest.approx(101.9)
+
+
+def test_maker_pulls_its_quotes_while_the_binance_feed_is_silent():
+    """A 10 s gap in the recorder's feed hides a 5 bp move (no print, so never a jump): quotes are pulled 1 s
+    after the last print received (effective 0.2 s later) and come back 1 s after the feed resumes, so a
+    print through our bid inside the gap is not a fill."""
+    b = binance(steps=((105.0, 5.0),))
+    rcv = (b["recv_ts_ms"] - MS) / 1000.0
+    b = b[(rcv < 100.0) | (rcv >= 110.0)]
+    last = float(rcv[rcv < 100.0].max())                 # +99.85
+    first = float(rcv[rcv >= 110.0].min())               # +110.1
+    mk = market_ctx(book(), b)
+    c, u = R.feed_gaps(mk.spot, END - 285, END - 20)
+    assert [round(x - S, 3) for x in c] == [round(last + 1.0, 3)] and [round(x - S, 3) for x in u] == [round(first + 1.0, 3)]
+    orders = R.maker_orders(mk, -1)
+    assert [(o[0], round(o[1] - S, 3), round(o[2] - S, 3)) for o in orders] == [
+        (0.48, 15.5, round(last + 1.2, 3)), (0.48, round(first + 1.0 + 0.5, 2), 280.2)]
+    # a seller through our Down bid at +105 (inside the gap): no fill; the same print after the pause: a fill
+    assert trades_of(day(b=b, pr=[(105.0, "dn", 0.47, "sell")], strats=("maker",))[1], "maker").empty
+    assert trades_of(day(b=b, pr=[(105.0, "dn", 0.47, "sell")], strats=("maker",))[1], R.SENS).empty
+    again = trades_of(day(b=b, pr=[(115.0, "dn", 0.47, "sell")], strats=("maker",))[1], "maker")
+    assert len(again) == 1 and again["te"].iloc[0] - S == pytest.approx(115.0)
+    # without the gap the same print fills (the guard is what removed it)
+    assert len(trades_of(day(b=binance(), pr=[(105.0, "dn", 0.47, "sell")], strats=("maker",))[1], "maker")) == 1
+    # no Binance print at all before the window: never quoted
+    late_feed = binance(t_from=200.0)
+    assert R.maker_orders(market_ctx(book(), late_feed), 1)[0][1] - S >= 200.0 + LAG_MS / 1000 + 1.0
 
 
 def test_maker_order_the_book_already_crosses_is_a_taker_buy():
@@ -550,7 +586,7 @@ def test_subcommand_end_to_end_final_outcomes_and_carry(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cross, "fetch", fetch)
     monkeypatch.setattr(hf, "download", download)
-    out = tmp_path / "real" / "regime-windows.csv.gz"
+    out = tmp_path / "real" / "cross-regime-windows.csv.gz"
     cross.main(["regime", "--workdir", str(wd), "--out", str(out)])
     assert fetched == ["MANIFEST.txt", n1, n2] and not (wd / n1).exists() and not (wd / n2).exists()
     assert (wd / "regime-shards" / f"{d1}.parquet").exists() and (wd / "regime-shards" / f"{d2}.parquet").exists()
@@ -564,6 +600,15 @@ def test_subcommand_end_to_end_final_outcomes_and_carry(tmp_path, monkeypatch):
     assert r3["trades_H"] == 1 and r3["pnl_H"] == pytest.approx(5 * (1 - 0.51 - fee(0.51)), abs=1e-4)
     assert r3["trades_maker"] == 1 and r3["pnl_maker"] == pytest.approx(5 * (1 - 0.48), abs=1e-4)  # carried print
     assert np.isfinite(r1["fac_up"]) and np.isfinite(r1["rv30m"]) and np.isfinite(r1["dvol_rv"])  # real/regime-inputs
+
+
+def test_default_output_is_one_the_ci_lane_commits(monkeypatch):
+    """The polymarket-cross workflow commits real/cross-* only: the table must be named so by default."""
+    got = []
+    monkeypatch.setattr(R, "run", lambda workdir, out, days, dataset=None: got.append(out))
+    cross.main(["regime", "--workdir", "/nonexistent"])
+    assert got == ["real/cross-regime-windows.csv.gz"]
+    assert R.OUT.name.startswith("cross-") and R.OUT.parent.name == "real"
 
 
 def test_build_inputs_minute_file(tmp_path):

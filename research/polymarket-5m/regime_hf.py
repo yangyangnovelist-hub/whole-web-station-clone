@@ -7,9 +7,10 @@ Data: whodisidk/polymarket-btc-updown-exchange-data (BTC 5m, 2026-05-25 .. 08-29
 both tokens, every Polymarket print with its taker side, every Binance BTCUSDT print with trade and
 recorder times). Runs on GitHub as
 
-    python cross.py regime [N] --workdir DIR --out real/regime-windows.csv.gz
+    python cross.py regime [N] --workdir DIR --out real/cross-regime-windows.csv.gz
 
-(ci/cross.request, the polymarket-cross lane), one daily archive at a time (downloaded, read, deleted;
+(ci/cross.request, the polymarket-cross lane, whose commit step adds only real/cross-*: hence the
+name), one daily archive at a time (downloaded, read, deleted;
 per-day rows in <workdir>/regime-shards/<day>.parquet, concatenated at the end). The inputs that do
 not come from the archives are small files in real/regime-inputs/ (built locally by build_inputs):
 factor_preds_5m.csv.gz (the factor model's walk-forward out-of-sample P(up) per 5m window, copied
@@ -79,13 +80,26 @@ The six base strategies (REGIME.md; every window, one realised P&L each, with un
    is placed or replaced when its price changes at a fresh snapshot with a usable mid (cancel
    effective 0.2 s after the decision, the new order live 0.5 s after it; an order a cancel overtakes
    is never live). Every Binance jump received at c cancels both (effective c + 0.2 s), and no order
-   is placed before 1 s after the last such jump. Fill: a print on that token with taker side SELL
-   STRICTLY below our price, or a usable snapshot with the token's best ask STRICTLY below it,
-   showing >= 5 shares (as the resting sells above), at our price without fee. An order the book
-   already crosses when it goes live (ask <= our price) is a taker buy at that ask (fee) when the ask
-   is fresh, in 0.02 .. 0.98 with >= 5 shares, and no fill at all otherwise. At most one fill per token
-   per window (that side then stops quoting). Held to settlement. Quotes come from the book only, so
-   a fill on one side does not move the other side's quote. A trade's t is its order's decision time.
+   is placed before 1 s after the last such jump. Stale feed: the recorder's Binance feed is silent
+   in about a quarter of the seconds (gaps of 6-18 s), and a move inside a gap is never a jump here,
+   so a quoter that only reacted to jumps would keep quoting through moves a full feed shows. As a
+   quoter watching its own feed would, both orders are cancelled when no Binance print has been
+   received for 1 s (decided at the last receipt + 1 s, effective 0.2 s later), and no order is
+   placed until 1 s after the feed resumes (MM_PAUSE_S). On 06-02 without this, 130 of 505 maker
+   fills came while the feed was > 2 s stale, at -8.4c a share (-$55 of the maker's -$79 a day).
+   Fill (REGIME.md: "成交按'有成交价穿过我们的价位'才算"): a print on that token with taker side SELL
+   STRICTLY below our price with >= 5 shares, at our price without fee. An order the book already
+   crosses when it goes live (ask <= our price) is a taker buy at that ask (fee) when the ask is
+   fresh, in 0.02 .. 0.98 with >= 5 shares, and no fill at all otherwise (a limit order that crosses
+   on arrival trades at once; this is not a resting fill). At most one fill per token per window
+   (that side then stops quoting). Held to settlement. Quotes come from the book only, so a fill on
+   one side does not move the other side's quote. A trade's t is its order's decision time.
+   Sensitivity (not a strategy, not used by regime_learn's switch): trades_makerbook,
+   shares_makerbook, pnl_makerbook = the same maker when a usable snapshot whose best ask is
+   STRICTLY below our bid (>= 5 shares) also counts as a fill. In a limit order book such an ask
+   cannot rest beside our bid without trading with it, so this is the more conservative reading (it
+   adds adverse fills: on 06-02 most maker fills came from it); REGIME.md's wording counts prints
+   only, so that is the strategy's label and this is reported beside it.
 7. None: P&L 0 (pnl_none).
 
 Per strategy s the columns (all $ after every fee; at 5 shares a trade and at the "20-share" size =
@@ -124,7 +138,9 @@ Where REGIME.md and the task are silent, the conservative choice made here:
   share with a Binance print received. A strategy is NaN (not evaluable, no usable data) when
   book_cov < 0.5, and for H, follow, revert, late and maker also when bin_cov < 0.25 (the recorder's
   Binance feed skips seconds every day: 73-74% of the seconds on whole days, 50-97% per window on
-  06-02; a gap only removes trades), and for direction when its P(up) is missing. A market with no
+  06-02). For the takers a gap only removes trades (no print, no trigger); for the maker it would
+  remove cancels, hence its stale-feed rule above, which removes its quotes instead.
+  For direction also when its P(up) is missing. A market with no
   snapshot in its window in the archive (plus the carry) is skipped there.
 - Mid (revert's signal, maker's quotes): a token's own (bid + ask) / 2, only where that token's
   spread is <= 5c. On 06-02, 22% of in-window Up snapshots had a wider spread (one level pulled for
@@ -168,7 +184,7 @@ import jump2s_hf as hf
 
 HERE = Path(__file__).resolve().parent
 INPUTS = HERE / "real" / "regime-inputs"
-OUT = HERE / "real" / "regime-windows.csv.gz"
+OUT = HERE / "real" / "cross-regime-windows.csv.gz"  # the CI lane commits real/cross-* only
 MIX_INPUTS = HERE / "real" / "mix-inputs"
 
 # --------------------------------------------------------------------------- REGIME.md constants
@@ -205,6 +221,7 @@ LATE_MARGIN = 0.01
 MM_OFFSET = 0.02
 MID_MAX_SPREAD = 0.05       # a mid across a wider hole in the book is not a price (revert signal, maker quotes)
 MM_PAUSE_S = 1.0
+FEED_STALE_S = 1.0          # maker: quotes pulled when no Binance print was received for this long
 COV_BOOK = 0.5              # share of the window's seconds with a live top-of-book change
 COV_BIN = 0.25              # ... with a Binance print received (the recorder's feed: ~73% on whole days)
 CARRY_BIN_S = 1800
@@ -221,7 +238,9 @@ ENV = ["rv5m", "rv30m", "rv1h", "vr60", "dvol", "dvol_rv", "ret4h", "vol_rel", "
        "pm_spread", "ask_size", "pm_up", "book_ups", "book_ups_pre", "fac_up"]
 META = ["day", "market", "start", "won", "w", "book_cov", "bin_cov", "n_chg"]
 STRAT_COLS = [f"{q}_{s}" for s in STRATS for q in QTY]
-ROW_COLS = META + ENV + STRAT_COLS + ["pnl_none"]
+SENS = "makerbook"          # the maker when an ask strictly below our bid in a snapshot also fills (sensitivity)
+SENS_COLS = [f"{q}_{SENS}" for q in ("trades", "shares", "pnl")]
+ROW_COLS = META + ENV + STRAT_COLS + ["pnl_none"] + SENS_COLS
 TRADE_COLS = ["market", "strat", "t", "te", "side", "price", "fee_in", "how", "t_exit", "exit_px", "fee_out", "sh20",
               "pps", "hold"]
 HOW = {0: "settle", 1: "taker exit", 2: "maker exit", 3: "crossed on arrival"}
@@ -534,20 +553,20 @@ class Market:
     def won(self, s):
         return np.where(np.asarray(s) > 0, self.won_up, 1.0 - self.won_up)
 
-    def events(self, s, kind):
+    def events(self, s, kind, book=True):
         """Hit events of a resting order on side s's token, time-sorted: kind 'sell' -> (bids of usable
         snapshots, taker-BUY prints) as is; kind 'buy' -> (asks, taker-SELL prints) negated, so that
-        'strictly through' is always value > limit."""
-        key = (s, kind)
+        'strictly through' is always value > limit. book=False: the prints only."""
+        key = (s, kind, book)
         if key not in self._ev:
             a, b = self.bk.seg[self.m]
-            g = np.arange(a, b)
+            g = np.arange(a, b) if book else np.zeros(0, np.int64)
             bid, ask, bsz, asz, ok = self.bk.quote(g, np.full(len(g), s))
             if kind == "sell":
                 v, z = np.where(ok & np.isfinite(bid), bid, -np.inf), bsz
             else:
                 v, z = np.where(ok & np.isfinite(ask), -ask, -np.inf), asz
-            t = self.bk.T[a:b]
+            t = self.bk.T[g]
             p = self.pr_by.get((self.m, s, "buy" if kind == "sell" else "sell"))
             if p is not None and len(p[0]):
                 t = np.concatenate([t, p[0]])
@@ -759,6 +778,22 @@ def strat_late(mk):
     return mk.settle_or_sell("late", np.array([t]), te, np.array([s]), pe, se, np.array([np.nan]))
 
 
+def feed_gaps(sp, lo, hi):
+    """(cancel decided, quoting allowed again) for every silence of the recorder's Binance feed longer
+    than FEED_STALE_S that matters in [lo, hi]: decided FEED_STALE_S after the last print received,
+    quoting again MM_PAUSE_S after the next one (none yet: never)."""
+    rv = sp.rv_o
+    k = int(np.searchsorted(rv, lo - MM_PAUSE_S + T_EPS, "right"))   # receipts <= lo - pause: rv[:k]
+    j = int(np.searchsorted(rv, hi + T_EPS, "right"))                 # receipts <= hi: rv[:j]
+    pts = np.concatenate([[-np.inf] if k == 0 else [], rv[max(k - 1, 0):j + 1], [np.inf] if j >= len(rv) else []])
+    prev, nxt = pts[:-1], pts[1:]
+    with np.errstate(invalid="ignore"):
+        gap = nxt - prev > FEED_STALE_S + T_EPS
+    c, until = prev[gap] + FEED_STALE_S, nxt[gap] + MM_PAUSE_S
+    keep = (c <= hi + T_EPS) & (until >= lo - T_EPS)
+    return c[keep], until[keep]
+
+
 def maker_orders(mk, s):
     """The resting buy orders of side s: list of (price, live from, cancel effective)."""
     bk, sp = mk.bk, mk.spot
@@ -771,9 +806,12 @@ def maker_orders(mk, s):
     with np.errstate(invalid="ignore"):
         L = np.floor((mid - MM_OFFSET) * 100 + 1e-6) / 100
         ok = np.isfinite(L) & (L >= 0.02 - 1e-9) & (L <= 0.98 + 1e-9) & bk.fresh(g, bk.T[g])
-    trig, _ = sp.jumps(qa - MM_PAUSE_S, qb)
+    jt, _ = sp.jumps(qa - MM_PAUSE_S, qb)
+    gc, gu = feed_gaps(sp, qa, qb)
+    ev_c, ev_u = np.concatenate([jt, gc]), np.concatenate([jt + MM_PAUSE_S, gu])
+    o = np.argsort(ev_c, kind="stable")
+    trig, until = ev_c[o].tolist(), ev_u[o].tolist()  # cancel decisions (jumps, stale feed), quoting again from
     Tg, Lg, okg = bk.T[g].tolist(), np.round(L, 2).tolist(), ok.tolist()
-    trig = trig.tolist()
     orders, cur, pause_until, j = [], None, -np.inf, 0
     for r in range(len(Tg)):
         tr = Tg[r]
@@ -782,7 +820,7 @@ def maker_orders(mk, s):
             if cur is not None:
                 orders.append((cur[0], cur[1], max(c + CANCEL_S, cur[1])))
                 cur = None
-            pause_until = max(pause_until, c + MM_PAUSE_S)
+            pause_until = max(pause_until, until[j])
             j += 1
         if tr < pause_until - T_EPS or not okg[r]:
             continue
@@ -796,13 +834,15 @@ def maker_orders(mk, s):
     return orders
 
 
-def strat_maker(mk):
+def strat_maker(mk, book=False):
+    """REGIME.md's maker (prints through our bid fill it); book=True: the SENS variant (an ask strictly
+    below our bid in a usable snapshot also fills it), its trades labelled SENS."""
     out = []
     for s in (1, -1):
         orders = maker_orders(mk, s)
         if not orders:
             continue
-        ev_t, ev_v, ev_s = mk.events(s, "buy")
+        ev_t, ev_v, ev_s = mk.events(s, "buy", book=book)
         for L, live, cxl in orders:
             if cxl <= live + T_EPS:
                 continue
@@ -821,7 +861,7 @@ def strat_maker(mk):
                     continue
                 p, f_in, t_f, size = L, 0.0, float(ft[0]), float(fs[0])
             won = float(mk.won(s))
-            out.append(mk.trades("maker", np.array([live - LAT_S]), np.array([t_f]), np.array([s]), np.array([p]),
+            out.append(mk.trades(SENS if book else "maker", np.array([live - LAT_S]), np.array([t_f]), np.array([s]), np.array([p]),
                                  np.array([size]), np.array([f_in]), [0], np.array([mk.end]), np.array([won]),
                                  np.array([0.0])))
             break  # one fill per token per window
@@ -836,7 +876,7 @@ def aggregate(tr, markets):
         for s in STRATS:
             out[f"pps_{s}"] = np.nan
         return out
-    t = tr.copy()
+    t = tr[tr["strat"].isin(STRATS)].copy()
     unit = t["price"] + t["fee_in"]
     t["cost"] = UNIT * unit
     t["cost20"] = t["sh20"] * unit
@@ -946,7 +986,7 @@ def day_trades(feat, mkts, binance, prints, inputs=None, closes=None, day="", st
     feat / mkts / binance / prints as from cross.read_day + cross.market_table, cross.read_binance and
     cross.read_poly_trades; inputs: load_inputs(); closes: Binance minute closes (trend features)."""
     info = dict(day=day, markets=0, no_book=0, prints=0 if binance is None else len(binance),
-                **{f"n_{s}": 0 for s in STRATS}, **{f"na_{s}": 0 for s in STRATS})
+                **{f"n_{s}": 0 for s in STRATS + (SENS,)}, **{f"na_{s}": 0 for s in STRATS})
     if mkts is None or mkts.empty:
         return _empty_rows(), pd.DataFrame(columns=TRADE_COLS), info
     all5 = mkts[mkts["horizon"] == 5].copy()
@@ -1001,6 +1041,10 @@ def day_trades(feat, mkts, binance, prints, inputs=None, closes=None, day="", st
             t = strat_direction(mk, fac[r]) if s == "direction" else f(mk)
             if t is not None and len(t):
                 parts.append(t)
+            if s == "maker":
+                t = strat_maker(mk, book=True)
+                if t is not None and len(t):
+                    parts.append(t)
     tr = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=TRADE_COLS)
     agg = aggregate(tr, win["market"].to_numpy())
     cov = np.asarray(cov, float)
@@ -1008,15 +1052,21 @@ def day_trades(feat, mkts, binance, prints, inputs=None, closes=None, day="", st
                          "won": win["won"].to_numpy(float), "w": cov[:, 3], "book_cov": cov[:, 0], "bin_cov": cov[:, 1],
                          "n_chg": cov[:, 2]})
     rows = pd.concat([rows, env.reset_index(drop=True), agg.reset_index(drop=True)], axis=1)
+    sens = tr[tr["strat"] == SENS] if len(tr) else tr
+    g = sens.groupby("market")["pps"].agg(["size", "sum"]) if len(sens) else pd.DataFrame(columns=["size", "sum"])
+    n_s = g["size"].reindex(rows["market"]).fillna(0).to_numpy(float)
+    rows[f"trades_{SENS}"], rows[f"shares_{SENS}"] = n_s, UNIT * n_s
+    rows[f"pnl_{SENS}"] = UNIT * g["sum"].reindex(rows["market"]).fillna(0).to_numpy(float)
     for s in STRATS:
         bad = (rows["book_cov"] < COV_BOOK) | ((rows["bin_cov"] < COV_BIN) if s in NEEDS_BINANCE else False)
         if s == "direction":
             bad |= ~np.isfinite(rows["fac_up"])
         if s not in strats:
             bad |= True
-        rows.loc[bad, [f"{q}_{s}" for q in QTY]] = np.nan
+        rows.loc[bad, [f"{q}_{s}" for q in QTY] + (SENS_COLS if s == "maker" else [])] = np.nan
         info[f"na_{s}"] = int(bad.sum())
         info[f"n_{s}"] = int(np.nansum(rows[f"trades_{s}"]))
+    info[f"n_{SENS}"] = int(np.nansum(rows[f"trades_{SENS}"]))
     rows["pnl_none"] = 0.0
     return rows[ROW_COLS], tr, info
 
@@ -1047,7 +1097,7 @@ def write_table(rows, out):
     for c, nd in ROUND.items():
         if c in r:
             r[c] = r[c].astype(float).round(nd)
-    for c in STRAT_COLS:
+    for c in STRAT_COLS + SENS_COLS:
         q = c.split("_")[0]
         r[c] = r[c].astype(float).round(2 if q in ("sh20", "trades", "shares") else 5)
     drops = ([], [c for c in r if c.split("_")[0] in ("sh20", "cost20", "pnl20", "caph20")],
@@ -1106,7 +1156,7 @@ def run(workdir, out=OUT, days=None, dataset=None, names=None, inputs=INPUTS, bu
             files.append(f)
             infos.append(info)
             log(f"{name}: {info['markets']} markets ({info['provisional']} provisional-only left out, {info['no_book']} "
-                f"without a book here), trades " + ", ".join(f"{s} {info[f'n_{s}']:,}" for s in STRATS) +
+                f"without a book here), trades " + ", ".join(f"{s} {info[f'n_{s}']:,}" for s in STRATS + (SENS,)) +
                 "; not evaluable " + ", ".join(f"{s} {info[f'na_{s}']}" for s in STRATS) +
                 f" ({time.time() - t_start:.0f} s)")
         except Exception:
@@ -1183,7 +1233,7 @@ def summary(rows):
         return "no rows"
     nd = max(pd.Series(np.floor(rows["start"].to_numpy(float) / DAY)).nunique(), 1)
     L = [f"{len(rows):,} windows over {nd} days"]
-    for s in STRATS:
+    for s in STRATS + ((SENS,) if f"pnl_{SENS}" in rows else ()):
         ev = rows[f"pnl_{s}"].notna()
         tr, pnl, sh = (np.nansum(rows[f"{q}_{s}"]) for q in ("trades", "pnl", "shares"))
         L.append(f"  {s:9s}: evaluable {ev.mean():.0%}, {tr / nd:7.1f} trades/day, ${pnl / nd:+8.2f}/day at 5 shares, "
