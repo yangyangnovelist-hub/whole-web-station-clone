@@ -454,7 +454,9 @@ def segment_rows(seg, cp, http=None, out=CACHE, log=print):
     del cached
     gc.collect()
     rows = side_rows(cp, wt, mk)
-    meta = {"markets": int(mk["excluded"].eq("").sum()), "cp_rows": len(cp), "covered": int(cov.sum()),
+    ok = mk["excluded"].eq("")
+    meta = {"markets": int((ok & (mk["kind"] != CONTROL)).sum()), "control": int((ok & (mk["kind"] == CONTROL)).sum()),
+            "cp_rows": len(cp), "covered": int(cov.sum()),
             "need": len(need), "fetched": len(got), "missing": int(missing),
             "trunc": int(einf["truncated"].astype(bool).sum()) if len(einf) else 0,
             "trunc_cached": int(info["truncated"].astype(bool).sum()),
@@ -547,18 +549,19 @@ def report(ctx, out_md):
                 L.append(f"  - {cell_name(r.qb, r.tb, r.type)}：按吃单扣费后 V 每份 {_c(r.pnl_taker)}¢ ≤ 0。")
     g = ctx["gap"]
     L.append(f"- **差规则**（q − p ≥ m，不分格）：D 选 m = {100 * g['m']:.0f}¢（D 上 t 最大）；D：每份 {_c(g['d']['pnl'])}¢，"
-             f"t {_t(g['d']['t'], g['d']['markets'])}，单侧 p {_p(g['d']['p1'])}，{g['d']['markets']} 个市场 → "
+             f"t {_t(g['d']['t'], g['d']['markets'])}，单侧 p {_p(g['d']['p1'])}，{int(g['d']['markets'])} 个市场 → "
              + ("过 D 关" if g["d_ok"] else "**D 关不过**（需每份 > 0、p < 0.05/3、≥ 30 个市场）")
              + f"；V 检验一次：每份 {_c(g['v']['pnl'])}¢，t {_t(g['v']['t'], g['v']['markets'])}，单侧 p {_p(g['v']['p1'])}，"
-             f"{g['v']['markets']} 个市场 → " + ("**通过**" if g["d_ok"] and g["v_ok"] else "**不通过**")
+             f"{int(g['v']['markets'])} 个市场 → " + ("**通过**" if g["d_ok"] and g["v_ok"] else "**不通过**")
              + (f"；去掉 0.95–0.99 档后 V 每份 {_c(g['v_x']['pnl'])}¢、单侧 p {_p(g['v_x']['p1'])} → "
                 + ("仍通过" if g["v_x_ok"] else "不再通过") if g["d_ok"] and g["v_ok"] else "") + "。")
     L.append("- **0.95–0.99 档**：NEARCERT.md 已在 V 上检验过，这里只列出、标“已用过”，不算新发现。")
     if len(passed) or (g["d_ok"] and g["v_ok"]):
         L.append("- 通过的格子 / 规则 → 按 CALIB.md 做前向（阶梯录制，挂单在 q − 安全边际，成交价穿过才算）；是否小额实盘由用户决定。")
     L.append("")
-    L.append(f"数据：D = 2026-03-14–09-30（{D['days']} 个 ET 日，resolved.py 的 {D['markets']:,} 个市场），"
-             f"V = 2025-09-15–2026-03-13（{V['days']} 天，nearcert.py 的 {V['markets']:,} 个市场）。"
+    L.append(f"数据：D = 2026-03-14–09-30（{D['days']} 个 ET 日，resolved.py 的 {D['markets']:,} 个币安结算市场 + "
+             f"{D['control']:,} 个 4 小时对照），V = 2025-09-15–2026-03-13（{V['days']} 天，nearcert.py 的 {V['markets']:,} + "
+             f"{V['control']:,} 个）。"
              f"检查点 240/120/60/30/10/5/1 分钟（D {D['cp_rows']:,}、V {V['cp_rows']:,} 个），每个两边各一行；"
              f"之后 60 秒内该边成交（任何主动方）按份数加权得 p。60–1 分钟的模型和两段缓存逐行一致"
              f"（最大 |Δq| D {ctx['chk']['D']['max_dq']:.1e}、V {ctx['chk']['V']['max_dq']:.1e}）。"
@@ -575,8 +578,8 @@ def report(ctx, out_md):
     # ---------------------------------------------------------------- candidates
     L.append("## 候选格（D 选出，V 只算这些）\n")
     if not len(cand):
-        L.append("D 上没有格子进入候选。D 上 t 最大的 5 格（都未过 Bonferroni / 市场数）：\n")
-        top = tab[tab["markets"] > 0].sort_values("t", ascending=False).head(5)
+        L.append(f"D 上没有格子进入候选。D 上 ≥ {MIN_MK} 个市场、t 最大的 5 格（都未过 Bonferroni）：\n")
+        top = tab[tab["markets"] >= MIN_MK].sort_values("t", ascending=False).head(5)
         body = [[cell_name(r["qb"], r["tb"], r["type"])] + stat_cells("D", r) for _, r in top.iterrows()]
         L.append(md(["格子"] + STAT_HEADS, body))
     else:
@@ -589,9 +592,9 @@ def report(ctx, out_md):
             verdict = "已用过" if v["used"] else ("**通过**" if v["pass"] else "不通过")
             body.append([""] + stat_cells("V", v) + [verdict])
         L.append(md(["格子"] + STAT_HEADS + ["结果"], body))
-        rest = tab[(tab["markets"] > 0) & ~tab.set_index(["qb", "tb", "type"]).index.isin(
+        rest = tab[(tab["markets"] >= MIN_MK) & ~tab.set_index(["qb", "tb", "type"]).index.isin(
             list(zip(cand["qb"], cand["tb"], cand["type"])))].sort_values("t", ascending=False).head(3)
-        L.append("\nD 上未入选、t 最大的 3 格：" + "；".join(
+        L.append(f"\nD 上未入选（≥ {MIN_MK} 个市场）、t 最大的 3 格：" + "；".join(
             f"{cell_name(r.qb, r.tb, r.type)} 每份 {_c(r.pnl)}¢、t {_t(r.t, r.markets)}、单侧 p {_p(r.p1)}、{int(r.markets)} 个市场"
             for r in rest.itertuples(index=False)) + "。")
     L.append("")

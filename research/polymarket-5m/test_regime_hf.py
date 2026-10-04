@@ -246,9 +246,9 @@ def test_pre_open_snapshots_are_live_only_in_the_first_30_seconds():
     rel = bk.T[a:b] - S
     live = bk.live[a:b]
     assert not live[rel < 0].any() and live[(rel >= 0) & (rel < 29.95)].all() and not live[rel >= 30].any()
-    _, tr, _ = day(f=f, inputs=fac(0.55), strats=("direction",))
-    d = trades_of(tr, "direction").iloc[0]
-    assert d["how"] == 0  # entered at +0.5 s, but no live bid at 29.5 s left: held
+    # a book that says pre_open all window long (as the damaged 08-19 archive) is live 30 s of 300: not evaluable
+    rows, tr, _ = day(f=f, inputs=fac(0.55), strats=("direction",))
+    assert rows["book_cov"].iloc[0] == pytest.approx(0.1) and np.isnan(rows["pnl_direction"].iloc[0]) and tr.empty
 
 
 # ------------------------------------------------------------------ late
@@ -303,7 +303,9 @@ def test_maker_fills_only_when_a_print_goes_strictly_through_our_bid():
 
 def test_maker_snapshot_through_and_quotes_follow_each_tokens_mid():
     def over(rel, c):
-        c["down_best_ask"] = np.where((rel >= 80) & (rel < 80.3), 0.46, np.round(1 - c["up_best_bid"], 6))
+        dip = (rel >= 80) & (rel < 80.3)  # the Down book drops 4c for 0.3 s: its ask goes through our 0.48
+        c["down_best_ask"] = np.where(dip, 0.46, np.round(1 - c["up_best_bid"], 6))
+        c["down_best_bid"] = np.where(dip, 0.45, np.round(1 - c["up_best_ask"], 6))
     rows, tr, _ = day(f=book(over), strats=("maker",))
     m = trades_of(tr, "maker")
     assert len(m) == 1 and m["side"].iloc[0] == -1 and m["te"].iloc[0] - S == pytest.approx(80.0)
@@ -315,20 +317,26 @@ def test_maker_snapshot_through_and_quotes_follow_each_tokens_mid():
     orders = R.maker_orders(market_ctx(book(move), binance()), 1)
     assert [(o[0], round(o[1] - S, 3), round(o[2] - S, 3)) for o in orders] == [(0.48, 15.5, 100.2), (0.53, 100.5, 280.2)]
     _, tr2, _ = day(f=book(move), pr=[(130.0, "up", 0.52, "sell")], strats=("maker",))
-    m2 = trades_of(tr2, "maker")
-    assert len(m2) == 1 and m2["price"].iloc[0] == pytest.approx(0.53) and m2["te"].iloc[0] - S == pytest.approx(130.0)
+    m2 = trades_of(tr2, "maker").set_index("side")
+    # the same 5c move took the Down book's ask (0.46) through our Down bid 0.48 in one snapshot: filled, adverse
+    assert m2.loc[-1, "price"] == pytest.approx(0.48) and m2.loc[-1, "te"] - S == pytest.approx(100.0)
+    assert m2.loc[-1, "pps"] == pytest.approx(-0.48)
+    assert m2.loc[1, "price"] == pytest.approx(0.53) and m2.loc[1, "te"] - S == pytest.approx(130.0)
+    assert m2.loc[1, "pps"] == pytest.approx(1 - 0.53)
 
 
 def test_maker_cancels_on_a_binance_jump_with_latency_and_pauses_a_second():
-    b = binance(steps=((100.0, 3.0),))  # received at +100.1: cancel effective +100.3, no quote before +101.1
+    # the +3 bp step's jump prints are received at +100.1 .. +100.85: the first cancels (effective +100.3), the
+    # last holds quoting until +101.85; the next order is decided at the +101.9 snapshot and live at +102.4
+    b = binance(steps=((100.0, 3.0),))
     orders = R.maker_orders(market_ctx(book(), b), -1)
-    assert [(o[0], round(o[1] - S, 3), round(o[2] - S, 3)) for o in orders] == [(0.48, 15.5, 100.3), (0.48, 101.6, 280.2)]
+    assert [(o[0], round(o[1] - S, 3), round(o[2] - S, 3)) for o in orders] == [(0.48, 15.5, 100.3), (0.48, 102.4, 280.2)]
     early = trades_of(day(b=b, pr=[(100.2, "dn", 0.47, "sell")], strats=("maker",))[1], "maker")
     assert len(early) == 1 and early["te"].iloc[0] - S == pytest.approx(100.2)  # still live during the cancel
-    late = day(b=b, pr=[(100.4, "dn", 0.47, "sell"), (101.5, "dn", 0.47, "sell")], strats=("maker",))[1]
+    late = day(b=b, pr=[(100.4, "dn", 0.47, "sell"), (102.3, "dn", 0.47, "sell")], strats=("maker",))[1]
     assert trades_of(late, "maker").empty
-    again = trades_of(day(b=b, pr=[(101.7, "dn", 0.47, "sell")], strats=("maker",))[1], "maker")
-    assert len(again) == 1 and again["te"].iloc[0] - S == pytest.approx(101.7)
+    again = trades_of(day(b=b, pr=[(102.5, "dn", 0.47, "sell")], strats=("maker",))[1], "maker")
+    assert len(again) == 1 and again["te"].iloc[0] - S == pytest.approx(102.5) and again["t"].iloc[0] - S == pytest.approx(101.9)
 
 
 def test_maker_order_the_book_already_crosses_is_a_taker_buy():
@@ -516,7 +524,7 @@ def test_subcommand_end_to_end_final_outcomes_and_carry(tmp_path, monkeypatch):
     d1, d2 = "2026-06-10", "2026-06-11"
     S3 = int(pd.Timestamp(d2, tz="UTC").timestamp()) - 300
     f1 = pd.concat([book(market="m1"), book(market="m2"), book(market="m3", start=S3, t1=299.9)], ignore_index=True)
-    b1 = pd.concat([binance(steps=((100.0, 3.0),)), binance(steps=((200.0, 3.0),), start=S3, t_from=-100, t_to=299.9)])
+    b1 = pd.concat([binance(steps=((100.0, 3.0),)), binance(steps=((200.0, 3.0),), start=S3, t_from=-700, t_to=299.9)])
     p1 = pd.concat([prints([(60.0, "up", 0.47, "sell")]), prints([(60.0, "up", 0.47, "sell")], market="m3", start=S3)])
     mk1 = pd.DataFrame([mrow("m1", S, 1.0), mrow("m2", S), mrow("m3", S3)])
     rs1 = pd.DataFrame([rrow("m1", "DOWN", "ok"), rrow("m2", "UP", "chainlink_resolution_price_missing", 1)])

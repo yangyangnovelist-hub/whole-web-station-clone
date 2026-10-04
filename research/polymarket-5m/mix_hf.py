@@ -541,6 +541,8 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
         R["dvol_rv"] = dv[idx] - rv30[idx]
     move = (lp_now - lp_ago)[idx]
     scale = (fac * sigma)[idx]
+    with np.errstate(invalid="ignore"):
+        scale = np.where(scale > 0, scale, np.nan)  # no vol estimate -> no H fair
 
     # ---- book features, entry and exits, per market
     bk = Books(feat, win["market"])
