@@ -96,7 +96,7 @@
       ],
       "priority": 3,
       "passes": true,
-      "notes": "Completed on closed UTC hour 20261004T14. Eight hashed sources produced 65,941 decision rows, 45,465 eligible rows, 170 causal features and 60 positive labels; train/validation/test contain 22/12/26 positives. Internal manifest SHA-256 is f42592f13d3168d81129b15494a7d30903983e31934290c314bf5e6a8f0b7b1b and all 19 source/artifact hashes were reverified. Corrupt hour 13 was rejected. Binance target continuity uses multiplexed transport plus trade-ID continuity; non-target venue connection epochs remain conservatively inferred from raw-frame silence because recorder v2 lacks explicit epoch markers."
+      "notes": "Completed and extended in place for US-007 over closed UTC hours 20261004T14..15. Nine routes, including live Deribit BTC-PERPETUAL quotes but excluding its 100 ms batched trades, produced 137,941 decision rows, 96,927 eligible rows, 217 causal features and 130 positive labels; train/validation/untouched-test contain 60/60/10 positives. Internal manifest SHA-256 is e632df8316971c907bd27441489c2f72e4bee1b9ead5a599675fe575f6304d30 and all 29 source/artifact hashes were reverified. Corrupt hour 13 was rejected. Binance target continuity uses multiplexed transport plus trade-ID continuity; non-target venue connection epochs remain conservatively inferred from raw-frame silence because recorder v2 lacks explicit epoch markers."
     },
     {
       "id": "US-007",
@@ -111,8 +111,8 @@
         "Typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": "Do not use the consumed 2026-10-03..04 final test segment to select rules."
+      "passes": true,
+      "notes": "Family rejected on the unseen 20261004T15:00..15:45 validation interval; the final 15-minute test split was not read. Seven frozen rules produced: barrier spot sweep 0/27, perpetual lead 1/28 (3.57%, -2.14c/share assumed EV), Deribit lead 1/29 (3.45%, -2.16c/share), cross-venue velocity 1/11 (9.09%, -1.59c/share), depth/flow 0/15, all-medium 0/1 and strict consensus 0 alerts. No rule met the 30-alert, 30%-precision, family-adjusted Wilson-lower-above-25% gate. Deribit disappearing under source ablation confirms it drives its named alerts, but 1/29 shows that its 10-18 ms local receipt lead is a latency proxy for an already-occurring Binance move, not a 120-220 ms-ahead predictor."
     },
     {
       "id": "US-008",

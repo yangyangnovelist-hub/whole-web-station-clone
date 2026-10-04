@@ -145,6 +145,8 @@ def test_detector_state_and_microstructure_features_are_mechanistic():
     assert row["detector_min_age_ms"] == pytest.approx(100.0)
     assert row["bn_spot_trade_count_200ms"] == 2
     assert row["bn_spot_bid_depletion_200ms"] == pytest.approx(0.5)
+    assert row["bn_spot_return_50ms_bp"] == pytest.approx(math.log(100.005 / 100.0) * 10_000)
+    assert row["bn_perp_return_50ms_bp"] == pytest.approx(math.log(100.015 / 100.0) * 10_000)
     assert row["bn_perp_residual_bp"] == pytest.approx(1.0, abs=0.01)
 
 
@@ -293,6 +295,40 @@ def test_raw_parser_preserves_top20_depth_and_exchange_clocks():
     assert (depth.bid, depth.ask, depth.bid_depth, depth.ask_depth) == (100.0, 101.0, 4.0, 3.0)
     assert future.exchange_ns == 1_790_000_000_123_000_000
     assert (future.channel, future.trade_sign) == ("bn_perp", 1)
+
+
+def test_deribit_quote_is_a_live_bbo_but_batched_trades_are_not_timing_features():
+    recv = 1_790_000_000_500_000_000
+    quote = jc.parse_frame("deribit", recv, {
+        "jsonrpc": "2.0",
+        "method": "subscription",
+        "params": {
+            "channel": "quote.BTC-PERPETUAL",
+            "data": {
+                "timestamp": 1_790_000_000_123,
+                "instrument_name": "BTC-PERPETUAL",
+                "best_ask_price": 100.5,
+                "best_bid_price": 100.0,
+                "best_ask_amount": 12.0,
+                "best_bid_amount": 8.0,
+            },
+        },
+    })
+    batched_trades = jc.parse_frame("deribit", recv, {
+        "jsonrpc": "2.0",
+        "method": "subscription",
+        "params": {
+            "channel": "trades.BTC-PERPETUAL.100ms",
+            "data": [{"timestamp": 1_790_000_000_100, "price": 100.25, "amount": 1.0}],
+        },
+    })
+
+    assert len(quote) == 1
+    assert quote[0].channel == "deribit"
+    assert quote[0].book_kind == "bbo"
+    assert quote[0].exchange_ns == 1_790_000_000_123_000_000
+    assert (quote[0].bid, quote[0].ask) == (100.0, 100.5)
+    assert batched_trades == []
 
 
 def test_gaps_are_unavailable_not_negative_and_require_recovery_warmup():
@@ -451,6 +487,20 @@ def test_manifest_fails_closed_on_malformed_or_truncated_raw_file(tmp_path):
         handle.write(b"1790000000000000000\tpong\n")
     manifest = jc.build_split_manifest([heartbeat], train_end_ns=1, validation_end_ns=2)
     assert manifest["sources"][0]["ignored_control_or_unmodelled_frames"] == 1
+
+
+def test_closed_hour_selection_requires_every_source_in_every_hour(tmp_path):
+    hours = ("20261004T14", "20261004T15")
+    for hour in hours:
+        for source in jc.RAW_SOURCES:
+            (tmp_path / f"{source}.{hour}.txt.gz").touch()
+
+    selected = jc.select_closed_hour_files(tmp_path, hours)
+
+    assert len(selected) == len(hours) * len(jc.RAW_SOURCES)
+    (tmp_path / f"deribit.{hours[1]}.txt.gz").unlink()
+    with pytest.raises(ValueError, match=r"20261004T15.*deribit"):
+        jc.select_closed_hour_files(tmp_path, hours)
 
 
 def test_freeze_rejects_any_overlap_with_consumed_baseline(tmp_path):

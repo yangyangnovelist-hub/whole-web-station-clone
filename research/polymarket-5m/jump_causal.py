@@ -36,6 +36,7 @@ RAW_SOURCES = (
     "bybit_spot",
     "bybit_lin",
     "coinbase",
+    "deribit",
 )
 CHANNELS = (
     "bn_spot",
@@ -45,11 +46,13 @@ CHANNELS = (
     "bybit_spot",
     "bybit_perp",
     "coinbase",
+    "deribit",
 )
 LEADER_GROUPS = {
     "okx": ("okx",),
     "bybit": ("bybit_spot", "bybit_lin"),
     "coinbase": ("coinbase",),
+    "deribit": ("deribit",),
 }
 FEATURE_WINDOWS_MS = (50, 200, 1_000)
 
@@ -71,7 +74,10 @@ PROTOCOL = {
     "raw_schema": "source.YYYYMMDDTHH.txt.gz: <receive_unix_ns>\\t<raw_websocket_frame>\\n",
     "source_allowlist": list(RAW_SOURCES),
     "target_subscription": "Binance spot BTCUSDT @trade with timeUnit=MICROSECOND",
-    "book_subscription": "Binance spot/perpetual BTCUSDT depth20@100ms snapshots",
+    "book_subscription": (
+        "Binance spot/perpetual BTCUSDT depth20@100ms snapshots plus "
+        "Deribit quote.BTC-PERPETUAL; Deribit 100ms batched trades are excluded"
+    ),
     "decision_clock": "local_receive_unix_ns",
     "target_clock": "binance_spot_trade_exchange_unix_ns",
     "decision_step_ms": 50,
@@ -277,15 +283,18 @@ class _ChannelState:
         self.last_depth_recv_ns: int | None = None
         self.trades: collections.deque[tuple[int, float]] = collections.deque()
         self.books: collections.deque[tuple[int, float, float]] = collections.deque()
+        self.prices: collections.deque[tuple[int, float]] = collections.deque()
 
     def apply(self, event: MarketEvent) -> None:
         self.last_recv_ns = event.recv_ns
         if event.kind == "trade" and event.price > 0:
             self.log_price = math.log(event.price)
+            self.prices.append((event.recv_ns, self.log_price))
             notional = event.price * max(0.0, event.quantity) * event.trade_sign
             self.trades.append((event.recv_ns, notional))
         elif event.kind == "book" and event.bid > 0 and event.ask >= event.bid:
             self.log_price = math.log((event.bid + event.ask) / 2.0)
+            self.prices.append((event.recv_ns, self.log_price))
             self.bid = event.bid
             self.ask = event.ask
             if event.book_kind == "depth_snapshot":
@@ -300,6 +309,8 @@ class _ChannelState:
             self.trades.popleft()
         while self.books and self.books[0][0] < left:
             self.books.popleft()
+        while len(self.prices) > 1 and self.prices[1][0] <= left:
+            self.prices.popleft()
 
     def values(self, now_ns: int) -> dict[str, float]:
         self.prune(now_ns)
@@ -311,6 +322,14 @@ class _ChannelState:
             values[f"trade_count_{window_ms}ms"] = float(len(trades))
             values[f"signed_notional_{window_ms}ms"] = float(sum(trades))
             values[f"book_updates_{window_ms}ms"] = float(len(books))
+            anchor = next(
+                (price for stamp, price in reversed(self.prices) if stamp <= left),
+                NAN,
+            )
+            values[f"return_{window_ms}ms_bp"] = (
+                (self.log_price - anchor) * 10_000.0
+                if math.isfinite(self.log_price) and math.isfinite(anchor) else NAN
+            )
             if books and math.isfinite(self.bid_depth) and math.isfinite(self.ask_depth):
                 max_bid = max((bid for bid, _ in books if math.isfinite(bid)), default=NAN)
                 max_ask = max((ask for _, ask in books if math.isfinite(ask)), default=NAN)
@@ -829,6 +848,33 @@ def parse_frame(source: str, recv_ns: int, payload: str | bytes | Mapping[str, o
             )
             if event is not None:
                 out.append(event)
+        return out
+
+    if source == "deribit":
+        params = message.get("params") or {}
+        if not isinstance(params, Mapping):
+            return out
+        topic = str(params.get("channel", ""))
+        data = params.get("data")
+        # Deribit trades are intentionally excluded: the public trade channel is batched every
+        # 100 ms, so its receipt time is not an event-time lead.  The quote feed is pushed live
+        # from London and is the only Deribit stream admitted to the jump predictor.
+        if topic == "quote.BTC-PERPETUAL" and isinstance(data, Mapping):
+            required = (
+                "best_bid_price", "best_ask_price", "best_bid_amount", "best_ask_amount"
+            )
+            if all(data.get(key) is not None for key in required):
+                event = _book_event(
+                    recv_ns,
+                    source,
+                    "deribit",
+                    data.get("timestamp"),
+                    ((data["best_bid_price"], data["best_bid_amount"]),),
+                    ((data["best_ask_price"], data["best_ask_amount"]),),
+                    "bbo",
+                )
+                if event is not None:
+                    out.append(event)
         return out
     return out
 
@@ -1386,10 +1432,32 @@ def _parse_utc(value: str) -> int:
     return _iso_to_ns(value)
 
 
+def select_closed_hour_files(
+    data_dir: str | Path,
+    hours: Sequence[str],
+    *,
+    sources: Sequence[str] = RAW_SOURCES,
+) -> tuple[Path, ...]:
+    """Resolve complete closed hours; a partially recorded hour fails closed."""
+    root = Path(data_dir)
+    selected: list[Path] = []
+    for hour in dict.fromkeys(hours):
+        by_source = {source: root / f"{source}.{hour}.txt.gz" for source in sources}
+        missing = sorted(source for source, path in by_source.items() if not path.is_file())
+        if missing:
+            raise ValueError(f"closed hour {hour} is missing required sources: {missing}")
+        selected.extend(by_source[source] for source in sources)
+    return tuple(selected)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", required=True)
-    parser.add_argument("--hour", help="freeze exactly one closed UTC hour, e.g. 20261004T14")
+    parser.add_argument(
+        "--hour",
+        action="append",
+        help="closed UTC hour; repeat for a contiguous multi-hour freeze, e.g. 20261004T14",
+    )
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--dataset-dir")
     parser.add_argument("--sample-start", help="ISO-8601 UTC; required with --dataset-dir")
@@ -1401,18 +1469,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--recorder-source", help="exact deployed recorder source for provenance hashing")
     args = parser.parse_args(argv)
     root = Path(args.data)
-    files = [
-        path
-        for source in RAW_SOURCES
-        for path in root.glob(f"{source}.{args.hour or '*'}.txt.gz")
-    ]
+    try:
+        files = (
+            list(select_closed_hour_files(root, args.hour))
+            if args.hour
+            else [path for source in RAW_SOURCES for path in root.glob(f"{source}.*.txt.gz")]
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     if not files:
         raise SystemExit("no raw source files")
-    if args.hour:
-        present = {path.name.split(".", 1)[0] for path in files}
-        missing = sorted(set(RAW_SOURCES) - present)
-        if missing:
-            raise SystemExit(f"closed hour is missing required sources: {missing}")
     module_path = Path(__file__).resolve()
     requirements = module_path.with_name("requirements.txt")
     provenance: dict[str, object] = {
@@ -1421,6 +1487,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "builder_name": module_path.name,
         "builder_sha256": _file_digest(module_path),
         "requirements_sha256": _file_digest(requirements) if requirements.exists() else None,
+        "closed_hours": list(dict.fromkeys(args.hour or ())),
     }
     if args.recorder_source:
         recorder = Path(args.recorder_source)
