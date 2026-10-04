@@ -95,8 +95,8 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": "Owner-prioritised on 2026-10-04. The original logistic model used 50 ms snapshots of returns, signed flow, spread, top-level imbalance and age, but omitted the exact detector barrier state, extrema age, update/cancel intensity and cross-venue residual cascade."
+      "passes": true,
+      "notes": "Completed on closed UTC hour 20261004T14. Eight hashed sources produced 65,941 decision rows, 45,465 eligible rows, 170 causal features and 60 positive labels; train/validation/test contain 22/12/26 positives. Internal manifest SHA-256 is f42592f13d3168d81129b15494a7d30903983e31934290c314bf5e6a8f0b7b1b and all 19 source/artifact hashes were reverified. Corrupt hour 13 was rejected. Binance target continuity uses multiplexed transport plus trade-ID continuity; non-target venue connection epochs remain conservatively inferred from raw-frame silence because recorder v2 lacks explicit epoch markers."
     },
     {
       "id": "US-007",

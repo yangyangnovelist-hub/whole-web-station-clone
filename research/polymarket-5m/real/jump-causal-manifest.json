@@ -1,0 +1,402 @@
+{
+  "consumed_baseline": {
+    "assumed_ev_cents_per_share": -2.4613899613899615,
+    "end_utc": "2026-10-04T07:10:56Z",
+    "precision": 0.003861003861003861,
+    "start_utc": "2026-10-03T07:10:55Z",
+    "status": "consumed_do_not_tune",
+    "test_alerts": 259,
+    "test_hits": 1,
+    "wilson_lower": 0.0006818698910721091
+  },
+  "dataset": {
+    "artifacts": [
+      {
+        "name": "features.npy",
+        "sha256": "be5b5704712abee1bacfa511de309dad073f0d683b0b4f5557072f00e8f4e370",
+        "size_bytes": 44840008
+      },
+      {
+        "name": "times.npy",
+        "sha256": "1fa633ad70b446c104124881b0b6f0c22d3e3aa626dbbac2a637b9459a716bd5",
+        "size_bytes": 527656
+      },
+      {
+        "name": "labels.npy",
+        "sha256": "55ef02c0a1a8f505e85bbd3c5848d09629f7b29d0f83e0695dcafa482797b4e8",
+        "size_bytes": 66069
+      },
+      {
+        "name": "matched_jump.npy",
+        "sha256": "91ba31890caac179d413f6000d9e6ea132e8627c87354e11ba465b2c0560787d",
+        "size_bytes": 263892
+      },
+      {
+        "name": "split.npy",
+        "sha256": "c47cd6cf041c681c6cab224ec88afdc153dc00c44cef194fc77ce2f10da1d9ee",
+        "size_bytes": 66069
+      },
+      {
+        "name": "source_available.npy",
+        "sha256": "0498b4dba5bd3cedc0abe3b32d9cd03bc4e7ac1b67c512ece7a03e54562b69a2",
+        "size_bytes": 66069
+      },
+      {
+        "name": "target_watermark.npy",
+        "sha256": "aeaaa4d5abf058aa9f854fbd40f420784142b8b382887a777ca213992d884522",
+        "size_bytes": 66069
+      },
+      {
+        "name": "detector_gap_safe.npy",
+        "sha256": "1555eb6fae2926ac50931a002ab084e2377de0374ff54441b5b67e7d9cb142d0",
+        "size_bytes": 66069
+      },
+      {
+        "name": "eligible.npy",
+        "sha256": "ec60070f89f1429cfc42ee849b10f4038c304fe41a9aaf78f02deefdfa35602a",
+        "size_bytes": 66069
+      },
+      {
+        "name": "feature_names.json",
+        "sha256": "2bbc3fa45a8b047d87efa158f41e2eeafe09ecb1fbc5dc6630fef00c9bc7c375",
+        "size_bytes": 5368
+      },
+      {
+        "name": "target_jumps.json",
+        "sha256": "827a1a46ca4093c175f265043630fe538e891d359a5acb2886ee3d81d1de2d7d",
+        "size_bytes": 3274
+      }
+    ],
+    "directory": "jump-causal-dataset",
+    "eligible_rows": 45465,
+    "excluded_rows": {
+      "detector_gap_unsafe": 0,
+      "fold_purge": 0,
+      "inactive_target_horizon": 14918,
+      "source_unavailable": 5551,
+      "target_watermark_incomplete": 7
+    },
+    "features": 170,
+    "positive_rows": 60,
+    "rows": 65941,
+    "split_rows": {
+      "test": {
+        "decision_times_sha256": "76d1c3e8374cef7276f20d589f0b3e29779a2f93eb4cfdec940711bf3401dc3b",
+        "down": 8,
+        "first_decision_ns": 1791125159900000000,
+        "last_decision_ns": 1791125984750000000,
+        "positive": 26,
+        "rows": 13119,
+        "up": 18
+      },
+      "train": {
+        "decision_times_sha256": "30033ad44afa3b1e9c79887a1b8e958d5c991fb6d4ef78d3ef521a52ec146a86",
+        "down": 10,
+        "first_decision_ns": 1791122759900000000,
+        "last_decision_ns": 1791124184750000000,
+        "positive": 22,
+        "rows": 20167,
+        "up": 12
+      },
+      "validation": {
+        "decision_times_sha256": "75a217ce4575bb74b1656a8095aba6e174d06bea85ebd84463f2a5c9fbb7c29b",
+        "down": 10,
+        "first_decision_ns": 1791124259900000000,
+        "last_decision_ns": 1791125084750000000,
+        "positive": 12,
+        "rows": 12179,
+        "up": 2
+      }
+    },
+    "target_jumps": 30,
+    "target_trade_sessions": [
+      [
+        1791122400014023703,
+        1791125997914949623
+      ]
+    ],
+    "unavailable_label": -128
+  },
+  "fold_boundaries_ns": {
+    "train_end": 1791124200000000000,
+    "validation_end": 1791125100000000000
+  },
+  "manifest_sha256": "f42592f13d3168d81129b15494a7d30903983e31934290c314bf5e6a8f0b7b1b",
+  "protocol": {
+    "book_subscription": "Binance spot/perpetual BTCUSDT depth20@100ms snapshots",
+    "decision_clock": "local_receive_unix_ns",
+    "decision_step_ms": 50,
+    "detector": {
+      "active_seconds": [
+        60,
+        285
+      ],
+      "extreme_ties": "latest",
+      "refractory_ms": 5000,
+      "slot_seconds": 300,
+      "threshold_bp": 1.0,
+      "window_left": "open",
+      "window_ms": 1000,
+      "window_right": "closed"
+    },
+    "detector_sha256": "98308a9da305679bf4b15fabf674139dd9784f3e2f4d862c41c3b33f090bb722",
+    "feature_lookback_ms": 1000,
+    "feature_schema_sha256": "128a8573137460eca25b6a3e60b6fc2103c9280a1046f782d9ac69d5ca1fe944",
+    "gap_policy": {
+      "decision_window": "[decision-1000ms, decision+220ms] must fit one source session",
+      "max_interframe_gap_ms": 1000,
+      "minimum_fresh_leaders": 2,
+      "required_primary": "bn_spot",
+      "target_gap_recovery": "remainder of detector slot unavailable"
+    },
+    "raw_schema": "source.YYYYMMDDTHH.txt.gz: <receive_unix_ns>\\t<raw_websocket_frame>\\n",
+    "schema": "jump-causal-v1",
+    "source_allowlist": [
+      "bn_spot",
+      "bn_fut_mkt",
+      "bn_fut_trade",
+      "bn_fut_pub",
+      "okx",
+      "bybit_spot",
+      "bybit_lin",
+      "coinbase"
+    ],
+    "split_policy": {
+      "boundary_rule": "no detector-state/feature/label interval may touch two folds",
+      "chronological": true,
+      "purge_left_ms": 5000,
+      "purge_right_ms": 220
+    },
+    "target_clock": "binance_spot_trade_exchange_unix_ns",
+    "target_lead_ms": [
+      120,
+      220
+    ],
+    "target_subscription": "Binance spot BTCUSDT @trade with timeUnit=MICROSECOND"
+  },
+  "provenance": {
+    "builder_name": "jump_causal.py",
+    "builder_sha256": "ace77dbff5eb0583ae49bf5c493c7fa2f4836618e12f57b0e8d36f7c17bf6652",
+    "collector_region": "eu-west-1",
+    "receipt_clock": "CLOCK_REALTIME via time.time_ns",
+    "recorder_source_name": "raw_rec.py",
+    "recorder_source_sha256": "2c669f0d36ebfc54759abce9e2936be9494fabc64ef3b97532244dfdac91baf6",
+    "requirements_sha256": null
+  },
+  "receive_range_ns": [
+    1791122400014023703,
+    1791125999992618253
+  ],
+  "sample_range_ns": [
+    1791122701000000000,
+    1791125998000000000
+  ],
+  "schema": "jump-causal-manifest-v1",
+  "sessions": {
+    "bn_fut_mkt": {
+      "count": 744,
+      "first_start_ns": 1791122400285953478,
+      "last_end_ns": 1791125997836444789
+    },
+    "bn_fut_pub": {
+      "count": 1,
+      "first_start_ns": 1791122400143594978,
+      "last_end_ns": 1791125997966018951
+    },
+    "bn_fut_trade": {
+      "count": 731,
+      "first_start_ns": 1791122400151474560,
+      "last_end_ns": 1791125997690467801
+    },
+    "bn_spot": {
+      "count": 1,
+      "first_start_ns": 1791122400014023703,
+      "last_end_ns": 1791125997914949623
+    },
+    "bybit_lin": {
+      "count": 260,
+      "first_start_ns": 1791122400124518603,
+      "last_end_ns": 1791125997943515982
+    },
+    "bybit_spot": {
+      "count": 1028,
+      "first_start_ns": 1791122400572172541,
+      "last_end_ns": 1791125997832887913
+    },
+    "coinbase": {
+      "count": 1245,
+      "first_start_ns": 1791122400278669182,
+      "last_end_ns": 1791125997794489771
+    },
+    "okx": {
+      "count": 3,
+      "first_start_ns": 1791122400058956848,
+      "last_end_ns": 1791125997901724422
+    }
+  },
+  "sources": [
+    {
+      "decompressed_sha256": "d4b11344fca8619fd3a736fdb402a96db0633ab5b87e5f61ab21cef2c238ea50",
+      "decompressed_size_bytes": 3301466,
+      "first_exchange_ns": null,
+      "first_recv_ns": 1791122400285953478,
+      "frames": 14640,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 14640,
+      "last_exchange_ns": null,
+      "last_recv_ns": 1791125999732245777,
+      "name": "bn_fut_mkt.20261004T14.txt.gz",
+      "normalized_events": {},
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "c57da965b6f11803d843f336942dda1fc9aa36d9f7fa11b7faa63406bca98a00",
+      "size_bytes": 478921,
+      "source": "bn_fut_mkt"
+    },
+    {
+      "decompressed_sha256": "ad07013c245bba59adea8f6763a913ec22fa2cee5eb70eb29b94d49f581db8fe",
+      "decompressed_size_bytes": 142672577,
+      "first_exchange_ns": 1791122400043000000,
+      "first_recv_ns": 1791122400143594978,
+      "frames": 514474,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 0,
+      "last_exchange_ns": 1791125999889000000,
+      "last_recv_ns": 1791125999992618253,
+      "name": "bn_fut_pub.20261004T14.txt.gz",
+      "normalized_events": {
+        "book": 514474
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "685eaa80cf02b42224894196bac2864deaae1fe515cc623c66e19d90f1bff8d6",
+      "size_bytes": 13115338,
+      "source": "bn_fut_pub"
+    },
+    {
+      "decompressed_sha256": "e46458bf8d86c9df91921eac6754f1074362b5282e431f664bd068882f61d474",
+      "decompressed_size_bytes": 6079763,
+      "first_exchange_ns": 1791122400050000000,
+      "first_recv_ns": 1791122400151474560,
+      "frames": 39148,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 0,
+      "last_exchange_ns": 1791125999886000000,
+      "last_recv_ns": 1791125999989624302,
+      "name": "bn_fut_trade.20261004T14.txt.gz",
+      "normalized_events": {
+        "trade": 39148
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "ab3a7d608ffc594d084e9476d20322b0764c4cadc078a7629df2c2cd26d33563",
+      "size_bytes": 695141,
+      "source": "bn_fut_trade"
+    },
+    {
+      "decompressed_sha256": "8187d7ac552fbc2c189de0f159735f1a59060c4c50b3b85725023c6a7c18053f",
+      "decompressed_size_bytes": 83534562,
+      "first_exchange_ns": 1791122401015685000,
+      "first_recv_ns": 1791122400014023703,
+      "frames": 229068,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 0,
+      "last_exchange_ns": 1791125999626029000,
+      "last_recv_ns": 1791125999989554432,
+      "name": "bn_spot.20261004T14.txt.gz",
+      "normalized_events": {
+        "book": 181410,
+        "trade": 47658
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "8d4ec77a40d6c478e87f48d7040f4578ecb707694b72f9ba0b0a447892293463",
+      "size_bytes": 5780747,
+      "source": "bn_spot"
+    },
+    {
+      "decompressed_sha256": "4735ce2368e1d20897744d5581923ed8de4c9057d8e3ed532e8de2114866b986",
+      "decompressed_size_bytes": 9721317,
+      "first_exchange_ns": 1791122400027000000,
+      "first_recv_ns": 1791122400124518603,
+      "frames": 35951,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 240,
+      "last_exchange_ns": 1791125999748000000,
+      "last_recv_ns": 1791125999843378786,
+      "name": "bybit_lin.20261004T14.txt.gz",
+      "normalized_events": {
+        "book": 27944,
+        "trade": 16560
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "9edcdb8d292a84b7ad8b87c5534f487ecf3b9da164d6ac4ad333cf944dce9ab3",
+      "size_bytes": 1679070,
+      "source": "bybit_lin"
+    },
+    {
+      "decompressed_sha256": "57d8e6a395380ef600418f58987ce3c6c47af768c7677dc1a22e2fd780b0fffc",
+      "decompressed_size_bytes": 4454068,
+      "first_exchange_ns": 1791122400477000000,
+      "first_recv_ns": 1791122400572172541,
+      "frames": 14668,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 240,
+      "last_exchange_ns": 1791125999755000000,
+      "last_recv_ns": 1791125999852631718,
+      "name": "bybit_spot.20261004T14.txt.gz",
+      "normalized_events": {
+        "book": 11277,
+        "trade": 11454
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "581f3c478af175f98bafedd53df54fe8481b37a92ac411fe71c639eb59fc75b4",
+      "size_bytes": 589691,
+      "source": "bybit_spot"
+    },
+    {
+      "decompressed_sha256": "c7791a7ee91f4854519bde043393e084e3da98e4df208dcc5c443e02a02d8e1c",
+      "decompressed_size_bytes": 7198732,
+      "first_exchange_ns": 1791122400227954000,
+      "first_recv_ns": 1791122400278669182,
+      "frames": 19582,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 0,
+      "last_exchange_ns": 1791125999289627000,
+      "last_recv_ns": 1791125999338204845,
+      "name": "coinbase.20261004T14.txt.gz",
+      "normalized_events": {
+        "book": 9791,
+        "trade": 9791
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "271a38cab6af7504577c0cf5cae5beae98a6f2df7b1577e90c61641e831c6093",
+      "size_bytes": 1152694,
+      "source": "coinbase"
+    },
+    {
+      "decompressed_sha256": "62ec2f5ccb5aa887c89e683e0fce5d27e0a361e4f1e6d92efad99e898743a4f8",
+      "decompressed_size_bytes": 22998127,
+      "first_exchange_ns": 1791122399934000000,
+      "first_recv_ns": 1791122400058956848,
+      "frames": 108775,
+      "gzip_closed": true,
+      "ignored_control_or_unmodelled_frames": 180,
+      "last_exchange_ns": 1791125999627000000,
+      "last_recv_ns": 1791125999751608405,
+      "name": "okx.20261004T14.txt.gz",
+      "normalized_events": {
+        "book": 88986,
+        "trade": 19609
+      },
+      "receipt_monotonic": true,
+      "rejected_lines": 0,
+      "sha256": "41fd2a14c4890a45ea099a4512757045d6cbf3530add42592ab72d58fc5e183c",
+      "size_bytes": 2813884,
+      "source": "okx"
+    }
+  ]
+}
