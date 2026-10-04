@@ -376,3 +376,16 @@ def test_hit_window_with_unknown_start_is_not_assumed_to_contain_anything():
     assert find(bs, [("A", "N"), ("U1", "Y")]) is None                 # the candle may be before the window
     assert find(bs, [("U1", "Y"), ("U2", "N")]) is not None            # same event: same window
     assert find(bs, [("U1", "Y"), ("U3", "N")]) is None                # different events, windows unknown
+
+
+def test_hit_fill_marked_at_one_after_the_touch():
+    H = hit("H", "hit_up", 90000)
+    bk = books(heartbeat(T, T + 200), quotes("H", every(T, T + 200, 1, 0.49, 0.51)))
+    spot = pd.DataFrame({"trade_ts": [T, T + 100.0], "receive_ts": [T, T + 100.0], "price": [89000.0, 90000.0]})
+    m = la.prep_markets([H], spot)[0]
+    tr = la.yes_trades(pd.DataFrame([{"asset_id": "HY", "ts": T + 40, "price": 0.55, "size": 10, "side": "BUY"}]), [m])
+    f = la.maker_fills(m, {"min_size": 50.0, "max_spread": 4.5}, la.Books(bk), la.Feed(bk), tr, "edge")
+    assert len(f) == 1 and f[0]["price"] == 0.54
+    assert f[0]["m30"] == pytest.approx(0.54 - 0.50)          # +30 s: before the touch, the mid
+    assert f[0]["m120"] == pytest.approx(0.54 - 1.0)          # +120 s: resolved Yes at the touch (T + 100)
+    assert f[0]["msettle"] == pytest.approx(0.54 - 1.0)

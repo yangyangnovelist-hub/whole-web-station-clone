@@ -1,5 +1,6 @@
 import gzip
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -245,10 +246,16 @@ def test_run_hf_end_to_end(tmp_path, monkeypatch):
     _hf_archive(src)
     name = "market_parquet_2026-08-29.tar.gz"
 
+    calls = []
+
     def fake_fetch(n, dest=None):
         if n == "MANIFEST.txt":
-            return f"{name} 12345678\n".encode()
-        shutil.copy(src, dest)
+            return f"{name} {src.stat().st_size}\n".encode()
+        calls.append(n)
+        if len(calls) == 1:  # the first download is cut off and must be retried
+            Path(dest).write_bytes(src.read_bytes()[:1000])
+        else:
+            shutil.copy(src, dest)
         return dest
 
     monkeypatch.setattr(cross, "fetch", fake_fetch)
@@ -261,6 +268,7 @@ def test_run_hf_end_to_end(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     assert "15 分钟市场" in text and "5 分钟市场" in text
     assert not (tmp_path / "work" / name).exists()  # the archive is deleted after use
+    assert calls == [name, name]
 
 
 def test_lean_reader_matches_cross_read_day(tmp_path):

@@ -618,18 +618,26 @@ def run_hf(workdir, out, days=None):
     if days:
         arcs = arcs[-int(days):]
     parts, stats, done, fails = [], {}, 0, []
-    for name, _ in arcs:
+    for name, size in arcs:
         local = workdir / name
-        try:
-            cross.fetch(name, local)
-            ep, st, nrows, nmk = hf_day(local, name[15:25])
-        except Exception:
-            import traceback
+        err = None
+        for attempt in range(3):  # a cut-off download ("unexpected end of data") is retried
+            try:
+                cross.fetch(name, local)
+                if size and local.stat().st_size != size:
+                    raise OSError(f"{name}: {local.stat().st_size} bytes, manifest says {size}")
+                ep, st, nrows, nmk = hf_day(local, name[15:25])
+                err = None
+                break
+            except Exception:
+                import traceback
+                err = traceback.format_exc()
+                print(f"{name}: attempt {attempt + 1} failed\n{err}", flush=True)
+            finally:
+                local.unlink(missing_ok=True)
+        if err:
             fails.append(name)
-            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
             continue
-        finally:
-            local.unlink(missing_ok=True)
         for h, x in st.items():
             stats[h] = _merge_stats(stats.get(h, {}), x)
         parts.append(ep)

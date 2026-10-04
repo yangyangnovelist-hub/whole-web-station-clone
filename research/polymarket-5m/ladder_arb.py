@@ -698,6 +698,9 @@ def maker_fills(m, prm, books, feed, tr, how, settle=np.nan):
     tok = m["yes_token"]
     if tok not in books.by or not len(tr):
         return rows
+    touched = m["type"] in HIT_TYPES and np.isfinite(m["touch"]) and m["touch"] <= feed.end
+    if touched and not np.isfinite(settle):
+        settle = 1.0          # Binance reached the level: the hit market resolves Yes
     for t, p, side, q in zip(tr["t"].to_numpy(float), tr["p"].to_numpy(float), tr["side"], tr["size"].to_numpy(float)):
         if not (t < m["t_to"] and t >= feed.start and bool(feed.alive([t])[0])):
             continue
@@ -717,7 +720,7 @@ def maker_fills(m, prm, books, feed, tr, how, settle=np.nan):
             th = t + h
             if th < m["t_to"] and th <= feed.end:
                 mk = float(books.asof(tok, th, "mark"))
-            elif th >= m["end_ts"] and np.isfinite(settle):
+            elif (th >= m["end_ts"] or (touched and th >= m["touch"])) and np.isfinite(settle):
                 mk = settle
             else:
                 mk = np.nan
@@ -1063,23 +1066,28 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
           "把 N 个 No 换成 N−1 USDC），Σ(No 卖一+费) < N−1 才是套利。「按买一卖出全部 Yes」需要先 split（每份 1 USDC 拆成 Yes+No）、"
           "卖 Yes、再把 N 个 No convert 成 N−1 USDC，净得 Σ买一 − 1，与在镜像的 No 盘口上全买 No 完全相同（No 卖一 = 1 − Yes 买一），"
           "所以只按全买 No 计，不需要 split；Polymarket 上可行。", "",
-          "| 事件（结算 K 线，UTC） | N | 口径 | 全买 Yes：Σ成本中位 / 最低（对 1） | 全买 No：Σ成本中位 / 最低（对 N−1） | 可评估 h |",
+          "| 事件（结算 K 线，UTC） | N | 口径 | 全买 Yes：Σ成本典型 / 最低（对 1） | 全买 No：Σ成本典型 / 最低（对 N−1） | 可评估 h |",
           "|---|---:|---|---:|---:|---:|"]
-    for r in results:
-        for age, name in ((max_age, f"≤ {max_age:g} s"), (np.inf, "不限年龄")):
-            if age not in r["scans"]:
-                continue
-            sm = r["scans"][age][0]
-            if not len(sm):
-                continue
-            for ev, g in sm[sm["kind"].isin(["range_sum_yes", "range_sum_no"])].groupby("event", sort=False):
-                y = g[g["kind"] == "range_sum_yes"].iloc[0]
-                no = g[g["kind"] == "range_sum_no"]
-                no = no.iloc[0] if len(no) else None
-                n = int(y["n"])
-                L.append(f"| {ev}（{_t(y['candle'], '%m-%d %H:%M')}） | {n} | {name} | {_n(y['med_cost'], 4)} / {_n(1 - y['best'], 4)} | "
-                         + (f"{_n(no['med_cost'], 4)} / {_n(n - 1 - no['best'], 4)}（{n - 1}）" if no is not None else "–")
-                         + f" | {y['valid_s'] / 3600:.2f} |")
+    for age, name in ((max_age, f"≤ {max_age:g} s"), (np.inf, "不限年龄")):
+        parts = [r["scans"][age][0] for r in results if age in r["scans"]]
+        sm = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=SUMM_COLS)
+        sm = sm[sm["kind"].isin(["range_sum_yes", "range_sum_no"])]
+        if not len(sm):
+            continue
+        last = sorted(sm["candle"].dropna().unique())[-9:]          # the newest nine events
+        for (ev, candle), g in sm[sm["candle"].isin(last)].groupby(["event", "candle"], sort=True):
+            cells = []
+            for kind in ("range_sum_yes", "range_sum_no"):
+                q = g[(g["kind"] == kind) & g["med_cost"].notna()]
+                n = int(g["n"].iloc[0])
+                due = 1 if kind == "range_sum_yes" else n - 1
+                if len(q):   # per-recording medians, weighted by valid time; the lowest cost seen
+                    typ = float(np.average(q["med_cost"], weights=q["valid_s"].clip(lower=1e-9)))
+                    cells.append(f"{_n(typ, 4)} / {_n(due - q['best'].max(), 4)}" + ("" if kind == "range_sum_yes" else f"（{due}）"))
+                else:
+                    cells.append("–（有区间没有卖一或从未同时新鲜）")
+            L.append(f"| {ev}（{_t(candle, '%m-%d %H:%M')}） | {n} | {name} | {cells[0]} | {cells[1]} | "
+                     f"{g.loc[g['kind'] == 'range_sum_yes', 'valid_s'].sum() / 3600:.2f} |")
     L += _reward_section(results, hours)
     wins = sorted({w for r in results for w in r["windows"]}, key=lambda x: (x[1], x[0]))
     L += ["", "## 近似和注意事项", "",

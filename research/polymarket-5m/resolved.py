@@ -19,15 +19,19 @@ Steps
    10-01 downloaded from data.binance.vision into the cache for the windows that start earlier /
    end later). Open times in us or ms (as regime.load_klines). Prices kept in integer cents (BTCUSDT
    tick 0.01) so 'High >= level' is exact. 1-minute High / Low / Close by OPEN time; a minute's
-   close is known at open + 60 s. 20 random days are compared with data.binance.vision 1m klines.
+   close is known at open + 60 s. 20 random days are compared with data.binance.vision 1m klines
+   as asked; because the 1 s aggregates turned out WIDER than Binance's own 1m High / Low in ~0.3%
+   of minutes (by 1 cent up to a few dollars; closes always equal), every day's 1m klines are
+   downloaded too and used for T* and outcomes (they are the settlement source); 1 s klines are
+   used only for t_sec, the price before t and sigma.
 3. decide: T* per market (RESOLVED.md):
    - hit: window from the market description (daily: 00:00-23:59 ET of the date; weekly: 00:00 ET
      of the first date to 23:59 ET of the last; monthly: the month; "from the creation of this
      market": from createdAt rounded UP to the next whole minute, conservative - a candle that
      straddles creation is not used). The candles of the window are those OPENING in [start, end).
      T* = open + 60 s of the first candle with High >= level (up) / Low <= level (down); if none,
-     the result (No) is fixed at the window end: T* = end. t_sec = the first 1 s kline in that
-     minute that crosses (the earliest one could know, reported only).
+     the result (No) is fixed at the window end: T* = end. t_sec = the first 1 s kline in the window
+     that crosses (the earliest one could know, reported only, with the trades in [t_sec + L, T*)).
    - above (close > strike), range (lo <= close < hi; a close exactly on a boundary goes to the
      higher bracket as the rules say), updown_day (today's noon close vs yesterday's; equal = 50-50):
      the "1 minute candle for 12:00 ET". Two conventions are computed for every market: "open12"
@@ -37,7 +41,9 @@ Steps
    - updown_4h (Chainlink, control only): T* = window end; official outcome used as the truth; the
      Binance proxy (close before end vs close before start) is reported but not used to exclude.
    Every market's computed outcome is compared with outcomePrices; a mismatch means the rule or the
-   data is wrong for that market: it is excluded and listed. Unresolved markets and markets whose
+   data is wrong for that market: it is excluded and listed. Hit markets touched (by the written
+   window) before they were created are kept but counted and flagged in the report: one such market
+   was resolved "from creation" against its description, so their resolution practice is a risk. Unresolved markets and markets whose
    window lacks klines are excluded and counted.
 4. trades: data-api.polymarket.com/trades?market=<conditionId> (taker records only, the API
    default: each match once, side = the taker's side, asset = the token the taker traded), from
@@ -47,7 +53,9 @@ Steps
    'truncated' only if more than 11000 trades share one second (then reported).
 5. measure:
    - decided-but-unsettled: trades of the winning token at p < 1 with ts >= T* + L (L = 0, 1, 5, 30,
-     60 s; ts in whole seconds, T* on a whole second), any taker side (evidence of a price), and the
+     60 s; ts in whole seconds, T* on a whole second; the data-api timestamp is the on-chain time,
+     2-4 s after the match (README section 16), so only L >= 5 is clean), any taker side (evidence of
+     a price; the record's price is the taker's average fill price), and the
      taker-SELL subset (what a resting buyer could have received). Per share 1 - p as maker, minus
      0.07 p (1 - p) as taker. Shares, notional p * size, profit (1 - p) * size, price buckets, hours
      to closedTime, per ET day dollars, by kind and month. Losing-token trades at p > 0 after T*, by
@@ -809,9 +817,13 @@ def fetch_trades(get, cid, start, page=PAGE, max_offset=MAX_OFFSET, end=None):
     return out, info
 
 
+def typed_trades(t):
+    return t.astype({"cid": str, "ts": np.int64, "taker_buy": bool, "is_yes": bool, "price": float, "size": float})
+
+
 def trade_frame(cid, records, yes_token, no_token):
     if not records:
-        return pd.DataFrame(columns=["cid", "ts", "taker_buy", "is_yes", "price", "size"])
+        return typed_trades(pd.DataFrame(columns=["cid", "ts", "taker_buy", "is_yes", "price", "size"]))
     a = np.array(records, dtype=object)
     asset = a[:, 2].astype(str)
     keep = (asset == yes_token) | (asset == no_token)
@@ -871,7 +883,7 @@ def fetch_pre_tstar(http, mk, cache, log=print):
     close), which the main fetch (from min(T*, end - 3600)) may not cover. Cached as pre_trades.parquet."""
     path = Path(cache) / "pre_trades.parquet"
     if path.exists():
-        return pd.read_parquet(path)
+        return typed_trades(pd.read_parquet(path))
     m = mk[mk["kind"].isin(HIT_KINDS) & (mk["excluded"] == "") & (mk["official"] == 1.0) & mk["tsec"].notna()]
     get = lambda url: http.get(url, slim=slim_trades)
     frames = []
@@ -882,7 +894,7 @@ def fetch_pre_tstar(http, mk, cache, log=print):
             log(f"  pre-T* {r.cid}: {type(e).__name__}: {e}")
             continue
         frames.append(trade_frame(r.cid, recs, r.yes_token, r.no_token))
-    out = pd.concat(frames, ignore_index=True) if frames else trade_frame("", [], "", "")
+    out = typed_trades(pd.concat(frames, ignore_index=True)) if frames else trade_frame("", [], "", "")
     out.to_parquet(path)
     return out
 
@@ -1227,7 +1239,7 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
     tinfo = json.loads(tj.read_text()) if tj.exists() else {}
     L.append(f"数据：Gamma 已结束事件（{FIRST}–{LAST}，日期按 ET）、data-api 逐笔成交（taker 记录，每笔撮合一次）、"
              f"币安 BTCUSDT 1 秒 K 线和官方 1 分钟 K 线。本次运行 {runtime / 60:.1f} 分钟"
-             + (f"；首次抓取成交 {tinfo['fetch_s'] / 60:.0f} 分钟、{tinfo['requests']:,} 次请求（≤ 4 次/秒）" if tinfo else "")
+             + (f"；首次完整运行（含抓取成交）{tinfo['fetch_s'] / 60:.0f} 分钟、{tinfo['requests']:,} 次请求（≤ 4 次/秒）" if tinfo else "")
              + "。\n")
     L.append("## 覆盖\n")
     c2 = cov.copy()
@@ -1239,15 +1251,16 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
     for k, v in missing.items():
         if v:
             L.append(f"\n- {k} 缺的日期（{len(v)}）：{', '.join(v[:40])}{' …' if len(v) > 40 else ''}")
-    L.append(f"\n- 排除：{dict(excl.drop('', errors='ignore'))}；共 {nmk:,} 个市场。")
+    ex_d = {k: int(v) for k, v in excl.drop("", errors="ignore").items()}
+    L.append(f"\n- 排除：{ex_d}；共 {nmk:,} 个市场。")
     L.append(f"- 搜索：public-search 共 {notes.get('search_pages')} 页、{notes.get('search_hit_slugs')} 个 hit 事件 slug；"
              f"周、月按 slug 规律补查。")
     rew = mk.groupby("kind").agg(min_size=("rewards_min_size", "median"), max_spread=("rewards_max_spread", "median"),
                                  with_clob=("clob_rewards", lambda s: int((s != "").sum())),
-                                 daily=("rewards_daily", "sum"), fee=("fee_rate", "median"))
-    L.append("- 奖励字段（中位数）：" + "；".join(
-        f"{k} minSize {_f(r.min_size)} maxSpread {_f(r.max_spread, 1)} clobRewards 非空 {r.with_clob} 个"
-        f"（日奖励合计 {_f(r.daily)}）fee {_f(r.fee, 3)}" for k, r in rew.iterrows()))
+                                 daily=("rewards_daily", "sum"), dmax=("rewards_daily", "max"), fee=("fee_rate", "median"))
+    L.append("- 奖励字段：rewardsMinSize / rewardsMaxSpread 中位数、clobRewards 非空的市场数（rewardsDailyRate 合计 / 最大）、费率："
+             + "；".join(f"{k} {_f(r.min_size)} / {_f(r.max_spread, 1)}、{int(r.with_clob)} 个（{r.daily:,.3f} / {r.dmax:,.3f}）、"
+                        f"{_f(r.fee, 3)}" for k, r in rew.iterrows()) + "。")
     if spot_missing:
         L.append(f"- 缺 1 秒 K 线的天：{spot_missing}")
     L.append(f"- 1 分钟 K 线核对（{len(minutes_chk)} 个随机日，data.binance.vision 1m）：比较 {int(minutes_chk['minutes'].sum()):,} 分钟，"
@@ -1287,9 +1300,17 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
         tr = info[info["truncated"]]
         L.append(f"- 成交抓取：{len(info):,} 个市场、{int(info['pages'].sum()):,} 页，超过 offset 上限改用时间窗的 "
                  f"{int((info['windows'] > 1).sum())} 个，仍被截断的 {len(tr)} 个{('：' + ', '.join(tr['cid'].str[:10])) if len(tr) else ''}。")
+    hits_all = mk[mk["kind"].isin(HIT_KINDS) & (mk["comp"] == 1.0)]
+    pre_c = hits_all[hits_all["tstar"] - 60 < hits_all["created"]]
+    pc_profit = w.loc[w["cid"].isin(set(pre_c["cid"])) & (w["dt"] >= 5), "profit"].sum() if len(w) else 0.0
+    L.append(f"- 市场创建之前就已触及的触及市场：{len(pre_c)} 个，其中官方按“窗口起点”判 Yes 的 "
+             f"{int((pre_c['official'] == 1.0).sum())} 个、按“创建之后”判 No 的 {int((pre_c['official'] == 0.0).sum())} 个"
+             f"（即上面排除的不符）。保留的这些市场 T*+5 秒后赢方收益 ${pc_profit:,.0f}，结算口径不一致是它们的额外风险。")
     L.append("\n## 结果已定、未结算：赢的一边在 T*+L 之后以 p<1 成交\n")
     L.append("任何主动方都算（“当时有人以这个价成交”）；“卖方主动”= taker 卖出赢方代币，挂单买方接到的部分。美元：名义 = p×份数，"
-             "收益 = (1−p)×份数（挂单无费）；吃单收益再扣 0.07·p(1−p)。\n")
+             "收益 = (1−p)×份数（挂单无费）；吃单收益再扣 0.07·p(1−p)。data-api 的时间戳是链上时间，比撮合晚 "
+             "（README §16 量过：中位 2.2 秒、99% 3.6 秒），所以 L = 0、1 秒里有 T* 之前撮合的成交，L ≥ 5 秒才干净。"
+             "成交价是 taker 这一笔的平均成交价（和 takerOnly=false 的挂单方记录核对过）。\n")
     lt = lag_table(w, mk)
     L.append(lag_md(lt, "notional", "profit", "任何主动方：名义$ / 收益$"))
     L.append("")
@@ -1304,6 +1325,33 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
     L.append(md_table(d5, ["kind", "mkx", "trades", "shares", "vwap", "taker_profit", "n995", "sell_n995", "med_h"],
                       ["类型", "有成交市场/市场", "笔数", "份数", "均价", "吃单收益$", "名义$(p≤0.995)",
                        "卖方主动名义$(p≤0.995)", "到结算小时(中位)"]))
+    s5m = w[w["dt"] >= 5]
+    if len(s5m):
+        tm = s5m.groupby(["slug", "kind"]).agg(trades=("size", "size"), notional=("notional", "sum"),
+                                               profit=("profit", "sum"), pmin=("price", "min"),
+                                               settle=("hours", "max")).sort_values("profit", ascending=False)
+        tot = s5m["profit"].sum()
+        top = tm.head(10).reset_index()
+        mi = mk.set_index("slug")
+        pre_ids = set(pre_c["slug"])
+
+        def note(sl):
+            r = mi.loc[sl]
+            if r["kind"] in NOON_KINDS:
+                k = f"{r['lo']:,.0f}" if r["kind"] == "above" else ""
+                return f"{k} 12:00 收盘 {r['close_open12']:,.2f}（11:59 收盘 {r['close_close12']:,.2f}）".strip()
+            return "创建前已触及" if sl in pre_ids else ""
+        top["note"] = [note(x) for x in top["slug"]]
+        L.append(f"\n收益最集中的 10 个市场（L = 5 秒，占全部收益 {top['profit'].sum() / tot:.0%}；“结算”= 第一笔到 closedTime 的小时数）：\n")
+        for c in ("notional", "profit"):
+            top[c] = top[c].map(lambda x: _f(x))
+        top["pmin"] = top["pmin"].map(lambda x: _f(x, 3))
+        top["settle"] = top["settle"].map(lambda x: _f(x, 1))
+        L.append(md_table(top, ["slug", "kind", "trades", "notional", "profit", "pmin", "settle", "note"],
+                          ["市场", "类型", "笔数", "名义$", "收益$", "最低价", "结算(小时)", "说明"]))
+        at999 = s5m[s5m["price"] >= 0.999]
+        L.append(f"\n去掉最集中的 10 个市场后，L = 5 秒收益 ${tot - tm['profit'].head(10).sum():,.0f}；价格 ≥ 0.999 的成交占份数 "
+                 f"{at999['size'].sum() / s5m['size'].sum():.0%}、收益 ${at999['profit'].sum():,.0f}（每份 0.1¢）。")
     if sl is not None:
         st, false_cross, n_no = sl
         st2 = st.copy()
@@ -1313,8 +1361,12 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
         L.append("\n触及类“秒级上限”：1 秒 K 线已越过、所在 1 分钟 K 线还没收盘（[t_sec + L, T*)）时赢方 p<1 的成交：\n")
         L.append(md_table(st2, ["L", "markets", "mk_tr", "trades", "notional", "vwap", "profit", "sell_profit"],
                           ["L 秒", "触及市场", "有成交", "笔数", "名义$", "均价", "收益$", "卖方主动收益$"]))
-        L.append(f"\n风险：官方 No 的触及市场里，1 秒 K 线在窗口内越过档位的有 {false_cross}/{n_no} 个（1 秒数据比 1m 宽），"
-                 f"只看秒级就动手会买错。")
+        L.append(f"\n官方 No 的触及市场里，1 秒 K 线在窗口内越过档位的有 {false_cross}/{n_no} 个"
+                 + ("：只看秒级就动手会在这些市场买错。" if false_cross else
+                    (f"（1 秒聚合在 {(mall['h_wider'].sum() + mall['l_wider'].sum()) / max(1, mall['minutes'].sum()):.2%} 的分钟"
+                     f"端点上比 1m 宽，最多 {mall['max_diff_cents'].max() / 100:.2f} 美元，理论上可能买错，这段样本里没发生）。"
+                     if mall is not None and len(mall) else "。"))
+                 + "这一段在 T* 之前，不计入判定。")
     s5 = w[w["dt"] >= 5]
     if len(s5):
         pb = s5.assign(b=pbucket(s5["price"])).groupby("b", observed=False).agg(
@@ -1334,7 +1386,7 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
         L.append(md_table(piv, cols))
         ann = (1 / s5["price"] - 1) * 8760 / s5["hours"].clip(lower=1 / 60)
         L.append(f"\n资金占用（L = 5 秒）：成交到结算的小时数 中位数 {s5['hours'].median():.2f}、p90 {s5['hours'].quantile(.9):.2f}；"
-                 f"按份数加权的年化（仅描述）中位数 {np.median(ann):,.0f}%。")
+                 f"逐笔单利年化（仅描述，不能滚动复制）中位数 {100 * np.median(ann):,.0f}%。")
     dd = daily_dollars(w)
     L.append(f"\n每天（{len(dd)} 天，L = 5 秒、p ≤ 0.995）：名义$ 平均 {dd['notional'].mean():,.1f}、中位数 {dd['notional'].median():,.1f}，"
              f"≥ $50 的天 {int((dd['notional'] >= 50).sum())}；收益$ 平均 {dd['profit'].mean():,.2f}。卖方主动：名义$ 平均 "
@@ -1357,7 +1409,8 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
         L.append(md_table(lg, ["kind", "side", "trades", "shares", "notional"], ["类型", "方向", "笔数", "份数", "名义$"]))
     L.append("\n## 几乎确定：结束前 60/30/10/5/1 分钟模型 ≥ 99%（及 95–99%）的一边，之后 60 秒内的成交\n")
     L.append("无漂移模型，σ = 过去 1 小时 1 秒对数收益的标准差，按剩余时间放大；每份盈亏 = 结果 − p（挂单无费；吃单再扣费），按份数加权，t 按市场聚类。"
-             "“全部”行把各时点合在一起（同一市场多次出现，仍按市场聚类）。\n")
+             "“全部”行把各时点合在一起（同一市场多次出现，仍按市场聚类）。“卖方主动每份”= 只算 taker 卖出该边（挂单买方接到）的成交，"
+             "是事后拆分，不是 RESOLVED.md 的判定口径。\n")
     if len(near):
         cols = ["bucket", "group", "points", "model", "win_all", "loss_pts", "pts_tr", "mk_tr", "trades", "shares", "vwap",
                 "win_tr", "losses", "pnl", "t", "pnl_taker", "t_taker", "pnl_sell", "t_sell"]
@@ -1385,7 +1438,17 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
              f"${d5['sell_notional'].mean():,.1f}（卖方主动）；门槛 $50/天 → "
              f"{'达到' if ok1 else '未达到'}（任何主动方）/{'达到' if ok1s else '未达到'}（卖方主动）。"
              f"{'值得做前向和实盘准备。' if ok1 else '不值得为它做前向和实盘准备。'}")
+    if len(d5) and len(w):
+        s5 = w[(w["dt"] >= 5) & (w["price"] <= 0.995)]
+        tm = s5.groupby("cid")["notional"].sum().sort_values(ascending=False)
+        rest = s5[~s5["cid"].isin(set(tm.index[:10]))]
+        dd2 = daily_dollars(rest)
+        L.append(f"- 但很集中：中位数那天只有 ${d5['notional'].median():,.0f}；去掉名义金额最大的 10 个市场后每天平均 "
+                 f"${dd2['notional'].mean():,.1f}（卖方主动 ${dd2['sell_notional'].mean():,.1f}）。")
     if len(a):
+        r0 = a.iloc[0]
+        L.append(f"- 模型校准（≥ 99% 的时点）：{int(r0['points']):,} 个时点，模型平均失败率 {1 - r0['model']:.3%}，"
+                 f"实际失败 {int(r0['loss_pts'])} 次（{1 - r0['win_all']:.2%}）。")
         L.append(f"- 几乎确定部分（≥ 99%，各时点合并）：每份 {a['pnl'].iloc[0]:+.5f}，t = {_f(a['t'].iloc[0], 2)}（{int(a['mk_tr'].iloc[0])} 个市场聚类）→ "
                  f"{'满足“每份 > 0 且 t ≥ 2”，可以写前向规则。' if ok2 else '不满足“每份 > 0 且 t ≥ 2”，不写前向规则。'}")
     L.append("\n文件：`real/resolved-trades.csv.gz`（T* 之后赢方 p<1 的全部成交）。代码 `resolved.py`，测试 `test_resolved.py`。")
@@ -1443,7 +1506,7 @@ def run(args, log=print):
     t_fetch, calls0 = time.time(), http.calls
     trades, info = fetch_all_trades(http, mk, cache, workers=args.workers, log=log)
     if http.calls - calls0 > 100 and not args.limit:
-        (cache / "timing.json").write_text(json.dumps({"fetch_s": time.time() - t_fetch, "requests": http.calls - calls0}))
+        (cache / "timing.json").write_text(json.dumps({"fetch_s": time.time() - t_start, "requests": http.calls}))
     trades = trades[trades["cid"].isin(set(mk["cid"]))]
     pre = fetch_pre_tstar(http, mk, cache, log=log) if not args.limit else trade_frame("", [], "", "")
     sl = second_level(pre, mk, spot)
