@@ -10,9 +10,9 @@ name: polymarket-ladder
 # "enabled": false in ci/ladder.json to stop the chain sooner; changing ci/ladder.request starts a
 # run by hand.
 #
-# Two jobs, so recordings follow each other without waiting for the report: `record` holds its
-# own concurrency group and dispatches the next run as soon as its artifacts are up; `report`
-# runs alongside the next recording. Artifacts per run: ladder-<run id> (the built tables and the
+# Two jobs keep recording and reporting isolated. A trusted external monitor starts the next
+# branch run only after this run succeeds; pushes made with GITHUB_TOKEN cannot recursively
+# trigger Actions. Artifacts per run: ladder-<run id> (the built tables and the
 # small raw files: markets, errors, Binance trades) and ladder-raw-<run id> (the raw CLOB
 # messages, read only if a run's own build failed).
 on:
@@ -111,32 +111,6 @@ jobs:
           name: ladder-raw-${{ github.run_id }}
           path: ${{ runner.temp }}/ladder-raw.tgz
           retention-days: 30
-
-      - name: Start the next run
-        if: success() && steps.cfg.outputs.enabled == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # a run started after this one (by hand) and not finished continues the chain instead
-          me=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}" --jq .created_at || true)
-          later=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${GITHUB_REF_NAME}&per_page=30" \
-                  --jq "[.workflow_runs[] | select(.name == \"polymarket-ladder\" and .status != \"completed\" and .created_at > \"$me\")] | length" || echo 0)
-          if [ -n "$me" ] && [ "${later:-0}" -gt 0 ]; then echo "a later run is already queued"; exit 0; fi
-          # workflow_dispatch only resolves workflow files registered on the default branch.
-          # This research workflow intentionally lives on the research branch, so advance the
-          # branch trigger file instead. The successful recording is the gate for this commit.
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          printf '%s run=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" > ci/ladder.request
-          git add ci/ladder.request
-          git commit -q -m "ci: continue ladder recorder after ${{ github.run_id }}"
-          for i in 1 2 3 4 5; do
-            git pull -q --rebase origin "${GITHUB_REF_NAME}" \
-              && git push -q origin "HEAD:${GITHUB_REF_NAME}" \
-              && exit 0
-            sleep $((2 ** i))
-          done
-          exit 1
 
   report:
     needs: record
