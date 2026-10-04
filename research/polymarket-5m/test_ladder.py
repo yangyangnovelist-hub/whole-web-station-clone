@@ -81,6 +81,8 @@ def _events():
         "bitcoin-price-on-october-5-2026": [{"slug": "bitcoin-price-on-october-5-2026", "markets": [
             _gm("r1", "<84,000", noon), _gm("r2", "84,000-86,000", noon), _gm("r3", ">86,000", noon)]}],
         "what-price-will-bitcoin-hit-on-october-5-2026": [{"slug": "what-price-will-bitcoin-hit-on-october-5-2026",
+                                                           "startDate": "2026-10-05T04:00:00Z",
+                                                           "endDate": midnight, "closed": False,
                                                            "markets": [
             _gm("h1", "↑ 86,000", midnight, "Will Bitcoin reach $86,000 on October 5?"),
             _gm("h2", "↓ 84,000", midnight, "Will Bitcoin dip to $84,000 on October 5?")]}],
@@ -95,11 +97,14 @@ def _events():
 
 def _fetch(url):
     ev = _events()
+    if url == ld.GAMMA_SEARCH:
+        return {"events": ev["what-price-will-bitcoin-hit-on-october-5-2026"]}
     if "events?slug=" in url:
         return ev.get(url.split("slug=")[1], [])
     if "/clob-markets/" in url:
         cid = url.rsplit("/", 1)[1]
-        return {"itode": True} if cid == "f2" else {"mts": 0.01, "fd": {"r": 0.07}}
+        return {"itode": cid == "f2", "mts": 0.01, "mos": 5, "fd": {"r": 0.07},
+                "t": [{"t": f"{cid}-a"}, {"t": f"{cid}-b"}]}
     if "klines" in url:
         ms = int(url.split("startTime=")[1].split("&")[0])
         return [[ms, "85000.5", "85010", "84990", "84999.5", "1", ms + 59999]]
@@ -122,6 +127,39 @@ def test_discover_types_bounds_times_and_the_delay_check():
     assert by["u1"]["ref_ts"] == _utc("2026-10-04T16:00:00Z") and by["u1"]["ref_price"] == 84999.5
     assert by["f1"]["ref_price"] == 85000.5 and by["f1"]["settle"] == "chainlink-twap"
     assert "9 undelayed markets" in ld.summary(markets, notes)
+
+
+def test_failed_clob_check_is_not_cached_as_undelayed():
+    cache, calls = {}, 0
+
+    def flaky(url):
+        nonlocal calls
+        if url == ld.GAMMA_SEARCH:
+            event = dict(_events()["what-price-will-bitcoin-hit-on-october-5-2026"][0])
+            event["markets"] = event["markets"][:1]
+            return {"events": [event]}
+        if "events?slug=" in url:
+            return []
+        calls += 1
+        if calls <= 2:
+            raise TimeoutError("temporary")
+        cid = url.rsplit("/", 1)[1]
+        return {"itode": True, "mts": 0.01, "t": [{"t": f"{cid}-a"}, {"t": f"{cid}-b"}]}
+
+    first, notes = ld.discover(flaky, now=T + 30, days=1, cache=cache)
+    assert not first and not cache and any("temporary" in n for n in notes)
+    second, notes = ld.discover(flaky, now=T + 30, days=1, cache=cache)
+    assert not second and cache and all(v["itode"] for v in cache.values())
+    assert any("itode" in n for n in notes)
+
+
+def test_fixed_limit_and_live_minimum_order_shape():
+    import fill_rate as fr
+    assert fr.pilot_order_shares(0.49) == 5.0
+    assert fr.pilot_order_shares(0.10) >= 10.0
+    p = fr.limit_price(0.62, 0.03, 0.01)
+    assert 0.56 < p < 0.59
+    assert 0.62 - p - 0.07 * p * (1 - p) >= 0.03 - 1e-12
 
 
 def test_recorder_refresh_subscribes_new_tokens_and_drops_ended_markets(tmp_path):

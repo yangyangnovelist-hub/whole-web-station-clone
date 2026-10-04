@@ -6,23 +6,25 @@ candles, with Binance BTCUSDT trades beside them (market data only: no keys, no 
     python ladder.py build --src DIR --out DIR/built
     python ladder_check.py DIR [DIR ...] --out real/ladder-check.md
 
-The 5m / 15m / hourly Up/Down markets and the hourly "...-4am-et" ladders hold every taker order
-for about 150 ms (GET clob.polymarket.com/clob-markets/<condition id> has "itode": true); these do
-not (no "itode" key), so a stale quote after a Binance jump is there to be taken at once:
+The 5m / 15m / hourly Up/Down markets and some short ladders hold every taker order for about
+150 ms (GET clob.polymarket.com/clob-markets/<condition id> has ``"itode": true``).  This recorder
+does not infer that property from a slug or Gamma's integer ``secondsDelay``: every candidate is
+admitted only after the CLOB endpoint says ``itode`` is absent/false.
 
 - above:      "bitcoin-above-on-<month>-<day>-<year>", 11 strikes ("86,000"), Yes if the Binance
               BTC/USDT 1m candle of 12:00 ET (noon) on that day closes above the strike;
 - range:      "bitcoin-price-on-<month>-<day>-<year>", 11 neg-risk ranges ("84,000-86,000",
               "<74,000", ">92,000"), same candle;
-- hit_up / hit_down: "what-price-will-bitcoin-hit-on-<month>-<day>-<year>" ("↑ 86,000",
-              "↓ 80,000"), Yes at once if any Binance BTC/USDT 1m candle between 00:00 and 23:59 ET
-              of that day has High >= (Low <=) the level;
+- hit_up / hit_down: active daily, weekly or monthly "What price will Bitcoin hit ...?" events
+              found through Gamma search ("↑ 86,000", "↓ 80,000"). Yes if any Binance BTC/USDT
+              final 1m High/Low in the event window crosses the level;
 - updown_day: "bitcoin-up-or-down-on-<month>-<day>-<year>", the candle closing at noon ET against
               the one closing at noon ET the day before;
 - updown_4h:  "btc-updown-4h-<start>", the current and the next one (these settle on Chainlink's
               BTC/USD 60 s TWAP stream, not on Binance; see ladder_check.py).
 
-discover lists the markets of today and the next two days (dates in ET) and the 4-hour ones,
+discover lists the markets of today and the next two days (dates in ET), every active hit event
+returned by Gamma search, and the 4-hour ones,
 confirms on /clob-markets that none holds taker orders, and writes markets.json. record keeps the
 CLOB market websocket subscribed to all their tokens (re-discovering every 30 minutes, so the next
 day's markets join) and records Binance BTCUSDT aggregated trades from data-stream.binance.vision,
@@ -41,7 +43,10 @@ import csv
 import gzip
 import json
 import re
+import ssl
 import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -53,18 +58,45 @@ import paper_trader as pt
 import recording as rc
 
 GAMMA_EVENT = "https://gamma-api.polymarket.com/events?slug={slug}"
+GAMMA_SEARCH = "https://gamma-api.polymarket.com/public-search?q=bitcoin&limit_per_type=100"
 CLOB_MARKET = "https://clob.polymarket.com/clob-markets/{cid}"
 # Binance's market-data-only REST host (api.binance.com answers 451 on US runners).
 KLINE = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime={ms}&limit=1"
 MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september",
           "october", "november", "december")
 DAILY = {"above": "bitcoin-above-on-{d}", "range": "bitcoin-price-on-{d}",
-         "hit": "what-price-will-bitcoin-hit-on-{d}", "updown_day": "bitcoin-up-or-down-on-{d}"}
+         "updown_day": "bitcoin-up-or-down-on-{d}"}
 H4, H4_S = "btc-updown-4h-{ts}", 4 * 3600
 TYPES = ("above", "range", "hit_up", "hit_down", "updown_day", "updown_4h")
 REDISCOVER_S = 1800
 DEPTH_CAP = 0.99  # hit markets: ask depth below this price (ladder_check barrier events)
 NAN = float("nan")
+
+
+def fetch_json(url, timeout=10):
+    """HTTPS JSON fetch with the installed certifi trust store when available."""
+    try:
+        import certifi
+        context = ssl.create_default_context(cafile=certifi.where())
+    except ImportError:  # pragma: no cover - system Python normally has certifi
+        context = ssl.create_default_context()
+    req = urllib.request.Request(url, headers={"User-Agent": "polymarket-ladder-recorder/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout, context=context) as r:
+        return json.loads(r.read().decode())
+
+
+def _fetch_many(fetch, urls, workers=4):
+    """Fetch independent public endpoints concurrently, preserving input order and exceptions."""
+    def one(url):
+        last = None
+        for _ in range(2):
+            try:
+                return fetch(url)
+            except Exception as exc:
+                last = exc
+        return last  # caller records the exact failed URL and excludes it
+    with ThreadPoolExecutor(max_workers=min(workers, max(1, len(urls)))) as pool:
+        return list(pool.map(one, urls))
 
 
 # ------------------------------------------------------------------ dates (ET)
@@ -209,8 +241,9 @@ def event_markets(ev, kind, d=None):
                 typ, hi = "hit_down", parsed[1] if shape == "level" else parsed[2]
             else:
                 continue
-            start = et_to_utc(d, 0) if d else None
-            expect = et_to_utc(d + timedelta(days=1), 0) if d else None
+            start = et_to_utc(d, 0) if d else (iso_ts(m.get("eventStartTime")) or
+                                                iso_ts(ev.get("startDate")) or iso_ts(ev.get("startTime")))
+            expect = et_to_utc(d + timedelta(days=1), 0) if d else end
         elif kind == "updown_day":
             typ = "updown_day"
             ref_ts = iso_ts(m.get("eventStartTime")) or iso_ts(ev.get("startTime")) or \
@@ -258,7 +291,7 @@ def reference(m, fetch, now):
     return None, None
 
 
-def discover(fetch=pt.fetch_json, now=None, days=3, cache=None):
+def discover(fetch=fetch_json, now=None, days=3, cache=None):
     """(markets, notes): every open market of the undelayed types ending after `now`, with the
     /clob-markets check ("itode" absent) and, for up/down, the reference price if fixed. Markets
     whose /clob-markets record holds taker orders are left out and named in the notes. `cache`
@@ -267,46 +300,65 @@ def discover(fetch=pt.fetch_json, now=None, days=3, cache=None):
     cache = {} if cache is None else cache
     rows, notes = [], []
     today = et_date(now)
+    requests = []
     for k in range(days):
         d = today + timedelta(days=k)
         for kind, pattern in DAILY.items():
             slug = pattern.format(d=day_slug(d))
-            try:
-                events = fetch(GAMMA_EVENT.format(slug=slug)) or []
-            except Exception as e:
-                notes.append(f"{slug}: {type(e).__name__}: {e}")
-                continue
-            if not events:
-                notes.append(f"{slug}: not listed")
-            for ev in events:
-                rows += event_markets(ev, kind, d)
+            requests.append((slug, kind, d, GAMMA_EVENT.format(slug=slug)))
     for ts in h4_starts(now):
         slug = H4.format(ts=ts)
-        try:
-            events = fetch(GAMMA_EVENT.format(slug=slug)) or []
-        except Exception as e:
-            notes.append(f"{slug}: {type(e).__name__}: {e}")
+        requests.append((slug, "updown_4h", None, GAMMA_EVENT.format(slug=slug)))
+    requests.append(("bitcoin public search", "search_hit", None, GAMMA_SEARCH))
+    for (slug, kind, d, _), got in zip(requests, _fetch_many(fetch, [x[3] for x in requests])):
+        if isinstance(got, Exception):
+            notes.append(f"{slug}: {type(got).__name__}: {got}")
             continue
+        if kind == "search_hit":
+            events = [ev for ev in (got or {}).get("events", [])
+                      if str(ev.get("slug", "")).startswith("what-price-will-bitcoin-hit")
+                      and not ev.get("closed") and (iso_ts(ev.get("endDate")) or 0) > now]
+            for ev in events:
+                rows += event_markets(ev, "hit")
+            if not events:
+                notes.append("bitcoin public search: no active hit event")
+            continue
+        events = got or []
+        if not events:
+            notes.append(f"{slug}: not listed")
         for ev in events:
-            rows += event_markets(ev, "updown_4h")
+            rows += event_markets(ev, kind, d)
     out, seen = [], set()
+    eligible = []
     for m in rows:
         if m["condition_id"] in seen or m["closed"] or not m["end_ts"] or m["end_ts"] <= now:
             continue
         seen.add(m["condition_id"])
-        info = cache.get(m["condition_id"])
-        if info is None:
-            try:
-                info = cache[m["condition_id"]] = fetch(CLOB_MARKET.format(cid=m["condition_id"])) or {}
-            except Exception as e:
-                notes.append(f"{m['slug']}: /clob-markets {type(e).__name__}: {e}; left out")
-                continue
+        eligible.append(m)
+    missing = [m for m in eligible if m["condition_id"] not in cache]
+    urls = [CLOB_MARKET.format(cid=m["condition_id"]) for m in missing]
+    attempted = {}
+    for m, got in zip(missing, _fetch_many(fetch, urls)):
+        attempted[m["condition_id"]] = got
+        if not isinstance(got, Exception):
+            cache[m["condition_id"]] = got
+    for m in eligible:
+        info = cache.get(m["condition_id"], attempted.get(m["condition_id"]))
+        if isinstance(info, Exception):
+            notes.append(f"{m['slug']}: /clob-markets {type(info).__name__}: {info}; left out")
+            continue
+        info = info or {}
+        clob_tokens = {str(x.get("t")) for x in info.get("t", []) if isinstance(x, dict) and x.get("t")}
+        if clob_tokens != {m["yes_token"], m["no_token"]} or not info.get("mts"):
+            notes.append(f"{m['slug']}: incomplete /clob-markets record; left out")
+            continue
         m["itode"] = bool(info.get("itode"))
         if m["itode"]:
             notes.append(f"{m['slug']}: itode (taker delay); left out")
             continue
         if info.get("mts"):
             m["tick"] = float(info["mts"])
+        m["min_order_size"] = info.get("mos")
         m["fee_rate"] = (info.get("fd") or {}).get("r")
         if m["type"] in ("updown_day", "updown_4h"):
             try:
@@ -347,7 +399,7 @@ class LadderRecorder(pt.LiveTrader):
     """paper_trader.LiveTrader's CLOB and Binance websocket loops and recorder, subscribed to the
     undelayed markets found by discover() instead of the 5m Up/Down series; paper-trades nothing."""
 
-    def __init__(self, out, fetch=pt.fetch_json, rediscover=REDISCOVER_S):
+    def __init__(self, out, fetch=fetch_json, rediscover=REDISCOVER_S):
         super().__init__(out, pt.Params(), fetch=fetch, coins=("btc",), trade_coins=())
         self.rediscover = rediscover
         self.ladder = {}       # condition id -> market row

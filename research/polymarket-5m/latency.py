@@ -161,7 +161,8 @@ positive mean and p < I_ALPHA. 1,000 markets (about 15 days at 67 a day) give a 
 standard error near 1.2c, so about seven chances in ten of passing at a true +3c and nine at +4c.
 With tests C, D, F, G and I each at 0.025, the chance of at least one false pass is at most 12.5%.
 
-Test J, fixed 2026-10-04 about 08:30 UTC, before any of its data was recorded (see J_*): the capped
+Test J was first drafted 2026-10-04 about 08:30 UTC, then corrected at 08:55 UTC before the
+corrected sample starts (see J_*): the capped
 real-money H pilot (ralph/progress.txt) filled 1 of 10 FAK orders, send -> match 375 ms, so the
 Binance print -> match time is about 0.45-0.5 s. fill_rate.py on the GitHub books (10-01 to 10-04)
 showed what that latency does to the rule as tests G and I state it ("buy if fair - ask - fee >= 12c
@@ -174,7 +175,9 @@ send-threshold x limit grid has a flat top around 6-9c x 2-4c, and this test tak
 Test J is that execution protocol on test I's signal: H's fair value (prior 2 s before the print plus
 the Binance move since), candidate prints as in gated_trades (2-sigma, 240..15 s left), the decision
 J_DECISION s after the print (Binance -> Dublin plus sending), sent if fair - ask - fee >= J_SEND
-at the decision, filled at the ask J_LAG s after the print if fair - ask - fee >= J_LIMIT then
+at the decision.  Its limit is frozen then at the highest venue tick whose edge is J_LIMIT; its
+size uses the live pilot's five-share / $1 minimum-notional rule.  It fills only if, at J_LAG,
+the recorded top ask is no higher than that frozen limit and has enough size for the whole order
 (nothing filled otherwise), the next send in a market at least 2 s after a send, test G's data
 hygiene. Statistic: P&L per order sent, per share (unfilled orders count as 0), clustered by
 market, one-sided normal p; judged once on the orders of the first J_N markets with a send,
@@ -240,10 +243,13 @@ I_COINS = ("btc",)
 I_ALPHA = 0.025
 # Test J (fixed 2026-10-04 about 08:30 UTC, before any of its data was recorded): test I's signal
 # with a decision-time send rule and a looser limit, at the measured latency (see module notes).
-J_SPOT, J_Z0, J_THETA_SEND, J_LIMIT, J_DECISION, J_LAG, J_N = "binancews", 2.0, 0.08, 0.03, 0.11, 0.45, 1000
-J_SINCE, J_TAU_LO, J_ANCHOR = "2026-10-04 09:00", 15, 2.0
+J_SPOT, J_Z0, J_THETA_SEND, J_LIMIT, J_DECISION, J_LAG, J_N = "binancews", 2.0, 0.08, 0.03, 0.14, 0.50, 1000
+J_SINCE, J_TAU_LO, J_ANCHOR = "2026-10-04 10:00", 15, 2.0
 J_COINS = ("btc",)
 J_ALPHA = 0.025
+# A 1-cent limit grid is conservative and remains valid when a market advertises a finer .001 tick;
+# the forward artefact does not preserve tick-size-change events, so never assume the finer grid.
+J_TICK, J_TARGET_SHARES, J_MIN_USD = 0.01, 5.0, 1.0
 
 
 def _read(d, pattern):
@@ -1051,7 +1057,7 @@ def test_j_orders(roots, since=None, lags=None):
     """Test J's orders: every send (fill_rate.sends with J's send threshold), with the fill and
     P&L at each lag for the limit fair - J_LIMIT (unfilled: 0)."""
     import fill_rate as fr
-    lags = sorted(set(lags or (0.3, J_LAG, 0.6)))
+    lags = sorted(set(lags or (0.45, J_LAG, 0.6)))
     dirs = _latency_dirs(roots, J_COINS)
     t = _per_recording(dirs, since or J_SINCE, J_SPOT,
                        lambda mk, sp, sg, bk: fr.sends(mk, sp, sg, bk, J_DECISION, lags, theta=J_THETA_SEND,
@@ -1060,10 +1066,14 @@ def test_j_orders(roots, since=None, lags=None):
     if not len(t):
         return t, lags
     t = t[t["sent"]].sort_values("t", kind="stable").reset_index(drop=True)
+    t["jlimit"] = fr.limit_price(t["fair"].to_numpy(), J_LIMIT, J_TICK)
+    t["jshares"] = fr.pilot_order_shares(t["jlimit"].to_numpy(), J_TARGET_SHARES, J_MIN_USD)
     for lag in lags:
         px = t[f"ask{lag:g}"]
         fee = bo.taker_fee(px)
-        fill = np.isfinite(px) & (t["fair"] - px - fee >= J_LIMIT)
+        size = t[f"size{lag:g}"]
+        fill = np.isfinite(px) & np.isfinite(size) & (px <= t["jlimit"] + 1e-12) & \
+            (size + 1e-12 >= t["jshares"])
         t[f"jfill{lag:g}"] = fill
         t[f"jpnl{lag:g}"] = np.where(fill, t["won"] - px - fee, 0.0)
     return t, lags
@@ -1074,10 +1084,13 @@ def run_test_j(roots, out, reps=20000):
     once on the orders of the first J_N markets with a send (clustered by market)."""
     t, lags = test_j_orders(roots)
     L = [f"# 检验 J：触发时就决定、限价放宽的 H（BTC 5m，币安逐笔成交触发，GitHub 前向录制）", "",
-         f"事先写死（10 月 4 日约 08:30 UTC，数据还没录）：{J_SINCE} UTC 起开始的 BTC 5m 市场；信号同检验 I（H 的公平价，"
+         f"规则于 10 月 4 日 08:55 UTC 按真单时间戳和真实下单网格修正并写死；只用 {J_SINCE} UTC 起开始的 BTC 5m 市场。"
+         "信号同检验 I（H 的公平价，"
          f"币安 {J_Z0:g}σ 触发，剩 240–{J_TAU_LO} 秒）。触发后 {1000 * J_DECISION:.0f} ms（币安到都柏林加发单）看到的卖一若使"
-         f" 公平价 − 卖一 − 手续费 ≥ {100 * J_THETA_SEND:.0f}¢ 就发单，限价 = 公平价 − {100 * J_LIMIT:.0f}¢（含手续费）；"
-         f"撮合时刻（触发后 {J_LAG:g} 秒，约等于真单试点量到的延迟）卖一不超过限价就按卖一成交，否则不成交（记 0）；"
+         f" 公平价 − 卖一 − 手续费 ≥ {100 * J_THETA_SEND:.0f}¢ 就发单；当场冻结限价为还能留下 {100 * J_LIMIT:.0f}¢ 净边际的"
+         f"最高 {J_TICK:g} tick，仓位按实盘的 {J_TARGET_SHARES:g} 份 / ${J_MIN_USD:g} 最低金额规则。"
+         f"撮合时刻（触发后 {J_LAG:g} 秒；真单唯一成交为 481.75 ms）只有卖一不超过冻结限价且顶层足以完整成交时才成交，"
+         "否则记 0；"
          f"同一市场两次发单至少隔 2 秒；持有到结算。统计量 = 每张发出的单每份赚多少（没成交的算 0），按市场聚类，单边正态 p；"
          f"按第一次发单的时间取前 {J_N:,} 个有发单的市场、它们的全部发单，判定一次：每份 > 0 且 p < {J_ALPHA} 才通过。"
          "数据处理同检验 G。", ""]
@@ -1100,7 +1113,7 @@ def run_test_j(roots, out, reps=20000):
             c, se, p, m = clustered(first.assign(pnl=first[f"jpnl{J_LAG:g}"]), pd.Series(1.0, index=first.index))
             ok = c > 0 and p < J_ALPHA
             runs = sorted(first["run"].unique())
-            v = (f"检验 J（前 {J_N:,} 个市场）：触发时发单、限价 公平价 − {100 * J_LIMIT:.0f}¢、{J_LAG:g} 秒撮合："
+            v = (f"检验 J（前 {J_N:,} 个市场）：触发时发单、固定净边际 {100 * J_LIMIT:.0f}¢ 限价、{J_LAG:g} 秒撮合："
                  f"{len(first):,} 张，每张每份 {c:+.2f}¢ ±{se:.2f}，p = {p:.4f} → {'通过' if ok else '没通过'}")
             pinned.parent.mkdir(parents=True, exist_ok=True)
             pinned.write_text(v + f"（录制段 {len(runs)} 个：{', '.join(map(str, runs))}；最后一张发于 "
@@ -1209,7 +1222,7 @@ def main(argv=None):
     ap.add_argument("--test-f", action="store_true", help="test F (Binance-triggered test D) on the same roots")
     ap.add_argument("--test-g", action="store_true", help="test G (test F with the pre-move skip) on the same roots")
     ap.add_argument("--test-j", action="store_true",
-                    help="test J (decision-time send, limit fair - 3c, 0.45 s) on the same roots")
+                    help="test J (decision-time send, frozen 3c-net-edge limit, full depth, 0.50 s) on the same roots")
     ap.add_argument("--test-i", action="store_true",
                     help="test I (H buying every fill, opposite adds at twice the size, 0.4 s) on the same roots")
     ap.add_argument("--diagnose-f", action="store_true",

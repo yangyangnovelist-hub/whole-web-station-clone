@@ -1,7 +1,8 @@
 name: polymarket-ladder
 
-# Records the Polymarket BTC markets that have no taker delay and settle on Binance BTC/USDT 1m
-# candles (daily above / price-range / hit / up-or-down ladders, plus the 4-hour up/down), with
+# Records BTC markets only after /clob-markets confirms itode is absent/false. Daily above,
+# price-range, hit and day up/down resolve from Binance BTC/USDT 1m candles; 4-hour up/down is
+# kept as a separate Chainlink-TWAP comparison, never treated as deterministic Binance arbitrage. With
 # Binance BTCUSDT aggregated trades, for `hours` from ci/ladder.json on a GitHub runner
 # (ladder.py record: market data only, never places orders, uses no key), keeps the recording as
 # artifacts, dispatches the next run while today <= `until`, then rebuilds every ladder recording
@@ -60,21 +61,34 @@ jobs:
 
       - name: Discover the undelayed markets
         if: steps.cfg.outputs.enabled == 'true'
-        continue-on-error: true
-        run: python ladder.py discover --out "$RUNNER_TEMP/ladder/markets-start.json"
+        run: |
+          python ladder.py discover --days 1 --out "$RUNNER_TEMP/ladder/markets-start.json"
+          python - "$RUNNER_TEMP/ladder/markets-start.json" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1]))["markets"]
+          assert rows, "no eligible market discovered"
+          assert not any(m.get("itode") for m in rows), "delayed market passed discovery"
+          print(f"eligible={len(rows)} tokens={2 * len(rows)}")
+          PY
 
       - name: Record (market data only, no orders)
         if: steps.cfg.outputs.enabled == 'true'
         run: |
           secs=$(python -c "print(int(float('${{ steps.cfg.outputs.hours }}') * 3600) + 900)")
-          timeout "$secs" python ladder.py record --out "$RUNNER_TEMP/ladder" --hours ${{ steps.cfg.outputs.hours }} || true
+          timeout "$secs" python ladder.py record --out "$RUNNER_TEMP/ladder" --hours ${{ steps.cfg.outputs.hours }}
           ls -la "$RUNNER_TEMP"/ladder/raw/*/ && du -sh "$RUNNER_TEMP/ladder/raw" && df -h "$RUNNER_TEMP" | tail -1
           zcat "$RUNNER_TEMP"/ladder/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
 
       - name: Build the tables
         if: steps.cfg.outputs.enabled == 'true'
-        continue-on-error: true
-        run: python ladder.py build --src "$RUNNER_TEMP/ladder" --out "$RUNNER_TEMP/ladder/built"
+        run: |
+          python ladder.py build --src "$RUNNER_TEMP/ladder" --out "$RUNNER_TEMP/ladder/built"
+          python - "$RUNNER_TEMP/ladder/built/counts.json" <<'PY'
+          import json, sys
+          c = json.load(open(sys.argv[1]))
+          assert c["markets"] > 0 and c["books"] > 0 and c["binance"] > 0, c
+          print(c)
+          PY
 
       - name: Pack the recording
         if: steps.cfg.outputs.enabled == 'true'
@@ -99,7 +113,7 @@ jobs:
           retention-days: 30
 
       - name: Start the next run
-        if: always() && steps.cfg.outputs.enabled == 'true'
+        if: success() && steps.cfg.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

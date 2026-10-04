@@ -23,6 +23,36 @@ import binary as bo
 import latency as lt
 
 
+def limit_price(fair, theta, tick=0.001, rate=bo.CRYPTO_FEE_RATE):
+    """Highest BUY limit on the venue tick grid whose edge is at least ``theta``.
+
+    The limit is frozen when the decision is made.  This is deliberately not recomputed from the
+    later ask: a live signed order cannot improve its limit after it has left the process.
+    """
+    f = np.asarray(fair, dtype=float)
+    disc = np.maximum((1.0 + rate) ** 2 - 4.0 * rate * (f - theta), 0.0)
+    raw = ((1.0 + rate) - np.sqrt(disc)) / (2.0 * rate)
+    px = np.floor((raw + 1e-12) / tick) * tick
+    px = np.where(np.isfinite(f) & (f > theta), np.clip(px, tick, 1.0 - tick), np.nan)
+    return float(px) if px.ndim == 0 else px
+
+
+def pilot_order_shares(limit, target=5.0, min_usd=1.0):
+    """Shares requested by the live pilot's cent-grid sizing rule at a frozen BUY limit.
+
+    Below $1 notional the venue rejects marketable BUYs, so the live path reserves ``$1 + one
+    limit-price share``.  At ordinary prices this returns five shares; at low prices it returns
+    enough shares to clear the minimum notional.
+    """
+    p = np.asarray(limit, dtype=float)
+    required = np.ceil((target * p - 1e-12) * 100.0) / 100.0
+    cap = np.maximum(required, min_usd + p) + 0.001
+    size = np.floor((cap / p + 1e-12) * 100.0) / 100.0
+    size = np.maximum(size, target)
+    size = np.where(np.isfinite(p) & (p > 0), size, np.nan)
+    return float(size) if size.ndim == 0 else size
+
+
 def sends(markets, spot_trades, sigma, book, decision, lags, theta=None, z0=lt.G_Z0,
           tau_lo=lt.G_TAU_LO, anchor=2.0, every=2.0):
     """One row per candidate print (as gated_trades, H prior) with a quote at t0 + decision: its
@@ -106,7 +136,8 @@ def ev_per_send(t, lag, theta_send, theta_lim, shares=None):
     s = s[np.array(keep)]
     px = s[f"ask{lag:g}"]
     fee = bo.taker_fee(px)
-    fill = np.isfinite(px) & (s["fair"] - px - fee >= theta_lim)
+    lim = limit_price(s["fair"].to_numpy(), theta_lim)
+    fill = np.isfinite(px) & (px <= lim + 1e-12)
     pnl = np.where(fill, s["won"] - px - fee, 0.0)
     if shares is not None:
         pnl = pnl * np.minimum(s[f"size{lag:g}"].fillna(0), shares)
@@ -115,6 +146,9 @@ def ev_per_send(t, lag, theta_send, theta_lim, shares=None):
 
 def report(t, decision, lags):
     L = ["# 盘口上的“下单时还在、撮合时还在吗”（GitHub 前向录制，探索性）", "",
+         "> 这是历史参数扫描，不是收益预测：没有模拟固定签名限价、实盘 5 份/$1 订单网格或竞争者抢量；"
+         "下方美元表还假定独占记录到的 L1 卖量。", "> 正式检验 J 另用冻结限价、足量顶层深度、"
+         f"{1000 * lt.J_DECISION:.0f} ms 决策和 {1000 * lt.J_LAG:.0f} ms 撮合，只读 {lt.J_SINCE} UTC 后的新样本。", "",
          f"H 规则（test I 的信号，每次都加、2 秒间隔）的每个候选：触发后 {1000 * decision:.0f} ms（币安到都柏林约 105 ms 加发单）"
          "时边际 ≥ 12¢ 才算发单；撮合时刻（延迟 L，含 150 ms 冻结）边际仍 ≥ 12¢ 才算成交。"
          "真单试点 10 张发单只成交 1 张，下表看在哪个 L 上成交率会低到这个程度。", "",
@@ -145,8 +179,9 @@ def report(t, decision, lags):
             cells.append(f"{100 * ev:+.2f}（{fr:.0%}）")
         L.append(f"| {lag:g} 秒 | " + " | ".join(cells) + " |")
     sends = (0.06, 0.09, 0.12, 0.15)
-    L += ["", "## 发单门槛和限价一起换（每天的钱，美元；每张最多 20 份、不超过卖一挂单量）", "",
-          f"录制覆盖约 {days:.1f} 天。", "",
+    L += ["", "## 发单门槛和限价一起换（探索性的容量上限，不是可实现收益）", "",
+          f"录制覆盖约 {days:.1f} 天。下表假定我们能独占每个记录到的 L1 卖量（每张最多 20 份），"
+          "没有同场竞争，也不要求该档足以完整满足真实订单；因此只能用来选执行参数，不能当成预期日收益。", "",
           "| 撮合延迟 L | 发单门槛 | " + " | ".join(f"θ = {100 * x:.0f}¢" for x in lims) + " |", "|---|---|" + "---:|" * len(lims)]
     for lag in (0.3, 0.45):
         if lag not in lags:

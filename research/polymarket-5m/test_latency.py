@@ -442,8 +442,7 @@ def test_fill_rate_tracks_the_stale_ask(export, tmp_path, monkeypatch):
 
 
 def test_test_j_counts_unfilled_orders_as_zero(export, tmp_path, monkeypatch):
-    """The fixture's jump: sent at +0.11 s (ask 0.50), the ask is 0.70 from +0.35 s. With a fair
-    value near 1 the 0.45 s match fills at 0.70; with the limit at fair - 0.40 it does not (0)."""
+    """J freezes a venue-grid limit and requires enough top-level size for the live-sized order."""
     starts = [S0 + 300 * i for i in range(N)]
     d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
     _latency_dir(d, export, _coinbase_lines(export), starts)
@@ -452,11 +451,24 @@ def test_test_j_counts_unfilled_orders_as_zero(export, tmp_path, monkeypatch):
     monkeypatch.setattr(lt, "J_SINCE", "2026-09-01")
     t, lags = lt.test_j_orders([tmp_path / "rec"])
     main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
-    assert len(main) == N and main["jfill0.45"].all() and (main["ask0.45"] == 0.70).all()
+    assert len(main) == N and main["jfill0.5"].all() and (main["ask0.5"] == 0.70).all()
+    assert (main["jlimit"] < main["fair"]).all() and (main["jshares"] >= 5).all()
+    # The price still fits, but the available top level cannot fill the signed order.
+    import fill_rate as fr
+    original = fr.sends
+    def thin(*args, **kwargs):
+        out = original(*args, **kwargs)
+        out["size0.5"] = 4.99
+        return out
+    monkeypatch.setattr(fr, "sends", thin)
+    t, _ = lt.test_j_orders([tmp_path / "rec"])
+    main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
+    assert not main["jfill0.5"].any() and (main["jpnl0.5"] == 0).all()
+    monkeypatch.setattr(fr, "sends", original)
     monkeypatch.setattr(lt, "J_LIMIT", 0.40)
     t, _ = lt.test_j_orders([tmp_path / "rec"])
     main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
-    assert not main["jfill0.45"].any() and (main["jpnl0.45"] == 0).all()
+    assert not main["jfill0.5"].any() and (main["jpnl0.5"] == 0).all()
     monkeypatch.setattr(lt, "J_N", 10)
     out = tmp_path / "real" / "latency-test-j.md"
     lt.main([str(tmp_path / "rec"), "--test-j", "--out", str(out), "--reps", "200"])
