@@ -126,6 +126,7 @@ import json
 import math
 import random
 import re
+import sys
 import time
 import urllib.parse
 import zipfile
@@ -530,50 +531,60 @@ def rows_of(ev, coin, kind, d, source):
     return out
 
 
+def hourly_rows(ev, kind, src, first, last, bad_title):
+    """Rows of one hourly event whose title day is in first .. last (end checked against the title)."""
+    end = rs.ts_of(ev.get("endDate"))
+    tt = hourly_title(ev.get("title"), end, kind)
+    if tt is None:
+        bad_title.append(ev.get("slug"))
+        return []
+    d, h = tt
+    if not (first <= d <= last):
+        return []
+    exp = hourly_expected_end(kind, d, h)
+    out = rows_of(ev, "BTC", kind, d, src)
+    for r in out:
+        r["hour"] = h
+        r["end_ok"] = bool(r["end"] in exp)
+        r["day"] = d.isoformat()
+        r["description"] = sys.intern(str(r["description"] or ""))
+    return out
+
+
 def discover_hourly(http, first=FIRST, last=LAST, log=print):
-    """BTC hourly above / up-down rows of title days first .. last and coverage notes."""
+    """BTC hourly above / up-down rows of title days first .. last and coverage notes. Events are turned
+    into rows as they arrive (an hourly above day is ~1.5 MB of JSON)."""
     rows, notes = [], {}
     for kind, slug in SERIES.items():
         sid = series_id(http, slug)
         notes[f"{kind}_series_id"] = sid
-        evs = {}
+        seen, have_end, bad_title, n_series = set(), set(), [], 0
         for d in rs.days(first - timedelta(days=1), last + timedelta(days=1)):
             for ev in series_events_day(http, sid, d) if sid else []:
-                evs[str(ev.get("id"))] = (ev, "series")
-        have_end = {rs.ts_of(e.get("endDate")) for e, _ in evs.values()}
+                eid = str(ev.get("id"))
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                n_series += 1
+                have_end.add(rs.ts_of(ev.get("endDate")))
+                rows += hourly_rows(ev, kind, "series", first, last, bad_title)
         # every hour of the period without an event: ask both slug spellings
         a = et_ts(first, 0) + (0 if kind == "updown_1h" else 3600)
         b = et_ts(last + timedelta(days=1), 0) + (3600 if kind == "updown_1h" else 0)
         want = [e for e in range(a, b + 1, 3600) if float(e) not in have_end]
         slugs = [s for e in want for s in hour_slugs(kind, e)]
-        found = rs.events_by_slug(http, slugs) if slugs else []
         n_slug = 0
-        for ev in found:
-            if str(ev.get("id")) not in evs:
-                evs[str(ev.get("id"))] = (ev, "slug")
+        for ev in rs.events_by_slug(http, slugs) if slugs else []:
+            if str(ev.get("id")) not in seen:
+                seen.add(str(ev.get("id")))
+                rows += hourly_rows(ev, kind, "slug", first, last, bad_title)
                 n_slug += 1
-        notes[f"{kind}_series_events"] = sum(1 for _, s in evs.values() if s == "series")
+        notes[f"{kind}_series_events"] = n_series
         notes[f"{kind}_slug_asked"] = len(slugs)
         notes[f"{kind}_slug_found"] = n_slug
-        bad_title = []
-        for ev, src in evs.values():
-            end = rs.ts_of(ev.get("endDate"))
-            tt = hourly_title(ev.get("title"), end, kind)
-            if tt is None:
-                bad_title.append(ev.get("slug"))
-                continue
-            d, h = tt
-            if not (first <= d <= last):
-                continue
-            exp = hourly_expected_end(kind, d, h)
-            for r in rows_of(ev, "BTC", kind, d, src):
-                r["hour"] = h
-                r["end_ok"] = bool(r["end"] in exp)
-                r["day"] = d.isoformat()
-                rows.append(r)
         notes[f"{kind}_title_unparsed"] = bad_title[:20]
         notes[f"{kind}_title_unparsed_n"] = len(bad_title)
-        log(f"{kind}: {len(evs):,} events ({n_slug} found only by slug, {len(slugs):,} slugs asked)")
+        log(f"{kind}: {n_series + n_slug:,} events ({n_slug} found only by slug, {len(slugs):,} slugs asked)")
     return rows, notes
 
 
