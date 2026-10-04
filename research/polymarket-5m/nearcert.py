@@ -49,6 +49,7 @@ Conservative choices where NEARCERT.md is silent (written down before the run):
   endDate, so these markets' checkpoints would not be that far before the settlement candle (in this
   period 77 range markets of 2025-11-02 .. 11-08 end at 11:00 ET, 61-121 minutes before it, and 44 of
   2025-11-17 .. 11-20 at 16:00 ET, after it). nearcert_fwd.py skips the same markets (end_mismatch).
+  The decided-but-unsettled tables keep them (T* and the yield after it do not depend on endDate).
 - The noon candle convention is NOT carried over from resolved.py; rs.decide picks it again from this
   period's official outcomes and both mismatch counts are reported.
 - Verdict (NEARCERT.md): the pooled row of [0.95, 0.99), all five checkpoints, Binance-settled kinds
@@ -455,9 +456,11 @@ def tables(mk, spot, trades, first=FIRST, last=LAST):
     """Every table of the report that depends on trades: near-certain (by checkpoint / kind / month)
     and decided-but-unsettled (lag table, per-day dollars, per-month profit)."""
     cp, near, near_kind, j, mon = measure(mk, spot, trades)
-    pt = _call(rs.post_tstar, trades, mk, first=first, last=last)
+    # end_mismatch concerns the near-certain checkpoints only: T* and the yield after it do not use endDate
+    mk_y = mk.assign(excluded=mk["excluded"].replace("end_mismatch", "")) if "excluded" in mk else mk
+    pt = _call(rs.post_tstar, trades, mk_y, first=first, last=last)
     w = pt[pt["win"] & (pt["price"] < 1)].copy()
-    return {"cp": cp, "near": near, "near_kind": near_kind, "j": j, "mon": mon, "lag": rs.lag_table(w, mk),
+    return {"cp": cp, "near": near, "near_kind": near_kind, "j": j, "mon": mon, "lag": rs.lag_table(w, mk_y),
             "dd": _call(rs.daily_dollars, w, first=first, last=last), "ymon": yield_month(w), "robust": robustness(j),
             "ytop": yield_top(w)}
 

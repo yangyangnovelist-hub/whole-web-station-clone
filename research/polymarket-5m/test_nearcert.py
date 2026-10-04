@@ -287,6 +287,28 @@ def test_month_split_and_stat_row_cluster():
     assert t.loc["all", "pnl_sell"] == pytest.approx(R.clustered_mean(s["pnl"], s["size"], s["cid"])[0])
 
 
+def test_end_mismatch_noon_markets_are_excluded(tmp_path):
+    """A noon-kind market whose endDate is not 12:00 ET (2025-11-02..08 ended 11:00 ET, 11-17..20 16:00 ET)
+    would get 'minutes before the end' checkpoints that are not that far before its settlement candle."""
+    mk, spot, trades = fixture()
+    m2, conv, mism = N.decide_checked(mk, spot)
+    early = m2.index[(m2["kind"] == "range") & (m2["excluded"] == "")][:2]
+    late = m2.index[(m2["kind"] == "above") & (m2["excluded"] == "")][:1]
+    m2.loc[early, "end"] = float(NOON - 3600)
+    m2.loc[late, "end"] = float(NOON + 4 * 3600)
+    m3 = N.exclude_end_mismatch(m2)
+    assert set(m3.loc[list(early) + list(late), "excluded"]) == {"end_mismatch"}
+    assert (m3["excluded"] == "end_mismatch").sum() == 3              # hit and 4-hour markets are untouched
+    assert (m3.drop(index=list(early) + list(late))["excluded"] == m2.drop(index=list(early) + list(late))["excluded"]).all()
+    cp, near, *_ = N.measure(m3, spot, trades)
+    assert not set(cp["cid"]) & set(m3.loc[list(early) + list(late), "cid"])
+    # without the exclusion the early markets' "1 minute" checkpoint is 61 minutes before the noon candle
+    # opens (tau = 62 minutes to its close under open12)
+    cp2 = R.checkpoints(m2, spot)
+    e1 = cp2[cp2["cid"].isin(m2.loc[early, "cid"]) & (cp2["check"] == 1)]
+    assert len(e1) and (e1["tau"] == 62 * 60).all()
+
+
 # ------------------------------------------------------------------ verdict
 
 def _near(pnl, t, mk_tr, taker=None):
@@ -319,6 +341,8 @@ def test_report_smoke(tmp_path):
     mk["month"] = mk["day"].str[:7]
     rule_tab = N.rule_table(mk)
     m2, conv, mism = N.decide_checked(mk, spot)
+    m2.loc[m2.index[(m2["kind"] == "range") & (m2["excluded"] == "")][:1], "end"] = float(NOON - 3600)
+    m2 = N.exclude_end_mismatch(m2)
     tabs = N.tables(m2, spot, trades, first=D, last=D)
     cov, missing = R.coverage(m2, first=D, last=D)
     ctx = dict(tabs, mk=m2, cov=cov, missing=missing, notes={"search_pages": 1, "search_hit_slugs": 0},
@@ -330,4 +354,5 @@ def test_report_smoke(tmp_path):
                timing=None, timing_spot=None, runtime=1.0)
     text = N.report(ctx, tmp_path / "r.md")
     assert "判定" in text and "0.95-0.99" in text and "source=binance+coinbase" in text
+    assert "end_mismatch" in text and "1 个结束于 12:00 ET -1 小时" in text
     assert (tmp_path / "r.md").read_text() == text + "\n"

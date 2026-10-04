@@ -569,7 +569,7 @@ def test_run_end_to_end(tmp_path):
     text = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 3600, net=net, n=1,
                   min_days=1, log=lambda *a: None, expect=["111"])
     assert out.exists() and text == out.read_text(encoding="utf-8")
-    assert "检验 2" in text and "| 买入 |" in text and "模拟成交率" in text
+    assert "检验 2" in text and "| 买入 |" in text and "模拟成交率" in text and "按目前速度" in text
     assert "不含队列竞争" in text
     # A won on Yes; B bought No and Yes won: a loss; the verdict pinned on the first market (n=1)
     verdict = (tmp_path / "real" / "nearcert-forward.verdict.md").read_text(encoding="utf-8")
@@ -656,6 +656,41 @@ def test_run_without_recordings_writes_nothing(tmp_path):
     out = tmp_path / "x.md"
     assert nf.run([tmp_path], out, cache=tmp_path / "c", net=FakeNet({}), log=lambda *a: None) is None
     assert not out.exists()
+
+
+def test_klines_close_extremes_pending_and_errors(tmp_path):
+    import io
+    import zipfile
+    day = date(2026, 10, 1)
+    t0 = ld.et_to_utc(day, 0)                                   # 04:00 UTC
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:                       # Binance's 1m layout, microsecond open times
+        z.writestr("BTCUSDT-1m-2026-10-01.csv", "\n".join(
+            f"{(t0 + 60 * k) * 1_000_000},84000.0,{84100.0 + k},{83900.0 - k},{84050.0 + k},1,0,0,0,0,0,0"
+            for k in range(3)) + "\n")
+
+    class Net:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, binary=False):
+            self.urls.append(url)
+            if "2026-10-01" in url:
+                return buf.getvalue()
+            if "2026-10-02" in url:
+                raise nf.NotFound(url)
+            raise RuntimeError("proxy reset")
+
+    notes, errors = [], []
+    k = nf.Klines(Net(), tmp_path, notes, errors)
+    assert k.close(t0 + 60) == pytest.approx(84051.0)
+    assert k.extremes(t0, t0 + 120) == pytest.approx((84102.0, 83898.0))
+    assert all(np.isnan(k.extremes(t0, t0 + 180)))             # a candle missing: coverage incomplete
+    assert np.isnan(k.close(t0 + 600))
+    assert k.close(t0 + 86400) is None and errors == []         # not published yet: pending, not an error
+    assert k.close(t0 + 2 * 86400) is None and len(errors) == 1  # a failed fetch blocks the verdict
+    assert any("还没发布" in x for x in notes)
+    assert (tmp_path / "klines1m" / "BTCUSDT-1m-2026-10-01.zip").exists()
 
 
 def test_net_rate_limit():
