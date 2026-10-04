@@ -314,7 +314,7 @@ def test_maker_snapshot_through_and_quotes_follow_each_tokens_mid():
     assert len(m) == 1 and m["side"].iloc[0] == -1 and m["te"].iloc[0] - S == pytest.approx(80.0)
     assert m["price"].iloc[0] == pytest.approx(0.48) and m["sh20"].iloc[0] == 20
     assert rows[f"trades_{R.SENS}"].iloc[0] == 1 and rows[f"shares_{R.SENS}"].iloc[0] == 5
-    assert rows[f"pnl_{R.SENS}"].iloc[0] == pytest.approx(5 * (1 - 0.48))
+    assert rows[f"pnl_{R.SENS}"].iloc[0] == pytest.approx(5 * (0 - 0.48))  # Down bought, Up won
     # the Up mid moves to 0.55 at +100: the Up bid is replaced at 0.53 (live +100.5); a print at 0.52 fills it
     def move(rel, c):
         up = rel >= 100

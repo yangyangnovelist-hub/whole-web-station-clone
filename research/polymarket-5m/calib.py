@@ -547,6 +547,9 @@ def report(ctx, out_md):
         for r in passed.itertuples(index=False):
             if not (np.isfinite(r.pnl_taker) and r.pnl_taker > 0):
                 L.append(f"  - {cell_name(r.qb, r.tb, r.type)}：按吃单扣费后 V 每份 {_c(r.pnl_taker)}¢ ≤ 0。")
+            if np.isfinite(r.gap) and r.gap <= 0:
+                L.append(f"  - {cell_name(r.qb, r.tb, r.type)}：V 上 q − p = {_c(r.gap, 1)}¢ ≤ 0，市场价并不低于模型；"
+                         f"赚的是实际结果（成交加权胜率 {100 * r.result:.1f}%）高于价格（{100 * r.p:.1f}¢），不是模型比市场准。")
     g = ctx["gap"]
     L.append(f"- **差规则**（q − p ≥ m，不分格）：D 选 m = {100 * g['m']:.0f}¢（D 上 t 最大）；D：每份 {_c(g['d']['pnl'])}¢，"
              f"t {_t(g['d']['t'], g['d']['markets'])}，单侧 p {_p(g['d']['p1'])}，{int(g['d']['markets'])} 个市场 → "
