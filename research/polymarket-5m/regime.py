@@ -294,3 +294,56 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
+
+
+DELAYS = (0, 1, 2, 5, 10, 30)
+
+
+def calibration(f, j, delays=DELAYS, z0=2.0):
+    """Driftless-model residual after a jump, Binance only: for every jump with 240..15 s left in
+    its 5 m window, P(side) from binary.prob_up (the closing 60 s TWAP of log prices against the
+    opening one, the trailing sigma, no drift) at d seconds after the jump second, against whether
+    the side won. A positive mean residual (won - P) means a market priced like the driftless
+    model underprices the side of the jump even d seconds late."""
+    import binary as bo
+    lp = f["lp"].to_numpy()
+    sec0 = int(f.index[0])
+    csum = np.concatenate([[0.0], np.cumsum(np.nan_to_num(lp))])
+    rows = []
+    for s, sign, sg, ivrv, vr10, period in zip(j["sec"], j["sign"], f["sigma"].reindex(j["sec"]).to_numpy(),
+                                                j["ivrv"], j["vr10"], j["period"]):
+        S = (s // 300) * 300
+        tl = S + 300 - s
+        if not (15 <= tl <= 240) or S - 60 - sec0 < 0 or S + 300 - sec0 >= len(lp):
+            continue
+        i0 = S - sec0
+        strike = (csum[i0] - csum[i0 - 60]) / 60  # log prices of the 60 s before the open
+        settle = (csum[i0 + 300] - csum[i0 + 240]) / 60
+        won = float((settle >= strike) == (sign > 0))
+        for d in delays:
+            u = s + d
+            if u >= S + 300:
+                continue
+            t = u - S
+            k = u - sec0
+            lo = max(i0 + 240, 0)
+            known = csum[k + 1] - csum[lo] if k >= lo else 0.0
+            p = float(bo.prob_up(lp[k], strike, sg, t, known_sum=known))
+            ps = p if sign > 0 else 1 - p
+            rows.append((s, d, ps, won, ivrv, vr10, period, tl))
+    return pd.DataFrame(rows, columns=["sec", "d", "p", "won", "ivrv", "vr10", "period", "tl"])
+
+
+def calibration_table(c, feat="ivrv"):
+    cut = cuts(c.loc[(c["period"] == "A") & (c["d"] == 0), feat])
+    c = c.assign(q=bucket(c[feat].to_numpy(), cut), res=c["won"] - c["p"])
+    L = [f"| {feat} 五分位 | 段 | " + " | ".join(f"晚 {d} 秒" for d in DELAYS) + " |", "|---|---|" + "---:|" * len(DELAYS)]
+    for q in range(5):
+        for name, sel in (("A", c["period"] == "A"), ("B+C+S", c["period"] != "A")):
+            cells = []
+            for d in DELAYS:
+                g = c[(c["q"] == q) & sel & (c["d"] == d)]
+                m, se, n = se_mean(g["res"].to_numpy())
+                cells.append(f"{100 * m:+.1f}¢ ±{100 * se:.1f}")
+            L.append(f"| {q + 1} | {name} | " + " | ".join(cells) + " |")
+    return L
