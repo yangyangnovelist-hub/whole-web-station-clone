@@ -25,9 +25,10 @@ import latency as lt
 
 def sends(markets, spot_trades, sigma, book, decision, lags, theta=None, z0=lt.G_Z0,
           tau_lo=lt.G_TAU_LO, anchor=2.0, every=2.0):
-    """One row per order the pilot's rule would send: candidate prints as gated_trades (H prior),
-    sent when the edge at t0 + decision clears theta, then for each lag whether the edge still
-    clears theta at t0 + lag (filled), the ask and size then, and the outcome."""
+    """One row per candidate print (as gated_trades, H prior) with a quote at t0 + decision: its
+    edge then (sent when it clears theta; the next candidate counts only `every` s after a send),
+    and for each lag whether the edge still clears theta at t0 + lag (filled), the ask and size
+    then, and the outcome."""
     from scipy.stats import norm
     theta = lt.G_THETA if theta is None else theta
     ts = spot_trades["trade_ts"].to_numpy()
@@ -65,16 +66,18 @@ def sends(markets, spot_trades, sigma, book, decision, lags, theta=None, z0=lt.G
                     book.across_close(m.market_id, t0, t0 + max(lags)):
                 continue
             pd_, _ = book.side_ask(m.market_id, t0 + decision, side)
-            if not (np.isfinite(pd_) and 0.02 <= pd_ <= 0.98) or fair - pd_ - bo.taker_fee(pd_) < theta:
+            if not (np.isfinite(pd_) and 0.02 <= pd_ <= 0.98):
                 continue
+            edge_d = fair - pd_ - bo.taker_fee(pd_)
             row = {"market_id": m.market_id, "t": t0, "side": side, "fair": fair, "ask_d": pd_,
-                   "won": float(m.winner == side)}
+                   "edge_d": edge_d, "sent": bool(edge_d >= theta), "won": float(m.winner == side)}
             for lag in lags:
                 px, size = book.side_ask(m.market_id, t0 + lag, side)
                 fill = bool(np.isfinite(px) and fair - px - bo.taker_fee(px) >= theta)
                 row[f"fill{lag:g}"], row[f"ask{lag:g}"], row[f"size{lag:g}"] = fill, px, size
             rows.append(row)
-            next_t = t0 + every
+            if row["sent"]:
+                next_t = t0 + every
     return pd.DataFrame(rows)
 
 
@@ -83,6 +86,31 @@ def run(root, decision, lags):
     return lt._per_recording(dirs, lt.G_SINCE, lt.G_SPOT,
                              lambda mk, sp, sg, bk: sends(mk, sp, sg, bk, decision, lags),
                              ["coin", "market_id", "t"], [])
+
+
+def ev_per_send(t, lag, theta_send, theta_lim, shares=None):
+    """Mean P&L per sent order (cents a share, or dollars with `shares` = cap per order) when an
+    order is sent if the decision-time edge >= theta_send, with its limit at fair - theta_lim
+    (it fills if the ask at the match leaves an edge >= theta_lim), the rest are killed."""
+    s = t[t["edge_d"] >= theta_send].sort_values(["market_id", "t"])
+    if not len(s):
+        return np.nan, np.nan, 0
+    keep, last_m, last_t = [], None, -np.inf  # a market's next send at least `every` (2 s) later
+    for m, tt in zip(s["market_id"], s["t"]):
+        if m != last_m:
+            last_m, last_t = m, -np.inf
+        ok = tt >= last_t + 2.0
+        keep.append(ok)
+        if ok:
+            last_t = tt
+    s = s[np.array(keep)]
+    px = s[f"ask{lag:g}"]
+    fee = bo.taker_fee(px)
+    fill = np.isfinite(px) & (s["fair"] - px - fee >= theta_lim)
+    pnl = np.where(fill, s["won"] - px - fee, 0.0)
+    if shares is not None:
+        pnl = pnl * np.minimum(s[f"size{lag:g}"].fillna(0), shares)
+    return float(np.mean(pnl)), float(fill.mean()), len(s)
 
 
 def report(t, decision, lags):
@@ -94,6 +122,7 @@ def report(t, decision, lags):
          "| 撮合延迟 L | 成交率 | 成交的每份 | 至少 5 份时的成交率 | 10 张里成交 ≤ 1 张的概率 |",
          "|---|---:|---:|---:|---:|"]
     from scipy.stats import binom
+    allc, t = t, t[t["sent"]] if len(t) else t
     for lag in lags:
         if not len(t):
             break
@@ -102,6 +131,42 @@ def report(t, decision, lags):
         px = t.loc[f, f"ask{lag:g}"]
         ev = (t.loc[f, "won"] - px - bo.taker_fee(px)).mean() if f.any() else np.nan
         L.append(f"| {lag:g} 秒 | {f.mean():.0%} | {100 * ev:+.1f}¢ | {f5.mean():.0%} | {binom.cdf(1, 10, f.mean()):.3f} |")
+    if not len(allc):
+        return "\n".join(L) + "\n"
+    days = (allc["t"].max() - allc["t"].min()) / 86400
+    lims = (0.12, 0.09, 0.06, 0.04, 0.02, 0.0)
+    L += ["", "## 执行策略：触发时边际 ≥ 12¢ 才发，限价放到 公平价 − θ（每张发出的单平均赚多少，¢/份；括号里是成交率）", "",
+          "| 撮合延迟 L | " + " | ".join(f"θ = {100 * x:.0f}¢" for x in lims) + " |", "|---|" + "---:|" * len(lims)]
+    for lag in lags:
+        cells = []
+        for lim in lims:
+            ev, fr, _ = ev_per_send(allc, lag, 0.12, lim)
+            cells.append(f"{100 * ev:+.2f}（{fr:.0%}）")
+        L.append(f"| {lag:g} 秒 | " + " | ".join(cells) + " |")
+    sends = (0.06, 0.09, 0.12, 0.15)
+    L += ["", "## 发单门槛和限价一起换（每天的钱，美元；每张最多 20 份、不超过卖一挂单量）", "",
+          f"录制覆盖约 {days:.1f} 天。", "",
+          "| 撮合延迟 L | 发单门槛 | " + " | ".join(f"θ = {100 * x:.0f}¢" for x in lims) + " |", "|---|---|" + "---:|" * len(lims)]
+    for lag in (0.3, 0.45):
+        if lag not in lags:
+            continue
+        for snd in sends:
+            cells = []
+            for lim in lims:
+                if lim > snd:
+                    cells.append("–")
+                    continue
+                ev, _, n = ev_per_send(allc, lag, snd, lim, shares=20)
+                cells.append(f"{ev * n / max(days, 1e-9):+.0f}")
+            L.append(f"| {lag:g} 秒 | {100 * snd:.0f}¢ | " + " | ".join(cells) + " |")
+    late = allc[~allc["sent"]]
+    L += ["", "## 触发时还不够便宜、撮合时才变便宜的那些（实盘看不到、不会发；回测曲线把它们也算进去了）", "",
+          "| 撮合延迟 L | 笔数 | 每份 |", "|---|---:|---:|"]
+    for lag in lags:
+        f = late[f"fill{lag:g}"].astype(bool)
+        px = late.loc[f, f"ask{lag:g}"]
+        ev = (late.loc[f, "won"] - px - bo.taker_fee(px)).mean() if f.any() else np.nan
+        L.append(f"| {lag:g} 秒 | {int(f.sum()):,} | {100 * ev:+.1f}¢ |")
     return "\n".join(L) + "\n"
 
 

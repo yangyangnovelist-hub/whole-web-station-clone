@@ -426,11 +426,16 @@ def test_fill_rate_tracks_the_stale_ask(export, tmp_path, monkeypatch):
     (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
     monkeypatch.setattr(lt, "G_SINCE", "2026-09-01")
     t = fr.run(tmp_path / "rec", 0.11, [0.3, 0.4])
+    t = t[t["sent"]]
     main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
     assert len(main) == N and (main["ask0.3"] == 0.50).all() and (main["ask0.4"] == 0.70).all()
     assert main["fill0.3"].all() and main["fill0.4"].all()
     monkeypatch.setattr(lt, "G_THETA", 0.30)
     t = fr.run(tmp_path / "rec", 0.11, [0.3, 0.4])
-    main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
+    main = t[t["sent"] & np.isclose((t["t"] - S0) % 300, 100.05)]
     assert len(main) == N and main["fill0.3"].all() and not main["fill0.4"].any()
-    assert "| 0.4 秒 | " in fr.report(t, 0.11, [0.3, 0.4])
+    text = fr.report(t, 0.11, [0.3, 0.4])
+    assert "| 0.4 秒 | " in text and "执行策略" in text
+    # a looser limit (theta 0) fills the 0.70 ask at 0.4 s too: every sent order fills
+    ev, rate, n = fr.ev_per_send(t, 0.4, 0.30, 0.0)
+    assert n >= N and rate > 0.9
