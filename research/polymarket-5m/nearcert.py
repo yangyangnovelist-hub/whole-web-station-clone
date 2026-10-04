@@ -44,6 +44,11 @@ Conservative choices where NEARCERT.md is silent (written down before the run):
   its period), so the week "March 9-15, 2026" and the month March 2026 stay with resolved.py.
 - Rule check is strict: any feature differing from the 2026 rule excludes the market (a missing or
   unparseable description too); the rule table lists signatures by kind and month.
+- A noon-kind market (above / range / updown_day) whose Gamma endDate is not 12:00 ET of its day is
+  excluded as end_mismatch: rs.checkpoints anchors "60 / 30 / 10 / 5 / 1 minutes before the end" on
+  endDate, so these markets' checkpoints would not be that far before the settlement candle (in this
+  period 77 range markets of 2025-11-02 .. 11-08 end at 11:00 ET, 61-121 minutes before it, and 44 of
+  2025-11-17 .. 11-20 at 16:00 ET, after it). nearcert_fwd.py skips the same markets (end_mismatch).
 - The noon candle convention is NOT carried over from resolved.py; rs.decide picks it again from this
   period's official outcomes and both mismatch counts are reported.
 - Verdict (NEARCERT.md): the pooled row of [0.95, 0.99), all five checkpoints, Binance-settled kinds
@@ -427,6 +432,18 @@ def decide_checked(mk, spot):
     return out, conv, mism
 
 
+def exclude_end_mismatch(mk):
+    """mk with excluded = 'end_mismatch' for the noon kinds still in (excluded == '') whose Gamma endDate
+    is not 12:00 ET of their day (see the module notes)."""
+    mk = mk.copy()
+    noon = mk["kind"].isin(NOON_KINDS) & (mk["excluded"] == "")
+    if noon.any():
+        want = np.array([lad.noon_et(date.fromisoformat(d)) for d in mk.loc[noon, "day"]], float)
+        bad = mk.loc[noon, "end"].to_numpy(float) != want
+        mk.loc[mk.index[noon.to_numpy()][bad], "excluded"] = "end_mismatch"
+    return mk
+
+
 def measure(mk, spot, trades):
     """(checkpoints, by checkpoint, by kind, joined trades, by month) - rs.checkpoints + rs.near_table."""
     cp = rs.checkpoints(mk, spot)
@@ -659,6 +676,13 @@ def report(ctx, out_md):
     exc = ex.groupby([ex["kind"], head]).size()
     L.append("\n- 排除：" + "；".join(f"{k} {why} {n}" for (k, why), n in exc.items()) + f"；共 {len(mk):,} 个市场。"
              + "hit_daily 2026-03-05 才开始；updown_4h 2025-10-15 才开始（冬令时按 ET 零点起算，另查了 01:00 UTC 起的 slug）。")
+    em = mk[mk["excluded"] == "end_mismatch"]
+    if len(em):
+        off = ((em["end"] - [lad.noon_et(date.fromisoformat(d)) for d in em["day"]]) / 3600).round(1)
+        grp = em.assign(off=off.to_numpy()).groupby("off")["day"].agg(["min", "max", "size"])
+        L.append("- end_mismatch = Gamma 结束时间不是当天 12:00 ET，“结束前 N 分钟”的时点不在结算 K 线前 N 分钟，剔除"
+                 "（前向检验同样处理）：" + "；".join(f"{int(r['size'])} 个结束于 12:00 ET {h:+g} 小时（{r['min']}..{r['max']}）"
+                                            for h, r in grp.iterrows()) + "。")
     notes = ctx["notes"]
     L.append(f"- 搜索：public-search {notes.get('search_pages')} 页、{notes.get('search_hit_slugs')} 个 hit slug；"
              f"标题解析不了的 hit 市场 {len(notes.get('hit_window_unparsed') or [])} 个"
@@ -823,6 +847,7 @@ def run(args, log=print):
         return
     # ------------------------------------------------ decide (rule-checked markets only)
     mk, conv, mism = decide_checked(mk, spot)
+    mk = exclude_end_mismatch(mk)
     if hasattr(rs, "risk_flags"):
         mk["risk"] = rs.risk_flags(mk)
     log(f"noon convention mismatches {mism}; using {conv}; excluded {mk['excluded'].value_counts().to_dict()}")
