@@ -165,6 +165,24 @@
       "notes": "The robust source-time audit keeps both feeds shadow-only. Deribit had a positive candidate-level median receipt lead in development and the later audit; Binance perpetual raw trades did not. The combined race now requires a full H execution replay over newly co-recorded Polymarket L2 before any activation decision."
     },
     {
+      "id": "US-013",
+      "title": "Test the early settlement-proxy lane",
+      "description": "As the account owner, I want the delayed Chainlink settlement average reconstructed from faster public spot and index feeds so that a nearly fixed final outcome can be tested against still-live Polymarket asks without confusing feed latency with executable profit.",
+      "acceptanceCriteria": [
+        "Use the exact received Chainlink history for the opening 61-second average and estimate the closing seconds only from receipt-causal Coinbase, Kraken, Bitstamp, Binance, OKX and Bybit spot values plus the Deribit BTC index",
+        "Freeze venue offsets and a conservative residual-error bound on pre-holdout data; never calibrate them on the Monday US-session holdout",
+        "Signal only in the final seconds after every settlement-window second is already observable through the faster proxies, and require the projected closing-minus-opening margin to exceed the frozen error bound",
+        "Compare the proxy signal with a delayed-Chainlink-only baseline on direct dual-token L2 at 300 and 500 milliseconds, at least five shares and real taker fees",
+        "Report signals, sends, fills, fill rate, direction accuracy, net EV per share, PnL, residual calibration and source ablations; reject if profit disappears without any one venue or under a one-second timing placebo",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "Sunday calibration found the six-spot median about 2.6 seconds ahead of the received Chainlink stream with 0.15 bp mean absolute level error; Deribit index was 1.6-2.1 seconds ahead with 0.22 bp error. These are calibration facts, not trading edge. The co-recorded Monday Polymarket L2 is the first executable holdout."
+    },
+    {
       "id": "US-010",
       "title": "Run one untouched multi-day blind jump-prediction test",
       "description": "As the account owner, I want the chosen predictor tested once on data recorded after every feature, model and threshold is frozen so that the reported precision is genuinely forward evidence.",
@@ -177,7 +195,7 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 8,
+      "priority": 9,
       "passes": false,
       "notes": "The active research recorder is data-only; no credentials or order path may be introduced."
     },
@@ -193,7 +211,7 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 9,
+      "priority": 10,
       "passes": false,
       "notes": "No pass means no deployment."
     }
