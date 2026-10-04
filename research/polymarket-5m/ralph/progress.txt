@@ -14,7 +14,11 @@ US-006 current freeze: closed UTC hours 20261004T14..15 produced 137,941 grid ro
 
 US-007 complete with rejection: seven label-blind mechanistic rules were frozen on hour 14 and scored on the unseen 15:00..15:45 interval. Validation results were barrier spot sweep 0/27, perpetual lead 1/28, Deribit lead 1/29, cross-venue velocity 1/11, depth/flow 0/15, all-medium 0/1 and strict consensus 0 alerts. Every observed EV was negative and no family-adjusted confidence gate passed. The 15:45..15:59 test split remains unread. Deribit's measured local receipt lead is therefore retained as an execution-latency input, not promoted as a 120-220 ms prediction signal.
 
-Next: US-008 compares maintained logistic and tree estimators on the same causal features, with a two-stage arrival/direction design, validation-only calibration, source ablations and direction/time-shift controls. No test split may be read until one model is frozen.
+US-008 complete with rejection: six two-stage scikit-learn candidates used 46,651 training rows, 12,665 calibration rows and 25,330 later evaluation rows; 72 model/operating-point choices were family-corrected. The best diagnostic candidate, depth-2 gradient boosting, hit 1/35 (2.86%, family-adjusted Wilson lower 0.21%, -2.21c/share assumed EV); its chronological halves were 1/20 and 0/15. The other five models hit 0-1 of 56-160 alerts. No candidate beat the mechanistic diagnostic baseline or passed the direction/time-shift controls. Split code 3 remains untouched.
+
+US-009 closed without training: the freeze has only 65 target jumps and neither transparent nor maintained tree models found a positive later-validation signal. The preregistered data/signal prerequisite for TLOB or LOBFrame is absent, so a sequence model would be unjustified capacity rather than evidence.
+
+Next: treat Deribit and Binance perpetual as receipt-race execution inputs, not predictors; quantify their out-of-sample local lead over the Binance spot trigger and integrate only a verified lead into the live engine. The 120-220 ms prediction route has no promotable candidate, so US-010 remains unopened rather than consuming its blind split.
 
 Completed: US-001/US-002. Frozen zoo100 #27 was rejected at every latency (400 ms: 396 fills, -1.19¢/share, exact p=1). CrossVenue-120 and partial-cancel were also rejected by placebo/direction audits; do not revive them.
 

@@ -127,8 +127,8 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": "Optimise actionable precision and confidence bounds, not ROC AUC or full-grid accuracy."
+      "passes": true,
+      "notes": "Family rejected without reading split code 3. Six scikit-learn two-stage candidates (logistic, histogram gradient boosting and compact gradient boosting) used 46,651 training rows; the first 12,665 chronological validation rows calibrated scores and chose among 12 operating points per model, and the next 25,330 rows were evaluation. After correction across 72 model/threshold choices, the best diagnostic candidate was gradient boosting depth 2 at 1/35 hits (2.86%, family-adjusted Wilson lower 0.21%, -2.21c/share assumed EV); its two evaluation halves were 1/20 and 0/15. Other candidates produced 0-1 hits from 56-160 alerts. Every one-second time-shift control had zero hits, no model beat the 9.09% mechanistic diagnostic baseline, and no model was promoted."
     },
     {
       "id": "US-009",
@@ -143,8 +143,8 @@
         "Typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": "DeepLOB literature warns that headline classification accuracy need not translate into complete executable transactions; trading-style alert metrics remain primary."
+      "passes": true,
+      "notes": "Closed without training: only 65 target jumps exist in the two-hour causal freeze, while both transparent rules and six maintained tree/logistic models were far below break-even on later validation (best 1/35). The preregistered prerequisite of sufficient complete L2 sequences plus non-zero validated signal is therefore absent; fitting TLOB/LOBFrame now would only add model capacity to a tiny failed sample. Reopen only after multiple fresh UTC days provide enough target events and a simpler baseline shows positive validation signal."
     },
     {
       "id": "US-010",
