@@ -196,12 +196,12 @@ def test_walk_forward_never_sees_the_block_or_later(fast_models):
     W = R.add_trailing(synth(seed=3, start="2026-05-25", end="2026-07-16"), ["follow"])
     env = R.env_features(W)
     X = W[R.features_for("follow", env)].to_numpy(float)
-    y = W["pnl_follow"].to_numpy(float)
+    y = R.per_share(W, "follow")
+    assert np.isnan(y[W["shares_follow"].to_numpy() == 0]).all()            # only traded windows are labels
     start = W["start"].to_numpy(float)
     sc, parts, pm = R.walk_forward(X, y, start)
     blocks = [(b0, b1) for b0, b1, oos in R.a_blocks() if oos]
     assert np.isnan(sc[start < blocks[0][0]]).all() and np.isfinite(sc[start >= blocks[0][0]]).all()
-    assert np.nanmax(np.abs(sc)) <= 1.0
     rng = np.random.default_rng(0)
     for b0, b1 in (blocks[0], blocks[3]):
         te = (start >= b0) & (start < b1)
@@ -291,15 +291,19 @@ def test_planted_switch_beats_every_always_on_out_of_sample(planted):
     assert b["rules"]["switch"]["revert"].mean() < 0.2
     # C (complete, B passed): opened once, recorded, passes
     assert res["c_open"] and res["c_pass"] and res["c_clean"]
-    rec = json.loads((planted["dir"] / "regime-frozen-c.json").read_text(encoding="utf-8"))
-    assert rec["c_pass"] and rec["frozen_made"] == spec["made"]
+    led = json.loads((planted["dir"] / "regime-ledger.json").read_text(encoding="utf-8"))
+    rec = led["c"]
+    assert rec["c_pass"] and rec["frozen_made"] == spec["made"] and not rec["partial"]
+    assert len(led["b_looks"]) == 1 and led["b_looks"][0]["passed"]
 
 
 def test_report_units_and_sections(planted):
     text = planted["text"]
     for s in ("## 判定", "## 冻结的规则", "### A 段", "### B 段", "### C 段", "## 每个状态下的每个策略",
               "胜率", "盈亏比", "每份盈亏", "份/天", "买入花费 $/天", "利润 $/天", "占用资金 $", "最大回撤 $",
-              "趋势·低波·DVOL>RV", "震荡·高波·DVOL≤RV", "手工趋势/震荡切换", "A 段最好的一个一直开", "**通过**"):
+              "趋势·低波·DVOL>RV", "震荡·高波·DVOL≤RV", "手工趋势/震荡切换", "A 段最好的一个一直开", "**通过**",
+              "峰值占用 $", "学习切换（不含 H", "上限", "样本内", "B 段的天（窗口数", "C 段的天（窗口数",
+              "预测每份盈亏 ÷ 预测每份盈亏的波动"):
         assert s in text, s
     assert "¢" in text and "$" in text
     written = (planted["dir"] / "regime-learn.md").read_text(encoding="utf-8")
@@ -311,11 +315,12 @@ def test_C_is_judged_once(tmp_path, fast_models):
     fz = tmp_path / "frozen.json"
     res1, spec1, _ = R.run(W, tmp_path / "o.md", fz, log=quiet)
     assert res1["b_pass"] and res1["c_open"] and res1["c_clean"]
-    rec1 = json.loads(R.c_log_path(fz).read_text(encoding="utf-8"))
-    # the same data again: the same verdict, the first record is kept
+    led1 = json.loads(R.ledger_path(fz).read_text(encoding="utf-8"))
+    rec1 = led1["c"]
+    # the same data again: the same verdict, the first record is kept, the same B look is not added twice
     res2, spec2, _ = R.run(W, tmp_path / "o.md", fz, log=quiet)
     assert spec2["made"] == spec1["made"] and res2["c_pass"] == res1["c_pass"] and res2["c_clean"]
-    assert json.loads(R.c_log_path(fz).read_text(encoding="utf-8")) == rec1
+    assert json.loads(R.ledger_path(fz).read_text(encoding="utf-8")) == led1 and not res2["b_prior"]
     # C rows changed afterwards: the first opening stays the verdict, the new numbers are flagged
     W3 = W.copy()
     c = W3["start"].to_numpy() >= ts("2026-08-16")
@@ -323,29 +328,53 @@ def test_C_is_judged_once(tmp_path, fast_models):
     res3, _, text3 = R.run(W3, tmp_path / "o.md", fz, log=quiet)
     assert res3["c_clean"] is False and res3["c_pass"] == rec1["c_pass"]
     assert "以首次为准" in text3
-    # a new freeze cannot spend C again cleanly
+    # a new freeze cannot spend C again cleanly, whether the old file is deleted or a new name is used
     fz.unlink()
     res4, _, text4 = R.run(W, tmp_path / "o.md", fz, log=quiet)
     assert res4["c_pass"] is None and "不是干净的锁箱" in text4
+    res5, _, text5 = R.run(W, tmp_path / "o.md", tmp_path / "regime-frozen2.json", log=quiet)
+    assert res5["c_pass"] is None and res5["c_clean"] is False and "不是干净的锁箱" in text5
+    # and every earlier B look of another frozen rule is listed
+    assert len(res5["b_prior"]) >= 2 and "B 段此前还被看过" in text5
+    assert json.loads(R.ledger_path(fz).read_text(encoding="utf-8"))["c"] == rec1
 
 
 def test_C_stays_closed_when_B_fails(tmp_path, fast_models):
     res, spec, text = R.run(synth(seed=8, flip_b=True), tmp_path / "o.md", tmp_path / "f.json", log=quiet)
     assert not res["b_pass"] and not res["c_open"] and "C" not in res["segments"]
     assert "锁箱没开（B 未通过）" in text and "### C 段" not in text and "| C |" not in text
-    assert not R.c_log_path(tmp_path / "f.json").exists()
+    led = json.loads(R.ledger_path(tmp_path / "f.json").read_text(encoding="utf-8"))
+    assert led["c"] is None and len(led["b_looks"]) == 1 and not led["b_looks"][0]["passed"]
 
 
 def test_C_stays_closed_when_incomplete_or_A_changed(tmp_path, fast_models):
     W = synth(seed=7)
-    gap = (W["start"] >= ts("2026-08-20")) & (W["start"] < ts("2026-08-20 14:00"))
+    gap = (W["start"] >= ts("2026-08-20")) & (W["start"] < ts("2026-08-21"))      # an archive not processed
     res, _, text = R.run(W[~gap], tmp_path / "o.md", tmp_path / "f.json", log=quiet)
-    assert res["b_pass"] and not res["c_open"] and "C 段不完整" in text
+    assert res["b_pass"] and not res["c_open"] and "C 段不完整" in text and "08-20" in text
+    assert res["c_missing"] == [ts("2026-08-20") // DAY]
+    assert json.loads(R.ledger_path(tmp_path / "f.json").read_text(encoding="utf-8"))["c"] is None
     # A changed after the freeze: the old frozen file is used, C stays closed
     W2 = W.copy()
     W2.loc[W2["start"] < ts("2026-06-01"), "pnl_H"] += 0.5
     res2, _, text2 = R.run(W2, tmp_path / "o.md", tmp_path / "f.json", log=quiet)
     assert not res2["fp_ok"] and not res2["c_open"] and "指纹不符" in text2
+
+
+def test_C_opens_on_the_thin_days_the_dataset_has(tmp_path, fast_models):
+    """The real C days 08-16 .. 08-20 have 63, 48, 19, 11 and 109 markets: every C day with a window is
+    a whole day-cluster, so C opens when B passes (C_MIN_WINDOWS = 1, fixed before any B result)."""
+    W = synth(seed=7)
+    rng = np.random.default_rng(3)
+    keep = np.ones(len(W), bool)
+    for d, n in (("2026-08-16", 63), ("2026-08-17", 48), ("2026-08-18", 19), ("2026-08-19", 11), ("2026-08-20", 109),
+                 ("2026-08-14", 65), ("2026-08-15", 77)):
+        on = np.flatnonzero((W["start"] >= ts(d)) & (W["start"] < ts(d) + DAY))
+        keep[rng.choice(on, size=len(on) - n, replace=False)] = False
+    res, _, text = R.run(W[keep], tmp_path / "o.md", tmp_path / "f.json", log=quiet)
+    assert res["c_complete"] and res["b_pass"] and res["c_open"] and not res["c_partial"]
+    assert res["segments"]["C"]["stats"]["switch"]["d_n"] == 14
+    assert "08-19（11）" in text and "08-14（65）" in text
 
 
 # --------------------------------------------------------------------------- rules and units
@@ -354,15 +383,54 @@ def test_hand_switch_and_switch_masks():
     m = R.hand_open(W, list(R.STRATS))
     assert list(m["follow"]) == list(m["direction"]) == [True, False, False, False]
     assert list(m["revert"]) == list(m["maker"]) == [False, True, True, False]
-    assert not m["H"].any() and not m["late"].any()
+    assert m["H"].all() and m["late"].all()       # not tied to trend / range: on in the hand control too
     o = R.switch_open({"H": np.array([0.1, 0.05, np.nan, -0.2])}, 0.05)
     assert list(o["H"]) == [True, False, False, False]
 
 
-def test_score_is_reward_over_risk_and_bounded():
-    s = R.rr_score([0.1, -0.3, 0.5, 0.0, np.nan], [0.5, 0.2, 0.4, 0.0, 1.0])
-    assert s[0] == pytest.approx(0.2) and s[1] == pytest.approx(-1.0) and s[2] == pytest.approx(1.0)
-    assert s[3] == 0.0 and np.isnan(s[4])
+def test_score_is_predicted_per_share_mean_over_predicted_volatility(fast_models):
+    s = R.rr_score([0.1, -0.3, 0.0, np.nan, 0.01], [0.5, 0.2, 0.1, 1.0, 0.0])
+    assert s[0] == pytest.approx(0.2) and s[1] == pytest.approx(-1.5) and s[2] == 0.0 and np.isnan(s[3])
+    assert s[4] == pytest.approx(0.01 / R.EPS_SH)
+    rng = np.random.default_rng(0)
+    n = 3000
+    X = rng.normal(size=(n, 2))
+    y = 0.05 + 0.04 * X[:, 0] + rng.normal(0, 0.1, n) * np.where(X[:, 1] > 0, 2.0, 0.5)
+    f = R.Scorer().fit(X, y)
+    _, mean, vol = f.parts(X)
+    np.testing.assert_allclose(f.score(X), mean / vol)
+    hi, lo = X[:, 1] > 0, X[:, 1] <= 0
+    assert np.median(vol[hi]) > 1.5 * np.median(vol[lo])      # the variance model sees the noisier rows (true: 4x)
+    assert vol.min() >= R.VOL_FLOOR * y.std() - 1e-12
+
+
+def test_a_rare_fat_tailed_strategy_without_signal_is_not_inflated(fast_models):
+    """The review's case: a 'late'-like strategy (4 % of windows, +4c a share mostly, -96c 8 % of the time,
+    losing on average, no signal). With the old score (window $ P&L / its mean |P&L|) such a strategy had
+    a third of its B scores above 0.05 and a quarter above 0.2 on the real 06-02 rows; per share and per
+    unit of predicted volatility (REGIME.md) it stays near 0 and the volatility never drops below half its
+    own sd."""
+    W = synth(seed=11, start="2026-05-25", end="2026-08-16")
+    rng = np.random.default_rng(12)
+    n = len(W)
+    tr = rng.random(n) < 0.04
+    x = np.where(rng.random(n) < 0.08, -0.96, 0.04)
+    W["pnl_late"] = np.where(tr, 5 * x, 0.0)
+    W["trades_late"], W["shares_late"] = tr.astype(float), 5.0 * tr
+    W["cost_late"], W["caph_late"] = 5 * 0.96 * tr, 0.0
+    W, _, strats, _ = R.load_windows(W, log=quiet)
+    W = R.add_trailing(W, strats)
+    A = W[W["segment"] == "A"].reset_index(drop=True)
+    B = W[W["segment"] == "B"].reset_index(drop=True)
+    env = R.env_features(A)
+    final = R.fit_final(A, ["late"], env)
+    sc, _ = R.score_segment(final, B, ["late"], env)
+    late = sc["late"]
+    assert np.isfinite(late).all()
+    assert (late > 0.2).mean() < 0.06 and (late > 0.05).mean() < 0.2 and np.median(late) < 0
+    _, _, vol = final["late"].parts(B[R.features_for("late", env)].to_numpy(float))
+    y = R.per_share(A, "late")
+    assert vol.min() >= R.VOL_FLOOR * np.nanstd(y) - 1e-12
 
 
 def test_threshold_is_the_best_A_out_of_sample_daily_mean(planted):
@@ -388,6 +456,7 @@ def test_perf_units():
     assert p["trades"] == pytest.approx(4 / 3) and p["shares"] == pytest.approx(20 / 3)
     assert p["cost"] == pytest.approx(10.5 / 3) and p["pnl_day"] == pytest.approx(2.5 / 3)
     assert p["cap"] == pytest.approx(48 / 72)            # $-hours / (24 x days)
+    assert p["cap_peak"] == pytest.approx(5.0)           # the largest $ bought in one window
     assert p["mdd"] == pytest.approx(0.5)
     assert p["d_n"] == 3 and p["d_mean"] == pytest.approx(2.5 / 3)
     q = R.perf(R.rule_frame(S, {"H": np.ones(4, bool)}), days, ok={"caph": False})
