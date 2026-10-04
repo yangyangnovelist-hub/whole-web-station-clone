@@ -1,5 +1,17 @@
 # Ralph progress
 
+Owner priority (2026-10-04): build an accurate 120–220 ms-ahead Binance 1 bp jump predictor, using a Ralph research loop. New active sequence is US-006 through US-011; the prior H-forward stories remain preserved at lower priority and their safety gates are unchanged.
+
+Immutable failed baseline: the 2026-10-03 07:10:55 UTC to 2026-10-04 07:10:56 UTC screen used eight sources and a 50 ms receive-time grid. Its untouched test produced 259 alerts, one hit, 0.4% precision, 0.1% Wilson lower bound and -2.46 cents/share assumed EV. That test segment is consumed and may never be used for feature, model or threshold selection.
+
+Recon for US-006: the old logistic baseline contains per-venue 50/100/250/500 ms returns, 50/200/500 ms signed flow, spread, top-level/depth imbalance and feed age. It omits the exact 1 bp detector barrier distance, trailing-extremum age, refractory state, event/cancel/depletion velocity and explicit cross-venue residual cascades. These become the first causal feature family before any neural model.
+
+Third-party route: use maintained estimators for tree models. For sequence models, evaluate the official TLOB implementation and FinancialComputingUCL/LOBFrame; only licence-compatible pinned upstream code may be adapted. DeepLOB/TLOB headline classification metrics are not acceptance evidence because the operational literature shows that high direction accuracy need not imply actionable fills.
+
+Data collection: research instance i-0687f70a05cba8147 in eu-west-1a is running data-only raw-recorder v2 on a c7i-flex.large. The original eight sources plus isolated extra public venues are recording; the root volume had 25 GB free at recon. The loop must treat recorder gaps as unavailable, preserve raw data until a verified compact artefact exists, and stop collection before free disk falls below 8 GB. No research story may access the live wallet or order path.
+
+Next: US-006 writes the causal dataset/split manifest and regression tests, then measures the immutable logistic baseline under purged rolling folds without reading a new blind holdout.
+
 Completed: US-001/US-002. Frozen zoo100 #27 was rejected at every latency (400 ms: 396 fills, -1.19¢/share, exact p=1). CrossVenue-120 and partial-cancel were also rejected by placebo/direction audits; do not revive them.
 
 Independent pricing evidence: the predeclared near-certain [0.95,0.99) side passed the unused 2025-09-15..2026-03-13 segment at +2.43¢/share (market-cluster t=6.74, 279 markets). This is not executable proof: the historical test conditions on trades observed in the next 60 seconds and market-wide volume is not our capacity. The forward gate is fixed before its 2026-10-05 sample: Binance features use receipt time only, the market's recorded fee rate, a 500 ms ask with at least five shares, explicit paper fill rate, and a warning that displayed depth omits queue competition.

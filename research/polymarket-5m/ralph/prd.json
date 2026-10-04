@@ -45,7 +45,7 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 3,
+      "priority": 9,
       "passes": false,
       "notes": "Strict current-H V2 is implemented locally: three spot and two futures sockets race by receipt time; raw spot trades and timestamped futures BBO share the production sigma; effective mirrored Up/Down books, partial FAK fills, fixed limits, one order/minute, no reentry after any fill, 15 ms order wire time and a 500 ms primary gate are replayed. CLOB source-clock regressions fail closed. Accumulation preserves every retry from the first recording of each market/latency and rejects overlapping later recordings. The stopping sample requires 1,000 fills over seven UTC days, share-weighted day-cluster 99% lower bound above zero and a Poisson-binomial p-value Bonferroni-corrected across 100 strategies. GitHub-hosted data is audit-only; this story remains open until a fresh artifact validates V2 and an eu-west-1 holdout enters the stopping sample."
     },
@@ -61,7 +61,7 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 4,
+      "priority": 10,
       "passes": false,
       "notes": "Partial-cancel remains rejected on the completed 67-day audit. The strict frozen H audit is also complete on the only raw archive with bookTicker plus per-message dual-token L2: about three hours on one UTC day, 34 immutable bookTicker-first signals, one decision-time send candidate, and zero qualifying fills at 300/350/400/500 ms when a fill requires at least five shares on the direct token ladder at the frozen limit. At every delay, 30 signals had ask above limit, three had no valid limit, and the sole send lacked five surviving shares; EV/share and clustered CI are undefined, PnL is $0, and exact p=1. This audit is deliberately conservative and is not the full deployed retry path: it excludes trade fallback, retries after no-send/kill, mirrored liquidity, and sub-five-share partial fills. It is audit-only, not paper-gate eligible, and H is not promoted. Separately, the predeclared near-certain [0.95,0.99) side passed its unused 2025-09-15..2026-03-13 history segment at +2.43c/share (market-cluster t=6.74, 279 markets), but observed next-60-second trades prove pricing rather than our fill capacity. Its forward gate now uses receipt-time-only Binance inputs, the recorded market fee rate, a 500 ms ask, at least five shares, and reports the queue-unadjusted paper fill rate; it is not promoted until that forward gate and a bounded live calibration pass. The 100-rule zoo has also been corrected to freeze the first decision-time FAK limit and never replace a kill with a later fillable signal; a full 500 ms rerun is queued."
     },
@@ -77,9 +77,107 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 5,
+      "priority": 11,
       "passes": false,
       "notes": "The first H pilot completed 10 FAK sends, 1 fill, 9 kills and realised PnL +$3.149919740025, but trial_edge was null and this is not an alpha pass. The current authorised timestamped-first pilot is at 5/20 sends with zero fills: local receive-to-send p50 is 0.877 ms, exchange source-to-send p50 107.96 ms and send-to-response p50 346.31 ms; no match timestamp exists yet. Five-share target, $5.00 order cap, $5.35 single-position exposure cap and one order/minute remain. At the owner's explicit instruction the realised-loss stops are disabled, while technical latches and unresolved/resting-order protections remain. Public-book paper fills are only a surviving-depth upper bound, so promotion still requires positive real FAK calibration and explicit live authorisation."
+    },
+    {
+      "id": "US-006",
+      "title": "Freeze a causal jump-prediction dataset and evaluation protocol",
+      "description": "As a researcher, I want a receipt-time-causal dataset for the exact Binance 1 bp trigger so that new predictors cannot win through clock leakage, overlapping folds, recorder gaps, or reuse of the consumed test period.",
+      "acceptanceCriteria": [
+        "Preserve the 2026-10-03..04 result of 259 test alerts, one hit, 0.4 percent precision and -2.46 cents per share as a consumed immutable baseline that no later model or threshold may tune against",
+        "Build features only from frames received by each decision timestamp and label the same-direction Binance spot 1 bp detector crossing 120 to 220 milliseconds later in exchange time",
+        "Represent recorder gaps as unavailable sessions rather than no-jump negatives, purge overlapping one-second feature and label windows at every chronological fold boundary, and write a split manifest with source file hashes",
+        "Add exact detector-state precursor features including distance to the up and down 1 bp barriers, age of the trailing extrema, refractory state, trade intensity, book depletion and cross-venue residuals without using future frames",
+        "Tests prove detector parity, receive-time causality, gap exclusion, purge boundaries and deterministic manifests",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "Owner-prioritised on 2026-10-04. The original logistic model used 50 ms snapshots of returns, signed flow, spread, top-level imbalance and age, but omitted the exact detector barrier state, extrema age, update/cancel intensity and cross-venue residual cascade."
+    },
+    {
+      "id": "US-007",
+      "title": "Test preregistered mechanistic jump precursors",
+      "description": "As a researcher, I want transparent microstructure hazard rules tested first so that an accurate warning can be attributed to observable order-flow mechanics rather than an opaque classifier score.",
+      "acceptanceCriteria": [
+        "Freeze a small family combining distance to the 1 bp barrier, spot and perpetual sweep velocity, top-20 depth depletion, signed trade bursts, and multi-venue directional agreement",
+        "Select every threshold only inside purged chronological training and validation folds; score all quiet periods and apply the same five-second alert cooldown",
+        "Report per fold alerts, hits, precision, Wilson lower bound, lead-time distribution, assumed EV, direction placebo and source ablations",
+        "Promote at most one rule only if its validation evidence is stable across time folds; otherwise record the family as rejected",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Do not use the consumed 2026-10-03..04 final test segment to select rules."
+    },
+    {
+      "id": "US-008",
+      "title": "Train precision-first two-stage tree ensembles",
+      "description": "As a researcher, I want a calibrated rare-event hazard model and a separate direction model so that the system can abstain almost always and alert only when both arrival and direction are reliable.",
+      "acceptanceCriteria": [
+        "Reuse maintained open-source estimators rather than implementing boosting from scratch and compare logistic, histogram gradient boosting and one compact gradient-boosted alternative under the same folds",
+        "Separate jump-arrival probability from direction, calibrate on validation only, and choose coverage by Wilson lower bound subject to a preregistered minimum-alert constraint",
+        "Use bounded hyperparameter grids with family-wise correction and publish precision-recall, reliability, alert-rate, regime and source-ablation tables",
+        "Promote at most one frozen ensemble only if it beats the mechanistic baseline on multiple chronological validation folds without failing direction or time-shift placebos",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Optimise actionable precision and confidence bounds, not ROC AUC or full-grid accuracy."
+    },
+    {
+      "id": "US-009",
+      "title": "Evaluate an open-source event-sequence LOB model",
+      "description": "As a researcher, I want one compact sequence model adapted from a maintained LOB research framework so that nonlinear depth and event-order information is tested without building a custom neural architecture.",
+      "acceptanceCriteria": [
+        "Use a licence-compatible maintained project such as LOBFrame or TLOB after recording the exact upstream commit and licence; do not copy unlicensed notebook code",
+        "Feed causal event sequences from Binance spot and perpetual top-20 books plus selected leading venues, preserving receive order, update masks and inter-arrival times",
+        "Train only if US-006 confirms sufficient complete L2 sequences and US-007 or US-008 finds non-zero validation signal; otherwise close this story with a measured rejection reason",
+        "Compare against the frozen mechanistic and tree baselines on identical purged folds and reject the model unless precision and calibration improve after compute and multiple-testing penalties",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "DeepLOB literature warns that headline classification accuracy need not translate into complete executable transactions; trading-style alert metrics remain primary."
+    },
+    {
+      "id": "US-010",
+      "title": "Run one untouched multi-day blind jump-prediction test",
+      "description": "As the account owner, I want the chosen predictor tested once on data recorded after every feature, model and threshold is frozen so that the reported precision is genuinely forward evidence.",
+      "acceptanceCriteria": [
+        "Freeze model artefact, feature schema, source allowlist, threshold, cooldown, target window and report code before naming the holdout files",
+        "Collect at least 30 eligible alerts and enough complete future sessions to cover multiple UTC days; stop safely before the research disk has less than 8 GB free",
+        "Read the blind holdout once and report alerts, hits, precision, 95 percent Wilson lower bound, lead times, assumed EV, regime splits and source health",
+        "Pass only with at least 30 alerts, at least 30 percent precision, a 95 percent Wilson lower bound above 25 percent, positive assumed EV and no failed direction or time-shift control",
+        "Do not treat this screen as a real fill or settlement backtest",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "The active research recorder is data-only; no credentials or order path may be introduced."
+    },
+    {
+      "id": "US-011",
+      "title": "Package a passing predictor as alert-only shadow inference",
+      "description": "As the account owner, I want any genuinely passing model replayed and then run in alert-only shadow mode so that inference latency and drift are measured before any trading decision.",
+      "acceptanceCriteria": [
+        "This story is skipped unless US-010 passes every preregistered blind gate",
+        "Export deterministic inference with bounded memory and measure receive-to-score latency on the eu-west-1 research host",
+        "Run alert-only with no wallet, signer, order factory or credential access and record predictions for later settlement-independent scoring",
+        "Any real-money integration requires a separate explicit user instruction and is outside this Ralph loop",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "No pass means no deployment."
     }
   ]
 }
