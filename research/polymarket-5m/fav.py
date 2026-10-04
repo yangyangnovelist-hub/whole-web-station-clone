@@ -1243,7 +1243,7 @@ def coverage_notes(dec, notes):
                      f"中位数 {((x['end'] - x['open_ts']) / 60).median():.0f} 分钟（p10 {((x['end'] - x['open_ts']) / 60).quantile(0.1):.0f}）。")
         else:
             L.append(f"  - 结束 = 标题时刻 + 1 小时；市场开放在结束前中位数 {((x['end'] - x['open_ts']) / 3600).median():.0f} 小时。")
-        ev1 = x.drop_duplicates("event_slug")
+        ev1 = x[x["end_ok"].astype(bool)].drop_duplicates("event_slug")
         dup = ev1.groupby("end").size()
         if (dup > 1).any():
             ex = ev1[ev1["end"].isin(dup.index[dup > 1])].sort_values("end")["event_slug"].iloc[:2].tolist()
@@ -1265,6 +1265,8 @@ def coverage_notes(dec, notes):
             inside = [m for m in miss if have and m > min(have)]
             parts.append(f"{KIND_CN[k]} 从 {first} 起，之后缺 {len(inside)} 天" + (f"（{', '.join(inside[:4])}{' …' if len(inside) > 4 else ''}）" if inside else ""))
         L.append(f"- {coin}：" + "；".join(parts) + "。")
+    L.append("- 范围（FAV.md 只列了这些）：ETH / SOL / XRP 只用日内四类；它们的每小时“高于”阶梯和周、月触及不在内。"
+             "规则文字逐个市场解析，没有一个和模型假定的结算规则不同（上表“规则不同”全为 0）。")
     sk = notes.get("skipped_events") or []
     L.append(f"- 短 slug 命中去年同日的事件（跳过）{sum('is not this date' in s for s in sk)} 个；其他跳过 {sum('is not this date' not in s for s in sk)} 个。")
     mm = dec[dec["excluded"] == "mismatch"]
