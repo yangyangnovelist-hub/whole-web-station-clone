@@ -1,0 +1,4 @@
+# Changing this file runs .github/workflows/polymarket-ladder-arb.yml (ladder_arb.py on every
+# polymarket-ladder recording so far; commits real/ladder-arb.md). Market data only, no orders.
+requested: 2026-10-04 structural arbitrage (monotone / nested / neg-risk / box baskets as a taker) and liquidity-reward economics on the BTC ladder recordings; meaningful once the first full 5.5 h recording (around 15:00 UTC) has uploaded ladder-<run id>
+requested: 2026-10-04T15:12Z first 5.5 h ladder recording (run 37192254446) is uploaded
