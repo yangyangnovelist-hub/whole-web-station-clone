@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import heapq
 import json
 import math
 from array import array
 from bisect import bisect_right
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
@@ -34,10 +35,17 @@ SPOT_SOURCES = ("coinbase", "kraken", "bitstamp", "bn_spot", "okx", "bybit_spot"
 DERIBIT_SOURCE = "deribit_index"
 BASE_VARIANT = "proxy_spot6_deribit"
 BASELINE_VARIANT = "delayed_chainlink"
-TIMING_VARIANT = "proxy_decision_1s_earlier"
+TIMING_VARIANT = "proxy_execution_250ms_delayed"
 MIN_STOPPING_FILLS = 1_000
 MIN_STOPPING_DAYS = 7
 FAMILY_TESTS = 100
+FREEZE_PATH = Path(__file__).with_name("forward") / "settlement-proxy-freeze.json"
+CALIBRATION_PIN = Path(__file__).with_name("forward") / "settlement-proxy-calibration.json"
+VERDICT_PIN = Path(__file__).with_name("forward") / "settlement-proxy-verdict.json"
+# Updated only before the untouched holdout starts.  load_freeze() rejects any
+# later edit to the preregistered protocol instead of silently accepting a new
+# fingerprint.
+EXPECTED_FREEZE_SHA256 = "926304634d35483f233b2da9b0f185dec9880101430571ae151475b7e97bb502"
 
 
 @dataclass(frozen=True)
@@ -67,7 +75,7 @@ class FrameState:
 @dataclass(frozen=True)
 class ProxyConfig:
     decision_lead_ms: float = 1_000.0
-    timing_placebo_lead_ms: float = 2_000.0
+    timing_placebo_delay_ms: float = 250.0
     max_quote_age_ms: float = 2_000.0
     lag_grid_ms: tuple[float, ...] = tuple(float(value) for value in range(-2_500, 1_001, 100))
     calibration_fit_fraction: float = 0.60
@@ -282,6 +290,8 @@ def _fit_group(
     chainlink: Sequence[ChainlinkPoint],
     sources: Sequence[str],
     config: ProxyConfig,
+    *,
+    latest_receive_ms: float = math.inf,
 ) -> tuple[float, dict[str, float], float]:
     best: Optional[tuple[float, float, dict[str, float], int]] = None
     for query_offset in config.lag_grid_ms:
@@ -290,8 +300,11 @@ def _fit_group(
             residuals = []
             source_series = series[source]
             for point in chainlink:
+                query_ms = point.payload_ms + query_offset
+                if query_ms >= latest_receive_ms:
+                    continue
                 value = source_series.at(
-                    point.payload_ms + query_offset, max_age_ms=config.max_quote_age_ms,
+                    query_ms, max_age_ms=config.max_quote_age_ms,
                 )
                 if value is not None:
                     residuals.append(math.log(value) - math.log(point.value))
@@ -303,9 +316,12 @@ def _fit_group(
         errors = []
         for point in chainlink:
             adjusted = []
+            query_ms = point.payload_ms + query_offset
+            if query_ms >= latest_receive_ms:
+                continue
             for source in sources:
                 value = series[source].at(
-                    point.payload_ms + query_offset, max_age_ms=config.max_quote_age_ms,
+                    query_ms, max_age_ms=config.max_quote_age_ms,
                 )
                 if value is None:
                     break
@@ -334,7 +350,9 @@ def _component_value(
     config: ProxyConfig,
 ) -> Optional[float]:
     query_ms = payload_ms + query_offset_ms
-    if query_ms > decision_ms + 1e-9:
+    # Every decision/cutoff is exclusive: a quote received at the exact
+    # decision instant is not information available before that instant.
+    if query_ms >= decision_ms:
         return None
     adjusted = []
     for source in sources:
@@ -406,11 +424,13 @@ def _validation_mae(
     sources: Sequence[str],
     offsets: Mapping[str, float],
     config: ProxyConfig,
+    *,
+    latest_receive_ms: float,
 ) -> float:
     errors = []
     for point in records:
         estimate = _component_value(
-            point.payload_ms, math.inf, series, sources, query_offset_ms, offsets, config,
+            point.payload_ms, latest_receive_ms, series, sources, query_offset_ms, offsets, config,
         )
         if estimate is not None:
             errors.append(abs(math.log(estimate / point.value)) * 10_000.0)
@@ -435,8 +455,12 @@ def fit_calibration(
     split = min(split, len(eligible) - config.min_fit_points)
     fit, validation = eligible[:split], eligible[split:]
     fit_end_ms = validation[0].payload_ms
-    spot_query, spot_offsets, _ = _fit_group(series, fit, SPOT_SOURCES, config)
-    deribit_query, deribit_offsets, _ = _fit_group(series, fit, (DERIBIT_SOURCE,), config)
+    spot_query, spot_offsets, _ = _fit_group(
+        series, fit, SPOT_SOURCES, config, latest_receive_ms=fit_end_ms,
+    )
+    deribit_query, deribit_offsets, _ = _fit_group(
+        series, fit, (DERIBIT_SOURCE,), config, latest_receive_ms=fit_end_ms,
+    )
     provisional = ProxyCalibration(
         calibration_end_ms=calibration_end_ms,
         fit_end_ms=fit_end_ms,
@@ -456,9 +480,13 @@ def fit_calibration(
     last_boundary = int(calibration_end_ms // 300_000.0) * 300_000
     combined_point_errors = []
     for point in validation:
+        diagnostic_decision_ms = min(
+            point.payload_ms + 1_000.0,
+            math.nextafter(calibration_end_ms, -math.inf),
+        )
         estimate = estimate_proxy_window(
             point.payload_ms + 2_000.0,
-            point.payload_ms + 1_000.0,
+            diagnostic_decision_ms,
             series,
             provisional,
             config,
@@ -509,14 +537,78 @@ def fit_calibration(
         validation_windows=len(residuals),
         spot_validation_mae_bp=_validation_mae(
             validation, series, spot_query, SPOT_SOURCES, spot_offsets, config,
+            latest_receive_ms=calibration_end_ms,
         ),
         deribit_validation_mae_bp=_validation_mae(
             validation, series, deribit_query, (DERIBIT_SOURCE,), deribit_offsets, config,
+            latest_receive_ms=calibration_end_ms,
         ),
         combined_validation_mae_bp=(sum(combined_point_errors) / len(combined_point_errors)
                                     if combined_point_errors else math.nan),
         ablation_residual_bounds_bp=ablation_bounds,
     )
+
+
+def _atomic_json(path: str | Path, payload: Mapping[str, Any]) -> None:
+    """Create one immutable JSON pin; concurrent/repeated writers fail closed."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    try:
+        with destination.open("x", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+    except FileExistsError:
+        existing = json.loads(destination.read_text(encoding="utf-8"))
+        if existing != payload:
+            raise ValueError(f"immutable pin already exists with different contents: {destination}")
+
+
+def load_freeze(path: str | Path = FREEZE_PATH) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if payload.get("strategy_id") != "settlement-proxy-v1":
+        raise ValueError("unexpected settlement-proxy strategy id")
+    fingerprint = strategy_fingerprint(payload)
+    if fingerprint != EXPECTED_FREEZE_SHA256:
+        raise ValueError(
+            f"settlement-proxy freeze fingerprint mismatch: {fingerprint}"
+        )
+    return payload
+
+
+def strategy_fingerprint(freeze: Mapping[str, Any]) -> str:
+    canonical = json.dumps(freeze, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def load_or_pin_calibration(
+    series: Mapping[str, StepSeries],
+    chainlink_points: Sequence[ChainlinkPoint],
+    calibration_end_ms: float,
+    config: ProxyConfig,
+    path: str | Path,
+    fingerprint: str,
+) -> ProxyCalibration:
+    destination = Path(path)
+    if destination.exists():
+        payload = json.loads(destination.read_text(encoding="utf-8"))
+        if payload.get("strategy_fingerprint") != fingerprint:
+            raise ValueError("pinned calibration belongs to another protocol")
+        calibration = ProxyCalibration(**payload["calibration"])
+        if not math.isclose(calibration.calibration_end_ms, calibration_end_ms):
+            raise ValueError("pinned calibration uses another cutoff")
+        return calibration
+    if not chainlink_points or max(point.receive_ms for point in chainlink_points) < calibration_end_ms:
+        raise ValueError("cannot pin calibration before the frozen cutoff is fully observed")
+    if any(not values.receives or values.receives[-1] < calibration_end_ms
+           for values in series.values()):
+        raise ValueError("one or more proxy sources do not cover the frozen cutoff")
+    calibration = fit_calibration(series, chainlink_points, calibration_end_ms, config)
+    _atomic_json(destination, {
+        "strategy_fingerprint": fingerprint,
+        "calibration": asdict(calibration),
+    })
+    return calibration
 
 
 def _exact_open(
@@ -592,6 +684,8 @@ def generate_signals(
     config = config or ProxyConfig()
     if holdout_start_ms < calibration.calibration_end_ms:
         raise ValueError("holdout start cannot precede calibration end")
+    if config.timing_placebo_delay_ms + 500.0 >= config.decision_lead_ms:
+        raise ValueError("timing placebo must remain executable before market close")
     official_outcomes = official_outcomes or {}
     points = _normalised_chainlink(chainlink_points)
     exact = {point.payload_ms: point for point in points}
@@ -646,22 +740,34 @@ def generate_signals(
 
         base_signal = make_proxy(BASE_VARIANT, decision_ms)
         if base_signal is not None:
-            timing_signal = make_proxy(
-                TIMING_VARIANT, close_boundary - config.timing_placebo_lead_ms,
+            # Delay an already-known decision. Recomputing at an earlier clock would
+            # backdate information and create lookahead.
+            timing_signal = replace(
+                base_signal,
+                variant=TIMING_VARIANT,
+                decision_ms=base_signal.decision_ms + config.timing_placebo_delay_ms,
             )
-            audit[TIMING_VARIANT]["paired_base_signals"] += 1
-            if timing_signal is not None:
-                audit[TIMING_VARIANT]["paired_direction_matches"] += (
-                    timing_signal.direction == base_signal.direction
+            signals[TIMING_VARIANT].append(timing_signal)
+            audit[TIMING_VARIANT]["signals"] += 1
+            if timing_signal.actual_winner is not None:
+                audit[TIMING_VARIANT]["direction_correct"] += (
+                    timing_signal.direction == timing_signal.actual_winner
                 )
-            for source in (*SPOT_SOURCES, DERIBIT_SOURCE):
-                variant = f"omit_{source}"
-                ablation_bound = opening * calibration.ablation_residual_bounds_bp.get(
-                    source, calibration.residual_bound_bp,
-                ) / 10_000.0
-                ablated = make_proxy(variant, decision_ms, source, ablation_bound)
+            audit[TIMING_VARIANT]["paired_base_signals"] += 1
+            audit[TIMING_VARIANT]["paired_direction_matches"] += 1
+
+        # Generate each ablation independently. Conditioning an ablation's existence
+        # on the base signal would selection-bias robustness coverage.
+        for source in (*SPOT_SOURCES, DERIBIT_SOURCE):
+            variant = f"omit_{source}"
+            ablation_bound = opening * calibration.ablation_residual_bounds_bp.get(
+                source, calibration.residual_bound_bp,
+            ) / 10_000.0
+            ablated = make_proxy(variant, decision_ms, source, ablation_bound)
+            if base_signal is not None:
                 audit[variant]["paired_base_signals"] += 1
                 if ablated is not None:
+                    audit[variant]["paired_available_signals"] += 1
                     audit[variant]["paired_direction_matches"] += (
                         ablated.direction == base_signal.direction
                     )
@@ -699,10 +805,12 @@ def audit_official_outcomes(
     compared = 0
     mismatches = []
     missing_exact = 0
+    unresolved = []
     for mapping in mappings:
         market_id = str(mapping["market_id"])
         official = official_outcomes.get(market_id)
         if official is None:
+            unresolved.append(market_id)
             continue
         slot = int(mapping["slot"])
         opening = _window_average(exact, slot * 1_000.0)
@@ -720,10 +828,12 @@ def audit_official_outcomes(
     return {
         "compared": compared,
         "missing_exact": missing_exact,
+        "unresolved_market_count": len(unresolved),
+        "unresolved_market_ids": unresolved[:20],
         "coverage": coverage,
         "mismatch_count": len(mismatches),
         "mismatches": mismatches[:20],
-        "passes": compared > 0 and coverage >= 0.95 and not mismatches,
+        "passes": compared > 0 and coverage >= 0.95 and not mismatches and not unresolved,
     }
 
 
@@ -880,10 +990,22 @@ def replay_execution(
         enriched = []
         for row in rows:
             signal = signal_lookup[(variant, str(row["market_id"]))]
+            market_close_ms = (signal.slot + 300) * 1_000.0
+            evaluation_clock_ms = signal.decision_ms + float(row["evaluation_ms"])
+            if evaluation_clock_ms >= market_close_ms:
+                row.update({
+                    "filled_shares": 0.0,
+                    "fill_price": None,
+                    "fill_fee": 0.0,
+                    "all_in_cost": None,
+                    "reason": "after_market_close",
+                })
             row["winner"] = signal.actual_winner
             row["won"] = (row["direction"] == signal.actual_winner
                           if signal.actual_winner is not None else None)
             row["match_book_clock"] = "receipt_ms"
+            row["protocol_slot"] = signal.slot
+            row["market_close_ms"] = market_close_ms
             row["day"] = datetime.fromtimestamp(
                 signal.decision_ms / 1_000.0, timezone.utc,
             ).date().isoformat()
@@ -928,54 +1050,209 @@ def _daily_lower_99(fills: Sequence[Mapping[str, Any]]) -> Optional[float]:
     return estimate - float(student_t.ppf(0.99, cluster_count - 1)) * standard_error
 
 
+def _row_protocol_key(row: Mapping[str, Any]) -> tuple[float, str]:
+    return (
+        float(row.get("protocol_slot", row["signal_ms"])),
+        str(row["market_id"]),
+    )
+
+
+def _signal_protocol_key(signal: ProxySignal) -> tuple[float, str]:
+    return float(signal.slot), signal.market_id
+
+
+def _first_crossing_sample(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    min_fills: int = MIN_STOPPING_FILLS,
+    min_days: int = MIN_STOPPING_DAYS,
+) -> tuple[list[Mapping[str, Any]], bool]:
+    """Return the chronological prefix that first reaches both thresholds.
+
+    Outcomes are not part of the crossing rule: an unresolved fill is still one
+    of the first fills and may not be replaced by a later resolved trade.
+    """
+    ordered = sorted(rows, key=_row_protocol_key)
+    fills = 0
+    days: set[str] = set()
+    for index, row in enumerate(ordered):
+        if bool(row.get("qualified_fill")):
+            fills += 1
+            days.add(str(row["day"]))
+        if fills >= min_fills and len(days) >= min_days:
+            return ordered[:index + 1], True
+    return ordered, False
+
+
 def summarize_execution(
     rows: Mapping[str, Sequence[Mapping[str, Any]]],
     signals: Mapping[str, Sequence[ProxySignal]],
+    *,
+    min_stopping_fills: int = MIN_STOPPING_FILLS,
+    min_stopping_days: int = MIN_STOPPING_DAYS,
 ) -> dict[str, dict[str, Any]]:
+    primary_horizons: dict[
+        float,
+        tuple[list[Mapping[str, Any]], bool, tuple[float, str] | None],
+    ] = {}
+    for latency in (300.0, 500.0):
+        available = [
+            row for row in rows.get(BASE_VARIANT, ())
+            if float(row["evaluation_ms"]) == latency
+        ]
+        sample, reached = _first_crossing_sample(
+            available, min_fills=min_stopping_fills, min_days=min_stopping_days,
+        )
+        cutoff = None
+        if reached:
+            cutoff = _row_protocol_key(sample[-1])
+        primary_horizons[latency] = (sample, reached, cutoff)
+
     result = {}
     for variant, variant_rows in rows.items():
         by_latency = {}
-        labelled_signals = [signal for signal in signals[variant] if signal.actual_winner is not None]
-        direction_correct = sum(
-            signal.direction == signal.actual_winner for signal in labelled_signals
-        )
         for latency in (300.0, 500.0):
-            sample = [row for row in variant_rows if float(row["evaluation_ms"]) == latency]
+            available = [row for row in variant_rows if float(row["evaluation_ms"]) == latency]
+            base_sample, stopping_reached, cutoff = primary_horizons[latency]
+            if variant == BASE_VARIANT:
+                sample = base_sample
+            else:
+                ordered = sorted(available, key=_row_protocol_key)
+                sample = ordered if cutoff is None else [
+                    row for row in ordered if _row_protocol_key(row) <= cutoff
+                ]
+            sample_signals = [
+                signal for signal in signals[variant]
+                if cutoff is None or _signal_protocol_key(signal) <= cutoff
+            ]
+            base_sample_signals = [
+                signal for signal in signals[BASE_VARIANT]
+                if cutoff is None or _signal_protocol_key(signal) <= cutoff
+            ]
+            base_by_market = {signal.market_id: signal for signal in base_sample_signals}
+            control_by_market = {signal.market_id: signal for signal in sample_signals}
+            paired_available = sum(market_id in control_by_market for market_id in base_by_market)
+            paired_direction_matches = sum(
+                control_by_market[market_id].direction == base_signal.direction
+                for market_id, base_signal in base_by_market.items()
+                if market_id in control_by_market
+            )
+            paired_base = len(base_by_market)
+            labelled_signals = [
+                signal for signal in sample_signals if signal.actual_winner is not None
+            ]
+            direction_correct = sum(
+                signal.direction == signal.actual_winner for signal in labelled_signals
+            )
             executions = [row for row in sample
                           if float(row["filled_shares"]) > 0 and row["winner"] is not None]
             qualified = [row for row in executions if row["qualified_fill"]]
+            unresolved_market_ids = sorted({
+                str(row["market_id"]) for row in sample if row.get("winner") is None
+            })
             total_shares = sum(float(row["filled_shares"]) for row in executions)
             total_pnl = sum(float(row["pnl"]) for row in executions)
             sends = sum(bool(row["sent"]) for row in sample)
             raw_exact_p = h_replay_run._exact_pvalue(executions)
             corrected_exact_p = min(1.0, raw_exact_p * FAMILY_TESTS)
             by_latency[str(int(latency))] = {
-                "signals": len(signals[variant]),
+                "signals": len(sample_signals),
                 "labelled_signals": len(labelled_signals),
                 "sends": sends,
                 "executions_including_partials": len(executions),
                 "fills": len(qualified),
                 "partial_fills": sum(0 < float(row["filled_shares"]) < 5.0 - 1e-9
                                      for row in executions),
-                "fill_rate_per_signal": len(qualified) / len(signals[variant])
-                if signals[variant] else 0.0,
+                "fill_rate_per_signal": len(qualified) / len(sample_signals)
+                if sample_signals else 0.0,
                 "any_execution_rate_per_send": len(executions) / sends if sends else 0.0,
                 "fill_rate_per_send": len(qualified) / sends if sends else 0.0,
                 "direction_accuracy": direction_correct / len(labelled_signals)
                 if labelled_signals else None,
                 "net_ev_per_share": total_pnl / total_shares if total_shares else None,
                 "pnl": total_pnl,
-                "pnl_per_signal": total_pnl / len(signals[variant]) if signals[variant] else 0.0,
+                "pnl_per_signal": total_pnl / len(sample_signals) if sample_signals else 0.0,
                 "shares": total_shares,
-                "days": len({str(row["day"]) for row in executions}),
+                "days": len({str(row["day"]) for row in qualified}),
                 "day_cluster_lower_99": _daily_lower_99(executions),
                 "reasons": dict(Counter(str(row["reason"]) for row in sample)),
                 "raw_exact_p": raw_exact_p,
                 "corrected_exact_p": corrected_exact_p,
                 "family_tests": FAMILY_TESTS,
+                "stopping_sample_reached": stopping_reached,
+                "stopping_last_signal_ms": (
+                    float(base_sample[-1]["signal_ms"]) if stopping_reached else None
+                ),
+                "stopping_last_protocol_slot": (cutoff[0] if cutoff is not None else None),
+                "stopping_last_market_id": (cutoff[1] if cutoff is not None else None),
+                "paired_base_signals": paired_base,
+                "paired_available_signals": paired_available,
+                "paired_direction_matches": paired_direction_matches,
+                "coverage_vs_base": paired_available / paired_base if paired_base else 0.0,
+                "direction_match_rate": (
+                    paired_direction_matches / paired_base if paired_base else 0.0
+                ),
+                "control_only_signals": sum(
+                    signal.market_id not in base_by_market for signal in sample_signals
+                ),
+                "unresolved_market_count": len(unresolved_market_ids),
+                "unresolved_market_ids": unresolved_market_ids[:20],
             }
         result[variant] = by_latency
     return result
+
+
+def paper_verdict(result: Mapping[str, Any]) -> dict[str, Any]:
+    base = result["execution"][BASE_VARIANT]
+    primary_rows = [base["300"], base["500"]]
+    evaluated_rows = [
+        latency_row
+        for variant_rows in result["execution"].values()
+        for latency_row in (variant_rows["300"], variant_rows["500"])
+    ]
+    ready = bool(
+        all(row["stopping_sample_reached"] for row in primary_rows)
+        and all(row["unresolved_market_count"] == 0 for row in evaluated_rows)
+        and result["outcome_audit"]["unresolved_market_count"] == 0
+    )
+    if not ready:
+        return {
+            "status": "collecting",
+            "fills_300": base["300"]["fills"],
+            "fills_500": base["500"]["fills"],
+            "required_fills": MIN_STOPPING_FILLS,
+            "required_days": MIN_STOPPING_DAYS,
+        }
+    return {
+        "status": "paper_passed" if result["gate"]["paper_gate_passes"] else "rejected",
+        "paper_gate_passes": bool(result["gate"]["paper_gate_passes"]),
+        "fills_300": base["300"]["fills"],
+        "fills_500": base["500"]["fills"],
+        "last_signal_ms_300": base["300"]["stopping_last_signal_ms"],
+        "last_signal_ms_500": base["500"]["stopping_last_signal_ms"],
+        "net_ev_per_share_300": base["300"]["net_ev_per_share"],
+        "net_ev_per_share_500": base["500"]["net_ev_per_share"],
+        "requires_live_fak_calibration": True,
+    }
+
+
+def pin_verdict(
+    result: Mapping[str, Any],
+    path: str | Path,
+    fingerprint: str,
+) -> dict[str, Any]:
+    destination = Path(path)
+    if destination.exists():
+        payload = json.loads(destination.read_text(encoding="utf-8"))
+        if payload.get("strategy_fingerprint") != fingerprint:
+            raise ValueError("pinned verdict belongs to another protocol")
+        return payload
+    verdict = paper_verdict(result)
+    if verdict["status"] == "collecting":
+        return verdict
+    payload = {"strategy_fingerprint": fingerprint, "verdict": verdict}
+    _atomic_json(destination, payload)
+    return payload
 
 
 def _iter_recorder_lines(paths: Sequence[Path]) -> Iterator[tuple[float, str]]:
@@ -1064,6 +1341,9 @@ def run(
     calibration_end_ms: float,
     holdout_start_ms: float,
     config: ProxyConfig | None = None,
+    *,
+    calibration_pin: str | Path | None = None,
+    fingerprint: str | None = None,
 ) -> dict[str, Any]:
     config = config or ProxyConfig()
     if holdout_start_ms < calibration_end_ms:
@@ -1071,7 +1351,14 @@ def run(
     strict = _strict_root(poly_root)
     h_replay_archive.validate_standard_artifact(strict)
     series, chainlink, source_stats = load_raw_archive(venues_root, config)
-    calibration = fit_calibration(series, chainlink, calibration_end_ms, config)
+    if calibration_pin is None:
+        calibration = fit_calibration(series, chainlink, calibration_end_ms, config)
+    else:
+        if fingerprint is None:
+            raise ValueError("a strategy fingerprint is required when pinning calibration")
+        calibration = load_or_pin_calibration(
+            series, chainlink, calibration_end_ms, config, calibration_pin, fingerprint,
+        )
     mappings = list(h_replay_archive.iter_market_mappings(strict / "market_registry.csv.gz"))
     fee_rates = {float(mapping["fee_rate"]) for mapping in mappings if "fee_rate" in mapping}
     if (len(fee_rates) != 1 or any("fee_rate" not in mapping for mapping in mappings)
@@ -1082,9 +1369,15 @@ def run(
         str(row["market_id"]): str(row["winner"])
         for row in h_replay_archive.iter_outcomes(strict / "market_outcomes.csv.gz")
     }
-    outcome_audit = audit_official_outcomes(mappings, official_outcomes, chainlink)
+    holdout_mappings = [
+        mapping for mapping in mappings
+        if int(mapping["slot"]) * 1_000.0 >= holdout_start_ms
+    ]
+    observed_outcome_audit = audit_official_outcomes(
+        holdout_mappings, official_outcomes, chainlink,
+    )
     signals, signal_audit = generate_signals(
-        mappings, series, chainlink, calibration, holdout_start_ms, config,
+        holdout_mappings, series, chainlink, calibration, holdout_start_ms, config,
         official_outcomes=official_outcomes,
     )
     execution_rows = replay_execution(
@@ -1096,32 +1389,59 @@ def run(
     execution = summarize_execution(execution_rows, signals)
     base_300 = execution[BASE_VARIANT]["300"]
     base_500 = execution[BASE_VARIANT]["500"]
+    base_rows = (base_300, base_500)
+    if all(row["stopping_sample_reached"] for row in base_rows):
+        cutoffs = [
+            (float(row["stopping_last_protocol_slot"]), str(row["stopping_last_market_id"]))
+            for row in base_rows
+        ]
+        judged_market_ids = {
+            signal.market_id
+            for variant_signals in signals.values()
+            for signal in variant_signals
+            if any(_signal_protocol_key(signal) <= cutoff for cutoff in cutoffs)
+        }
+        judged_mappings = [
+            mapping for mapping in holdout_mappings
+            if str(mapping["market_id"]) in judged_market_ids
+        ]
+        outcome_audit = audit_official_outcomes(
+            judged_mappings, official_outcomes, chainlink,
+        )
+    else:
+        outcome_audit = observed_outcome_audit
     robust_variants = [variant for variant in execution
                        if variant.startswith("omit_") or variant == TIMING_VARIANT]
     robustness = {
         variant: {
-            "coverage_vs_base": len(signals[variant]) / len(signals[BASE_VARIANT])
-            if signals[BASE_VARIANT] else 0.0,
-            "direction_match_rate": (
-                signal_audit[variant].get("paired_direction_matches", 0)
-                / signal_audit[variant].get("paired_base_signals", 1)
-            ),
+            "coverage_vs_base_300": execution[variant]["300"]["coverage_vs_base"],
+            "coverage_vs_base_500": execution[variant]["500"]["coverage_vs_base"],
+            "direction_match_rate_300": execution[variant]["300"]["direction_match_rate"],
+            "direction_match_rate_500": execution[variant]["500"]["direction_match_rate"],
             "ev_300": execution[variant]["300"]["net_ev_per_share"],
             "ev_500": execution[variant]["500"]["net_ev_per_share"],
+            "unresolved_300": execution[variant]["300"]["unresolved_market_count"],
+            "unresolved_500": execution[variant]["500"]["unresolved_market_count"],
         }
         for variant in robust_variants
     }
     positive_robustness = all(
-        row["coverage_vs_base"] >= 0.80
-        and row["direction_match_rate"] >= 0.80
+        row["coverage_vs_base_300"] >= 0.80
+        and row["coverage_vs_base_500"] >= 0.80
+        and row["direction_match_rate_300"] >= 0.80
+        and row["direction_match_rate_500"] >= 0.80
         and row["ev_300"] is not None and row["ev_300"] > 0
         and row["ev_500"] is not None and row["ev_500"] > 0
+        and row["unresolved_300"] == 0
+        and row["unresolved_500"] == 0
         for row in robustness.values()
     )
 
     def statistical(row: Mapping[str, Any]) -> bool:
         return bool(
-            row["fills"] >= MIN_STOPPING_FILLS
+            row["stopping_sample_reached"]
+            and row["unresolved_market_count"] == 0
+            and row["fills"] >= MIN_STOPPING_FILLS
             and row["days"] >= MIN_STOPPING_DAYS
             and row["day_cluster_lower_99"] is not None
             and row["day_cluster_lower_99"] > 0
@@ -1139,13 +1459,29 @@ def run(
         for latency in ("300", "500")
     }
     beats_baseline = all(value > 0 for value in baseline_increment.values())
+    all_evaluated_outcomes_resolved = all(
+        execution[variant][latency]["unresolved_market_count"] == 0
+        for variant in execution
+        for latency in ("300", "500")
+    )
+    paper_gate_passes = bool(
+        both_base_positive and positive_robustness and beats_baseline
+        and all_evaluated_outcomes_resolved
+        and outcome_audit["passes"] and all(statistical_by_latency.values())
+    )
     gate = {
-        "passes": bool(both_base_positive and positive_robustness and beats_baseline
-                       and outcome_audit["passes"] and all(statistical_by_latency.values())),
+        # Displayed L2 proves only that depth survived to the checkpoint.  It cannot
+        # certify queue priority or hidden-liquidity competition, so overall passage
+        # remains false until a separately authorised bounded live FAK calibration.
+        "passes": False,
+        "paper_gate_passes": paper_gate_passes,
+        "live_fak_calibration_passes": False,
+        "requires_live_fak_calibration": True,
         "base_300ms_and_500ms_positive": both_base_positive,
         "beats_delayed_chainlink_baseline": beats_baseline,
         "pnl_per_signal_increment_vs_baseline": baseline_increment,
         "all_source_ablations_and_timing_positive": positive_robustness,
+        "all_evaluated_outcomes_resolved": all_evaluated_outcomes_resolved,
         "robustness": robustness,
         "settlement_rule_matches_official_outcomes": outcome_audit["passes"],
         "statistical_gate_by_latency": statistical_by_latency,
@@ -1159,6 +1495,7 @@ def run(
             "holdout_start_ms": holdout_start_ms,
             "window_payload_offsets_s": [-62, -2, 61],
             "decision_lead_ms": config.decision_lead_ms,
+            "timing_placebo_delay_ms": config.timing_placebo_delay_ms,
             "execution_ms": [300, 500],
             "shares": 5,
             "fixed_limit": 0.97,
@@ -1167,6 +1504,7 @@ def run(
         "source_stats": source_stats,
         "calibration": asdict(calibration),
         "outcome_audit": outcome_audit,
+        "observed_outcome_audit": observed_outcome_audit,
         "signals": signal_audit,
         "execution": execution,
         "gate": gate,
@@ -1177,15 +1515,37 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--venues", required=True, help="raw venue recorder directory")
     parser.add_argument("--poly", required=True, help="completed strict Polymarket replay bundle")
-    parser.add_argument("--calibration-end", required=True, help="exclusive ISO-8601 calibration cutoff")
-    parser.add_argument("--holdout-start", help="inclusive ISO-8601 holdout start; defaults to cutoff")
+    parser.add_argument("--freeze", default=str(FREEZE_PATH), help="frozen protocol JSON")
+    parser.add_argument("--calibration-end", help="must equal the frozen exclusive cutoff")
+    parser.add_argument("--holdout-start", help="must equal the frozen inclusive holdout start")
+    parser.add_argument("--calibration-pin", default=str(CALIBRATION_PIN))
+    parser.add_argument("--verdict", default=str(VERDICT_PIN))
     parser.add_argument("--output", help="optional single current JSON result path")
     args = parser.parse_args()
-    calibration_end = _iso_timestamp(args.calibration_end)
-    holdout_start = _iso_timestamp(args.holdout_start or args.calibration_end)
+    freeze = load_freeze(args.freeze)
+    frozen_calibration_end = _iso_timestamp(freeze["calibration_end"])
+    frozen_holdout_start = _iso_timestamp(freeze["holdout_start"])
+    calibration_end = _iso_timestamp(args.calibration_end) if args.calibration_end else frozen_calibration_end
+    holdout_start = _iso_timestamp(args.holdout_start) if args.holdout_start else frozen_holdout_start
+    if not math.isclose(calibration_end, frozen_calibration_end):
+        raise SystemExit("calibration cutoff differs from the frozen protocol")
+    if not math.isclose(holdout_start, frozen_holdout_start):
+        raise SystemExit("holdout start differs from the frozen protocol")
     if holdout_start < calibration_end:
         raise SystemExit("holdout start cannot precede calibration end")
-    result = run(args.venues, args.poly, calibration_end, holdout_start)
+    config = ProxyConfig(**freeze["proxy_config"])
+    fingerprint = strategy_fingerprint(freeze)
+    result = run(
+        args.venues,
+        args.poly,
+        calibration_end,
+        holdout_start,
+        config,
+        calibration_pin=args.calibration_pin,
+        fingerprint=fingerprint,
+    )
+    result["strategy_fingerprint"] = fingerprint
+    result["verdict"] = pin_verdict(result, args.verdict, fingerprint)
     text = json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n"
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")

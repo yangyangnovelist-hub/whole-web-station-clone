@@ -8,6 +8,6 @@
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | momentum5s (frozen zoo100 #27 on every retained post-freeze BTC recording)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-10-04T14:23:49Z rerun all 100 zoo rules with frozen-limit no-lookahead 500ms execution
+requested: 2026-10-04T20:37:32Z rerun all 100 zoo rules on the pinned 67-archive manifest with receipt-causal features, immutable first trigger, true 500ms as-of execution and exact p-values
 mode: cross
 cross: zoo

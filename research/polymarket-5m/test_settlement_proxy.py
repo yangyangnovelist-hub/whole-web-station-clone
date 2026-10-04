@@ -83,6 +83,17 @@ def test_step_series_never_reads_a_future_receipt():
     assert series.at(701.0, max_age_ms=500.0) is None
 
 
+def test_committed_freeze_hash_is_enforced(tmp_path):
+    frozen = sp.load_freeze()
+    assert sp.strategy_fingerprint(frozen) == sp.EXPECTED_FREEZE_SHA256
+
+    frozen["proxy_config"]["timing_placebo_delay_ms"] = 251.0
+    tampered = tmp_path / "freeze.json"
+    tampered.write_text(json.dumps(frozen), encoding="utf-8")
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        sp.load_freeze(tampered)
+
+
 def _manual_calibration(bound_bp: float = 1.0) -> sp.ProxyCalibration:
     return sp.ProxyCalibration(
         calibration_end_ms=0.0,
@@ -212,6 +223,7 @@ def test_calibration_never_uses_chainlink_or_proxy_receipts_after_cutoff():
     chainlink.append(sp.ChainlinkPoint(cutoff - 500.0, cutoff - 100.0, cutoff, 1_000_000.0))
     # A spectacular future price must not alter the frozen calibration.
     for source in points:
+        points[source].append(sp.PricePoint(source, cutoff, 1_000_000.0))
         points[source].append(sp.PricePoint(source, cutoff + 1.0, 1_000_000.0))
     series = {source: sp.StepSeries.from_points(rows) for source, rows in points.items()}
 
@@ -223,6 +235,206 @@ def test_calibration_never_uses_chainlink_or_proxy_receipts_after_cutoff():
     assert max(abs(value) for value in calibration.venue_log_offsets.values()) < 1e-9
     assert abs(calibration.deribit_log_offset) < 1e-9
     assert calibration.residual_bound_bp < 1e-6
+    assert calibration.spot_validation_mae_bp < 1e-6
+    assert calibration.deribit_validation_mae_bp < 1e-6
+    assert calibration.combined_validation_mae_bp < 1e-6
+
+
+def test_positive_lag_calibration_cannot_read_a_post_cutoff_proxy_quote():
+    cutoff = 1_500.0
+    config = sp.ProxyConfig(lag_grid_ms=(1_000.0,), min_fit_points=1)
+    chainlink = [
+        sp.ChainlinkPoint(0.0, 100.0, 100.0, 100.0),
+        sp.ChainlinkPoint(1_000.0, 1_100.0, 1_100.0, 100.0),
+    ]
+    series = {
+        source: sp.StepSeries.from_points([
+            sp.PricePoint(source, 1_000.0, 100.0),
+            sp.PricePoint(source, 2_000.0, 1_000_000.0),
+        ])
+        for source in sp.SPOT_SOURCES
+    }
+
+    _, offsets, _ = sp._fit_group(
+        series, chainlink, sp.SPOT_SOURCES, config, latest_receive_ms=cutoff,
+    )
+
+    assert max(abs(value) for value in offsets.values()) < 1e-12
+
+
+def test_timing_placebo_delays_a_known_base_signal_instead_of_backdating_it():
+    slot_s = 300
+    open_boundary = slot_s * 1_000.0
+    close_boundary = (slot_s + 300) * 1_000.0
+    chainlink = [
+        sp.ChainlinkPoint(payload, payload + 100.0, payload + 100.0, 100.0)
+        for payload in sp.settlement_payload_times(open_boundary)
+    ]
+    series = {
+        source: _constant_series(
+            source,
+            (payload - 1_000.0 for payload in sp.settlement_payload_times(close_boundary)),
+            101.0,
+        )
+        for source in sp.SPOT_SOURCES
+    }
+    series[sp.DERIBIT_SOURCE] = _constant_series(
+        sp.DERIBIT_SOURCE,
+        (payload - 500.0 for payload in sp.settlement_payload_times(close_boundary)),
+        101.0,
+    )
+    mapping = {"market_id": "m", "slot": slot_s, "up_token_id": "up", "down_token_id": "down"}
+
+    signals, _ = sp.generate_signals(
+        [mapping], series, chainlink, _manual_calibration(), open_boundary,
+        sp.ProxyConfig(), {"m": "Up"},
+    )
+
+    base = signals[sp.BASE_VARIANT][0]
+    delayed = signals[sp.TIMING_VARIANT][0]
+    assert delayed.decision_ms == base.decision_ms + 250.0
+    assert delayed.decision_ms + 500.0 < close_boundary
+    assert delayed.direction == base.direction
+
+
+def test_timing_placebo_that_crosses_market_close_is_rejected():
+    with pytest.raises(ValueError, match="before market close"):
+        sp.generate_signals(
+            [], {}, [], _manual_calibration(), 0.0,
+            sp.ProxyConfig(timing_placebo_delay_ms=500.0), {},
+        )
+
+
+def test_outcome_audit_counts_unresolved_markets_and_cannot_pass_them():
+    boundary = 300_000.0
+    chainlink = [
+        sp.ChainlinkPoint(payload, payload + 100.0, payload + 100.0, 100.0)
+        for payload in sp.settlement_payload_times(boundary)
+    ] + [
+        sp.ChainlinkPoint(payload, payload + 100.0, payload + 100.0, 101.0)
+        for payload in sp.settlement_payload_times(boundary + 300_000.0)
+    ]
+
+    audit = sp.audit_official_outcomes([{"market_id": "pending", "slot": 300}], {}, chainlink)
+
+    assert audit["unresolved_market_count"] == 1
+    assert audit["passes"] is False
+
+
+def test_first_crossing_sample_ignores_every_later_observation():
+    def row(signal_ms, day, filled=True):
+        return {"signal_ms": signal_ms, "market_id": str(signal_ms), "day": day,
+                "qualified_fill": filled, "filled_shares": 5.0 if filled else 0.0,
+                "winner": "Up", "pnl": 1.0 if filled else 0.0}
+
+    sample, reached = sp._first_crossing_sample(
+        [row(1.0, "2026-10-05"), row(2.0, "2026-10-06"), row(3.0, "2026-10-07")],
+        min_fills=2, min_days=2,
+    )
+
+    assert reached is True
+    assert [item["signal_ms"] for item in sample] == [1.0, 2.0]
+
+
+def test_calibration_pin_cannot_be_created_before_every_source_covers_cutoff(tmp_path):
+    cutoff = 2_000.0
+    series = {
+        source: sp.StepSeries.from_points([sp.PricePoint(source, 1_000.0, 100.0)])
+        for source in (*sp.SPOT_SOURCES, sp.DERIBIT_SOURCE)
+    }
+    chainlink = [sp.ChainlinkPoint(0.0, 1_000.0, 1_500.0, 100.0)]
+
+    with pytest.raises(ValueError, match="cutoff"):
+        sp.load_or_pin_calibration(
+            series, chainlink, cutoff, sp.ProxyConfig(min_fit_points=1),
+            tmp_path / "calibration.json", "fingerprint",
+        )
+
+
+def test_terminal_paper_verdict_is_pinned_once(tmp_path):
+    def result(passed):
+        row = {
+            "stopping_sample_reached": True,
+            "unresolved_market_count": 0,
+            "fills": 1_000,
+            "stopping_last_signal_ms": 123.0,
+            "net_ev_per_share": 0.01 if passed else -0.01,
+        }
+        return {
+            "execution": {sp.BASE_VARIANT: {"300": dict(row), "500": dict(row)}},
+            "outcome_audit": {"unresolved_market_count": 0},
+            "gate": {"paper_gate_passes": passed},
+        }
+
+    path = tmp_path / "verdict.json"
+    first = sp.pin_verdict(result(True), path, "fingerprint")
+    second = sp.pin_verdict(result(False), path, "fingerprint")
+
+    assert first == second
+    assert second["verdict"]["status"] == "paper_passed"
+
+
+def test_controls_use_the_same_first_crossing_horizon_as_the_base():
+    def signal(variant, market, clock):
+        return sp.ProxySignal(
+            variant=variant, market_id=market, slot=int(clock), decision_ms=clock,
+            direction="Up", opening=100.0, projected_close=101.0,
+            spot_close=101.0, deribit_close=101.0, margin=1.0, bound=0.01,
+            actual_winner="Up",
+        )
+
+    def row(market, clock, day, protocol_slot=None):
+        return {
+            "market_id": market, "signal_ms": clock, "evaluation_ms": 300.0,
+            "protocol_slot": clock if protocol_slot is None else protocol_slot,
+            "day": day, "qualified_fill": True, "filled_shares": 5.0,
+            "winner": "Up", "won": True, "all_in_cost": 0.5,
+            "pnl": 2.5, "sent": True, "reason": "filled",
+        }
+
+    control = "omit_coinbase"
+    signals = {
+        sp.BASE_VARIANT: [signal(sp.BASE_VARIANT, f"m{i}", float(i)) for i in (1, 2, 3)],
+        control: [signal(control, f"m{i}", float(i)) for i in (1, 2, 3)],
+    }
+    base_rows = [row("m1", 1.0, "2026-10-05"), row("m2", 2.0, "2026-10-06"),
+                 row("m3", 3.0, "2026-10-07")]
+    control_rows = [
+        row("m1", 251.0, "2026-10-05", 1.0),
+        row("m2", 252.0, "2026-10-06", 2.0),
+        row("m3", 253.0, "2026-10-07", 3.0),
+    ]
+
+    report = sp.summarize_execution(
+        {sp.BASE_VARIANT: base_rows, control: control_rows}, signals,
+        min_stopping_fills=2, min_stopping_days=2,
+    )
+
+    assert report[sp.BASE_VARIANT]["300"]["signals"] == 2
+    assert report[control]["300"]["signals"] == 2
+    assert report[control]["300"]["stopping_last_signal_ms"] == 2.0
+    assert report[control]["300"]["coverage_vs_base"] == 1.0
+
+
+def test_control_only_unresolved_outcome_prevents_terminal_verdict():
+    resolved = {
+        "stopping_sample_reached": True,
+        "unresolved_market_count": 0,
+        "fills": 1_000,
+        "stopping_last_signal_ms": 123.0,
+        "net_ev_per_share": 0.01,
+    }
+    unresolved = {**resolved, "unresolved_market_count": 1}
+    result = {
+        "execution": {
+            sp.BASE_VARIANT: {"300": dict(resolved), "500": dict(resolved)},
+            "omit_coinbase": {"300": dict(unresolved), "500": dict(resolved)},
+        },
+        "outcome_audit": {"unresolved_market_count": 0},
+        "gate": {"paper_gate_passes": True},
+    }
+
+    assert sp.paper_verdict(result)["status"] == "collecting"
 
 
 def test_direct_l2_execution_uses_fixed_097_limit_five_shares_and_real_fee():
