@@ -147,3 +147,44 @@ jobs:
             -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
           for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
           exit 1
+
+      # CALIB.md "前向检验规则": the calibration cell that passed the independent half year (above markets,
+      # 60 and 30 minutes before the end, the side the model puts at 85-95%, bought at the ask; one buy per
+      # market and side) on the same unpacked recordings (markets ending after 2026-10-05 00:00 UTC; judged
+      # once on the first 40 markets with a buy, pinned in real/calib-forward.verdict.md and never
+      # recomputed). The resting-bid version is described only. Each recording's checkpoint rows are
+      # committed in real/calib-forward.ledger/; the same --expect list of downloadable ladder-<id>
+      # artifacts as above. Its Gamma results are cached under the same actions/cache path.
+      # continue-on-error, as above.
+      - name: Calibration cell, forward check (calib_fwd.py; market data only, no orders)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail   # a failed listing must not pass as an empty one
+          expect=()
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+               --jq '.artifacts[] | select(.expired | not) | "\(.name) \(.workflow_run.head_branch)"' \
+             | awk -v b="$GITHUB_REF_NAME" '$2 == b && $1 ~ /^ladder-[0-9]+$/ { sub(/^ladder-/, "", $1); print $1 }' \
+             > "$RUNNER_TEMP/calib-expect.txt"; then
+            echo "downloadable ladder recordings: $(wc -l < "$RUNNER_TEMP/calib-expect.txt")"
+            expect=(--expect "$RUNNER_TEMP/calib-expect.txt")
+          else
+            echo "::warning::could not list the ladder artifacts; calib_fwd.py will not judge in this run"
+          fi
+          python calib_fwd.py "$RUNNER_TEMP/rec" --cache "$RUNNER_TEMP/ladder-arb-cache/calib" \
+            --out real/calib-forward.md "${expect[@]}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in real/calib-forward.md real/calib-forward.verdict.md real/calib-forward.trades.csv \
+                   real/calib-forward.ledger; do
+            if [ -e "$f" ]; then git add "$f"; fi
+          done
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: calibration cell forward check, run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
