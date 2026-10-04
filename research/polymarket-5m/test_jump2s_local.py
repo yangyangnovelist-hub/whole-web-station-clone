@@ -97,7 +97,7 @@ def _sp_and_jump(S, d_bp=2.0, n_before=1500, seed=0):
     return sec, lp
 
 
-def test_kacho_rows_use_the_rows_stamped_s_plus_2_and_s_plus_1():
+def test_kacho_rows_use_the_rows_stamped_s_plus_2_s_plus_1_and_s_plus_3():
     S = S0 + 100
     sec, lp = _sp_and_jump(S)
     sp = j2.Seconds(sec, np.exp(lp))
@@ -109,9 +109,11 @@ def test_kacho_rows_use_the_rows_stamped_s_plus_2_and_s_plus_1():
     rows, counts = jl.kacho_rows(p, jl.Book(t), sp)
     big = rows[(rows.kind == "big") & (rows.price_type == "book")].iloc[0]
     s1 = rows[(rows.kind == "big") & (rows.price_type == "book_s1")].iloc[0]
+    s3 = rows[(rows.kind == "big") & (rows.price_type == "book_s3")].iloc[0]
     opp = rows[(rows.kind == "opposite") & (rows.price_type == "book")].iloc[0]
     assert big.sign == 1 and big.price == pytest.approx(0.30 + 0.001 * 102)    # row S + 2
     assert s1.price == pytest.approx(0.30 + 0.001 * 101)                       # row S + 1
+    assert s3.price == pytest.approx(0.30 + 0.001 * 103) and np.isnan(s3.mid2)  # row S + 3 (not in the design)
     assert opp.sign == -1 and opp.price == pytest.approx(1.01 - (0.30 + 0.001 * 102))
     assert big.won == 0.0 and opp.won == 1.0
     assert big.pnl == pytest.approx(-big.price - 0.07 * big.price * (1 - big.price))
@@ -135,12 +137,31 @@ def test_kacho_rows_drop_missing_rows_thin_asks_and_band():
     p = p[p.kind == "big"]
     t = ticks_for([S0], [True], gaps={(S0, 102)})                  # row S + 2 missing: no fallback
     rows, counts = jl.kacho_rows(p, jl.Book(t), sp)
-    assert list(rows["price_type"]) == ["book_s1"] and counts[("book", "big")] == (1, 1, 0)
+    assert list(rows["price_type"]) == ["book_s1", "book_s3"] and counts[("book", "big")] == (1, 1, 0)
     t = ticks_for([S0], [True])
     t.loc[t.t == S + 1, "sau"] = 4.99                               # fewer than 5 shares
     t.loc[t.t == S + 2, "au"] = 0.985                               # outside the band
+    t.loc[t.t == S + 3, "au"] = 0.015
     rows, counts = jl.kacho_rows(p, jl.Book(t), sp)
     assert rows.empty and counts[("book", "big")] == (1, 0, 1) and counts[("book_s1", "big")] == (1, 0, 1)
+    assert counts[("book_s3", "big")] == (1, 0, 1)
+
+
+def test_reaction_profile_reads_the_rows_around_the_jump_second():
+    S = S0 + 100
+    sec, lp = _sp_and_jump(S)
+    w = pd.DataFrame({"market": [S0], "start": [S0], "end": [S0 + 300]})
+    sel = jl.kline_jumps(sec, lp, w)
+    p = j2.plan(sel[(sel["t_ex"] == S) & (sel["bucket"] == "big")], w, seed=1)
+    t = ticks_for([S0], [True])
+    t.loc[t.t >= S + 2, ["au", "bu"]] += 0.05                     # the book reprices in row S + 2
+    prof = jl.reaction_profile(p, jl.Book(t))
+    assert prof["n"] == 1 and [k for k, *_ in prof["rows"]] == list(jl.PROFILE_OFFS)
+    dm = {k: m for k, _, m, _ in prof["rows"]}
+    assert dm[-1] == 0.0 and dm[1] == pytest.approx(0.002) and dm[2] == pytest.approx(0.053)
+    assert prof["rows"][3][1]["4月"] == pytest.approx(0.053) and np.isnan(prof["rows"][3][1]["3月"])
+    L = jl.profile_lines(prof)
+    assert len(L) == 2 + len(jl.PROFILE_OFFS) and L[2].startswith("| S − 1") and "100%" in L[-1]
 
 
 # ------------------------------------------------------------------ Binance only
@@ -203,7 +224,8 @@ def test_main_end_to_end(tmp_path):
     d = pd.read_csv(io.BytesIO(gzip.decompress(csv.read_bytes())))
     assert set(d["lane"]) == {"kacho", "binance_daily"}
     k = d[d.lane == "kacho"]
-    assert set(k["price_type"]) == {"book", "book_s1"} and k["market"].isin([S0 + 300 * i for i in range(12)]).all()
+    assert set(k["price_type"]) == {"book", "book_s1", "book_s3"} and k["market"].isin([S0 + 300 * i for i in range(12)]).all()
+    assert "### kacho 一行到底是哪一刻的盘口" in txt and "按天聚类" in txt and "S + 3 行（晚 1 秒" in txt
     g = d[d.lane == "binance_daily"]
     assert g["n"].sum() > 0 and set(g["kind"]) <= set(jl.BIN_KINDS)
 
@@ -259,3 +281,27 @@ def test_matched_diff_removes_the_price_band_bias():
     raw = j2.stat(r[r.kind == "big"])["mean"] - j2.stat(r[r.kind == "random"])["mean"]
     d = jl.matched_diff(r)
     assert raw < 0.0 and d["mean"] == pytest.approx(0.01, abs=0.002) and d["t"] > 5
+
+
+def test_matched_diff_se_is_clustered_by_market():
+    rng = np.random.default_rng(9)
+    n, k = 4000, 80
+    mk = rng.integers(0, k, n)
+    shock = rng.normal(0, 0.05, k)                      # a market-level shock shared by its big and random rows
+    kind = np.where(rng.uniform(size=n) < 0.5, "big", "random")
+    price = rng.uniform(0.01, 0.99, n)
+    pnl = shock[mk] + np.where(kind == "big", 0.01, 0.0) + rng.normal(0, 0.02, n)
+    r = pd.DataFrame({"market": mk, "t0": S0 + np.arange(n, dtype=float), "kind": kind, "price": price, "pnl": pnl})
+    # one band: exactly the clustered difference of means (jump2s.diff_stat on the same markets)
+    one = jl.matched_diff(r, bins=(0.0, 1.0))
+    d = j2.diff_stat(r.assign(f=(r.kind == "big").astype(float)), "f")
+    assert one["mean"] == pytest.approx(d["mean"]) and one["se"] == pytest.approx(d["se"])
+    # the market shock cancels between the two kinds of a market: a clustered SE is far below the
+    # independent-bands one when the shock dominates
+    five = jl.matched_diff(r)
+    big, rnd = r[r.kind == "big"], r[r.kind == "random"]
+    naive = 0.0                                          # the old formula: bands and kinds independent
+    for lo, hi in zip(jl.FAIR_BINS[:-1], jl.FAIR_BINS[1:]):
+        sb, sr = j2.stat(jl._band(big, lo, hi)), j2.stat(jl._band(rnd, lo, hi))
+        naive += (sb["n"] / len(big)) ** 2 * (sb["se"] ** 2 + sr["se"] ** 2)
+    assert five["se"] < 0.5 * np.sqrt(naive) and five["n"] == len(big)

@@ -33,6 +33,12 @@ Definitions (fixed in ROUNDTRIP.md, or the conservative choice where it is silen
   where the condition (same level) still holds; it is traded once, at the first such row, at that
   later row's edge and size. Both legs are assumed to fill together at that row; the risk of one
   leg filling and the other not is not modelled.
+- Clean: executable, neither the signal row nor the fill row crossed, the recorded book changed
+  within 2 s before and after both the signal and the fill (cross.HEALTH_ALIVE, as cross.changed_near;
+  the archives repeat the last state when nothing arrives, so a frozen feed shows stale quotes), and
+  (snapshot data only) no hole of more than 1 s between the market's rows (or between its start and
+  its first usable row, e.g. after a halt) ended in the 5 s before the signal or the fill (after a
+  gap the two books are rebuilt piecemeal; seen on 2026-08-06). The headline dollars are the clean ones.
 - Crossed: a token's ask below its own bid. No CLOB lets that stand, so such a row is a stale or
   broken snapshot, not a quote anyone could trade; episodes starting on one are flagged.
 - Mirror: Polymarket's CLOB matches complementary orders (a bid for Up at p also offers Down at
@@ -78,7 +84,9 @@ TAU_BINS = (0, 15, 30, 60, 120, 180, 240, 300, 900, 1800, 3600)
 COLS = ["market", "ts_ms", "start_ms", "end_ms", "horizon", "bu", "au", "bd", "ad", "bu_sz", "au_sz", "bd_sz", "ad_sz"]
 KINDS = ("merge", "split")
 EP_COLS = ["kind", "level", "market", "horizon", "start_ms", "ts_ms", "rows", "dur_s", "tau", "edge0", "size0", "sum0",
-           "crossed0", "exec", "exec_ts_ms", "exec_edge", "exec_size", "exec_crossed", "usd"]
+           "crossed0", "live0", "exec", "exec_ts_ms", "exec_edge", "exec_size", "exec_crossed", "usd",
+           "clean", "clean_ts_ms", "clean_edge", "clean_size", "usd_clean"]
+ALIVE_MS = cross.HEALTH_ALIVE  # the book must change within this many ms before and after a moment to count as live
 KIND_ZH = {"merge": "合并（两边卖一买入，合成 1）", "split": "拆分（1 拆两边，两边买一卖出）"}
 KIND_SHORT = {"merge": "合并", "split": "拆分"}
 
@@ -121,12 +129,34 @@ def row_stats(f):
                 "markets": int(f["market"].nunique())}
 
 
-def scan(f, lag_ms, gap_ms, step_ms, max_age_ms=MAX_AGE_MS):
+def _alive(code, ts, moved, x, before, after):
+    """Per row i: whether the market's recorded book changed within `before` ms up to time x[i] and
+    within `after` ms after it (as cross.changed_near). `moved` marks rows that differ from the
+    market's previous row (a market's first row counts as a change)."""
+    n = len(ts)
+    key = code * 10**13 + ts
+    xi = np.searchsorted(key, code * 10**13 + x, "right") - 1  # last row at or before x (same market)
+    last = np.maximum.accumulate(np.where(moved, np.arange(n), -1))  # last change at or before each row
+    nxt = np.minimum.accumulate(np.where(moved, np.arange(n), n)[::-1])[::-1]  # first change at or after
+    lc = last[xi]
+    nc = np.r_[nxt[1:], n][xi]  # first change strictly after row xi
+    ok_before = (lc >= 0) & (x - ts[np.maximum(lc, 0)] <= before)
+    ok_after = (nc < n) & (code[np.minimum(nc, n - 1)] == code) & (ts[np.minimum(nc, n - 1)] - x <= after)
+    return ok_before & ok_after
+
+
+def scan(f, lag_ms, gap_ms, step_ms, max_age_ms=MAX_AGE_MS, alive_ms=ALIVE_MS, hole_ms=1000, steady_ms=5000):
     """Episodes of both arbs at both levels in frame `f` (columns COLS, any row order).
 
     lag_ms: execution delay (the row at or before ts + lag_ms, at most max_age_ms old, is where the
     pair fills); gap_ms: rows further apart than this break an episode; step_ms: duration credited to
-    an episode that runs into the market's last row. max_age_ms=None disables the age limit."""
+    an episode that runs into the market's last row. max_age_ms=None disables the age limit.
+    exec: the first row of the episode whose fill row still satisfies the condition. clean: the first
+    such row where, in addition, neither that row nor the fill row is crossed, the recorded book
+    changed within alive_ms of both the signal and the fill (a frozen feed repeats stale quotes), and
+    no hole longer than hole_ms between consecutive rows of the market (or between its start and its
+    first row) ends within steady_ms before the signal or before the fill (a book rebuilt after a recorder gap can be half loaded); hole_ms=None
+    skips that check (event data, where gaps between rows are normal)."""
     f = f.sort_values(["market", "ts_ms"], kind="stable").reset_index(drop=True)
     if f.empty:
         return pd.DataFrame(columns=EP_COLS)
@@ -138,8 +168,21 @@ def scan(f, lag_ms, gap_ms, step_ms, max_age_ms=MAX_AGE_MS):
     age = ts + lag_ms - ts[j]
     fill_ok = (ts + lag_ms < end) if max_age_ms is None else (ts + lag_ms < end) & (age <= max_age_ms)
     same_next = np.r_[code[1:] == code[:-1], False]
+    same_prev = np.r_[False, code[1:] == code[:-1]]
     nxt = np.minimum(np.arange(len(f)) + 1, len(f) - 1)
-    linked = np.r_[False, (code[1:] == code[:-1]) & (ts[1:] - ts[:-1] <= gap_ms)]
+    linked = same_prev & np.r_[False, ts[1:] - ts[:-1] <= gap_ms]
+    st = f[["bu", "au", "bd", "ad", "bu_sz", "au_sz", "bd_sz", "ad_sz"]].to_numpy(float)
+    same = (st[1:] == st[:-1]) | (np.isnan(st[1:]) & np.isnan(st[:-1]))
+    moved = ~same_prev | np.r_[True, ~same.all(axis=1)]
+    live_sig = _alive(code, ts, moved, ts, *alive_ms)
+    live_fill = _alive(code, ts, moved, ts + lag_ms, *alive_ms)
+    if hole_ms is None:
+        steady = np.ones(len(f), bool)
+    else:  # the last hole at or before the fill row: a row more than hole_ms after the market's previous row,
+        # or a market's first row more than hole_ms after its start (recorded late, or resumed after a halt)
+        hole = np.where(same_prev, np.r_[0, ts[1:] - ts[:-1]], ts - f["start_ms"].to_numpy(np.int64)) > hole_ms
+        lh = np.maximum.accumulate(np.where(hole, np.arange(len(f)), -1))[j]
+        steady = ~((lh >= 0) & (code[np.maximum(lh, 0)] == code) & (ts[np.maximum(lh, 0)] >= ts - steady_ms))
     with np.errstate(invalid="ignore"):
         crossed = ((f["au"] < f["bu"] - 1e-9) | (f["ad"] < f["bd"] - 1e-9)).to_numpy()
     tau = (end - ts) / 1000.0
@@ -154,27 +197,33 @@ def scan(f, lag_ms, gap_ms, step_ms, max_age_ms=MAX_AGE_MS):
             e_of = eid[idx]
             first = idx[np.r_[True, e_of[1:] != e_of[:-1]]]
             last = idx[np.r_[e_of[1:] != e_of[:-1], True]]
-            rows = last - first + 1
             stop = np.where(same_next[last], ts[nxt[last]], np.minimum(ts[last] + step_ms, end[last]))
-            persist = ok & fill_ok & ok[j]
-            pi = np.flatnonzero(persist)
             ep = pd.DataFrame({"kind": kind, "level": level, "market": f["market"].to_numpy()[first],
                                "horizon": f["horizon"].to_numpy()[first], "start_ms": f["start_ms"].to_numpy()[first],
-                               "ts_ms": ts[first], "rows": rows, "dur_s": (stop - ts[first]) / 1000.0,
+                               "ts_ms": ts[first], "rows": last - first + 1, "dur_s": (stop - ts[first]) / 1000.0,
                                "tau": tau[first], "edge0": edge[first], "size0": size[first], "sum0": psum[first],
-                               "crossed0": crossed[first], "exec": False, "exec_ts_ms": np.nan,
-                               "exec_edge": np.nan, "exec_size": np.nan, "exec_crossed": False})
-            if len(pi):
-                first_pi = pd.Series(pi).groupby(eid[pi]).first()
-                k = first_pi.index.to_numpy()  # episode numbers (0..) that execute, in order
-                r = first_pi.to_numpy()
-                ep.loc[k, "exec"] = True
-                ep.loc[k, "exec_ts_ms"] = ts[j[r]]
-                ep.loc[k, "exec_edge"] = edge[j[r]]
-                ep.loc[k, "exec_size"] = size[j[r]]
-                ep.loc[k, "exec_crossed"] = crossed[j[r]]
+                               "crossed0": crossed[first], "live0": live_sig[first]})
+            persist = ok & fill_ok & ok[j]
+            good = persist & ~crossed & ~crossed[j] & live_sig & live_fill & steady
+            for tag, rows_ok in (("exec", persist), ("clean", good)):
+                ep[tag] = False
+                for c in ("ts_ms", "edge", "size"):
+                    ep[f"{tag}_{c}"] = np.nan
+                if tag == "exec":
+                    ep["exec_crossed"] = False
+                pi = np.flatnonzero(rows_ok)
+                if len(pi):
+                    fp = pd.Series(pi).groupby(eid[pi]).first()
+                    k, r = fp.index.to_numpy(), fp.to_numpy()  # episode numbers and their first such row
+                    ep.loc[k, tag] = True
+                    ep.loc[k, f"{tag}_ts_ms"] = ts[j[r]]
+                    ep.loc[k, f"{tag}_edge"] = edge[j[r]]
+                    ep.loc[k, f"{tag}_size"] = size[j[r]]
+                    if tag == "exec":
+                        ep.loc[k, "exec_crossed"] = crossed[r] | crossed[j[r]]
             ep["usd"] = np.where(ep["exec"], ep["exec_edge"] * np.minimum(ep["exec_size"], CAP), 0.0)
-            parts.append(ep)
+            ep["usd_clean"] = np.where(ep["clean"], ep["clean_edge"] * np.minimum(ep["clean_size"], CAP), 0.0)
+            parts.append(ep[EP_COLS])
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=EP_COLS)
 
 
@@ -364,15 +413,17 @@ def summary_table(ep, ndays, kinds=KINDS):
             f"{len(tr):,}", f"{int((tr['rows'] >= 2).sum()):,}",
             f"{_med(tr['dur_s']):.1f}" if len(tr) else "–",
             f"{_c(_med(tr['edge0']))} × {size(tr['size0'])}",
-            f"{len(ex):,}（交叉 {int(ex['exec_crossed'].astype(bool).sum())}）",
+            f"{len(ex):,}（其中看到或成交时交叉 {int(ex['exec_crossed'].astype(bool).sum())}）",
             f"{_c(_med(ex['exec_edge']))} × {size(ex['exec_size'])}",
             f"${ex['usd'].sum() / max(ndays, 1):,.2f}"]
-        clean = ex[~ex["crossed0"].astype(bool) & ~ex["exec_crossed"].astype(bool)]
-        cell[k] += [f"{len(clean):,}", f"${clean['usd'].sum() / max(ndays, 1):,.2f}"]
+        cl = tr[tr["clean"].astype(bool)]
+        cell[k] += [f"{len(cl):,}", f"{_c(_med(cl['clean_edge']))} × {size(cl['clean_size'])}",
+                    f"${cl['usd_clean'].sum() / max(ndays, 1):,.2f}"]
     names = ["回合（不限价格档和挂单量）", "其中首行盘口交叉（坏行）", "其中持续 ≥ 2 行", "可成交回合（0.02–0.98，两边 ≥ 5 份）",
              "其中持续 ≥ 2 行", "可成交回合持续秒数中位", "首行每对利润中位 × 数量中位", "按规定延迟仍成立（可执行）",
              "执行时每对利润中位 × 数量中位", "每天美元（每回合 ≤ 100 对）",
-             "可执行且看到时、成交时都不交叉", "其中每天美元"]
+             "干净（可执行、不交叉、盘口前后 2 秒内在变、之前 5 秒录制没断）", "干净回合执行时每对利润中位 × 数量中位",
+             "干净回合每天美元"]
     for i, n in enumerate(names):
         L.append(f"| {n} | " + " | ".join(cell[k][i] for k in kinds) + " |")
     return L
@@ -390,18 +441,19 @@ def stats_lines(st):
 
 
 def breakdown(ep, col, bins=None, labels=None, kinds=KINDS):
-    """Tradable episodes / executable / $ per kind, by a column (binned if `bins`)."""
+    """Tradable episodes / executable / clean / clean $ (total) per kind, by a column (binned if `bins`)."""
     tr = ep[ep["level"] == "tradable"].copy()
     if not len(tr):
         return ["（没有可成交回合）"]
     tr["_k"] = pd.cut(tr[col], bins, right=False, labels=labels) if bins is not None else tr[col]
-    L = ["| " + col + " | " + " | ".join(f"{KIND_SHORT[k]}：回合 / 可执行 / $" for k in kinds) + " |",
+    L = ["| " + col + " | " + " | ".join(f"{KIND_SHORT[k]}：回合 / 可执行 / 干净 / 干净合计 $" for k in kinds) + " |",
          "|---|" + "---:|" * len(kinds)]
     for kv, g in tr.groupby("_k", sort=True, observed=True):
         cells = []
         for k in kinds:
             h = g[g["kind"] == k]
-            cells.append(f"{len(h):,} / {int(h['exec'].astype(bool).sum()):,} / ${h['usd'].sum():,.2f}")
+            cells.append(f"{len(h):,} / {int(h['exec'].astype(bool).sum()):,} / {int(h['clean'].astype(bool).sum()):,} / "
+                         f"${h['usd_clean'].sum():,.2f}")
         L.append(f"| {kv} | " + " | ".join(cells) + " |")
     return L
 
@@ -411,19 +463,23 @@ def tau_labels(bins):
 
 
 def episode_list(ep, n=30):
-    """The first n tradable episodes (or raw ones if there are none), for reading one by one."""
-    e = ep[ep["level"] == "tradable"] if len(ep) and (ep["level"] == "tradable").any() else ep
+    """Up to n episodes in time order, for reading one by one: the clean ones if there are any,
+    else the tradable ones, else the raw ones. Returns (title, lines)."""
+    tr = ep[ep["level"] == "tradable"]
+    cl = tr[tr["clean"].astype(bool)]
+    e, title = (cl, "干净回合") if len(cl) else (tr, "可成交回合") if len(tr) else (ep, "回合")
     if not len(e):
-        return []
+        return title, []
     e = e.sort_values("ts_ms").head(n)
-    L = ["| 时间（UTC） | 市场 | 类 | 级 | 剩余秒 | 行数 | 持续秒 | 两价之和 | 首行每对 | 数量 | 交叉 | 可执行 | 执行每对 | 执行数量 |",
-         "|---|---|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|---:|"]
+    L = ["| 时间（UTC） | 市场 | 周期 | 类 | 剩余秒 | 行数 | 持续秒 | 两价之和 | 首行每对 | 数量 | 交叉 | 盘口在变 | 可执行 | 执行每对 × 数量 | 干净 |",
+         "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---|---|---|---:|---|"]
     for r in e.itertuples():
-        L.append(f"| {pd.to_datetime(r.ts_ms, unit='ms'):%m-%d %H:%M:%S} | {str(r.market)[:12]} | {r.kind} | {r.level} | "
-                 f"{r.tau:.0f} | {r.rows} | {r.dur_s:.1f} | {r.sum0:.3f} | {_c(r.edge0)} | {r.size0:.0f} | "
-                 f"{'是' if r.crossed0 else ''} | {'是' if r.exec else ''} | {_c(r.exec_edge)} | "
-                 f"{r.exec_size:.0f} |".replace("| nan |", "| – |"))
-    return L
+        L.append(f"| {pd.to_datetime(r.ts_ms, unit='ms'):%m-%d %H:%M:%S.%f}"[:-3] + f" | {str(r.market)[:12]} | "
+                 f"{r.horizon:g}m | {KIND_SHORT[r.kind]} | {r.tau:.0f} | {r.rows} | {r.dur_s:.1f} | {r.sum0:.3f} | "
+                 f"{_c(r.edge0)} | {r.size0:.0f} | {'是' if r.crossed0 else ''} | {'是' if r.live0 else ''} | "
+                 f"{'是' if r.exec else ''} | {_c(r.exec_edge)} × {r.exec_size:.0f} | {'是' if r.clean else ''} |"
+                 .replace("– × nan", "–"))
+    return title, L
 
 
 def headline(ep, ndays):
@@ -433,14 +489,15 @@ def headline(ep, ndays):
         return "没有一行满足任一种套利（含手续费）。"
     tr = ep[ep["level"] == "tradable"]
     ex = tr[tr["exec"].astype(bool)]
-    clean = ex[~ex["crossed0"].astype(bool) & ~ex["exec_crossed"].astype(bool)]
+    clean = tr[tr["clean"].astype(bool)]
     when = pd.to_datetime(raw["ts_ms"], unit="ms")
     days = when.dt.strftime("%m-%d").nunique()
     span = f"{when.min():%m-%d %H:%M} – {when.max():%m-%d %H:%M} UTC" if days <= 2 else f"{days} 个日期"
     return (f"含手续费满足条件的回合：合并 {int((raw['kind'] == 'merge').sum()):,}、拆分 {int((raw['kind'] == 'split').sum()):,}，"
             f"分布在 {raw['market'].nunique():,} 个市场、{span}；两类合计首行盘口交叉的 {int(raw['crossed0'].astype(bool).sum()):,} 个，"
             f"持续 ≥ 2 行的 {int((raw['rows'] >= 2).sum()):,} 个。按规定延迟仍成立的可成交回合 {len(ex):,} 个，"
-            f"其中看到时和成交时都不交叉的 {len(clean):,} 个，合计每天 ${clean['usd'].sum() / max(ndays, 1):,.2f}。")
+            f"其中干净的（不交叉、盘口前后 2 秒内在变、之前 5 秒录制没断）{len(clean):,} 个，"
+            f"合计每天 ${clean['usd_clean'].sum() / max(ndays, 1):,.2f}。")
 
 
 def kacho_report(f, out, label="kacho.io BTC 5m 每秒盘口"):
@@ -464,29 +521,33 @@ def kacho_report(f, out, label="kacho.io BTC 5m 每秒盘口"):
     L += [f"- 挂单量列核对：Up 买一量 su = Down 卖一量 sad 的行占 {su_sad:.1%}（镜像时两者是同一批挂单），"
           "所以 su/sd 是买一量、sau/sad 是卖一量。", ""]
     if len(ep):
-        L += ["## 按段（市场开始日期）", "", "| 段 | 日数 | " + " | ".join(f"{KIND_SHORT[k]}：可成交回合 / 可执行 / 每天 $" for k in KINDS) + " |",
+        L += ["## 按段（市场开始日期）", "", "| 段 | 日数 | " + " | ".join(f"{KIND_SHORT[k]}：可成交回合 / 可执行 / 干净 / 干净每天 $" for k in KINDS) + " |",
               "|---|---:|" + "---:|" * len(KINDS)]
         for p in ("A", "B"):
             g = ep[(ep["period"] == p) & (ep["level"] == "tradable")]
             cells = [f"{len(g[g['kind'] == k]):,} / {int(g[g['kind'] == k]['exec'].sum()):,} / "
-                     f"${g[g['kind'] == k]['usd'].sum() / max(days[p], 1):,.2f}" for k in KINDS]
+                     f"{int(g[g['kind'] == k]['clean'].sum()):,} / "
+                     f"${g[g['kind'] == k]['usd_clean'].sum() / max(days[p], 1):,.2f}" for k in KINDS]
             L.append(f"| {p} | {days[p]} | " + " | ".join(cells) + " |")
         L += ["", "## 按剩余时间（秒，回合首行）", ""] + breakdown(ep, "tau", TAU_BINS[:8], tau_labels(TAU_BINS[:8]))
         L += ["", "## 按日期（只列有回合的日子；不论价格档的回合数在括号里）", ""]
-        rows = ["| 日期 | 合并回合（raw） | 拆分回合（raw） | 可执行 | 美元 |", "|---|---:|---:|---:|---:|"]
+        rows = ["| 日期 | 合并回合（raw） | 拆分回合（raw） | 可执行 | 干净 | 干净美元 |", "|---|---:|---:|---:|---:|---:|"]
         for day, g in ep.groupby("day"):
             tr = g[g["level"] == "tradable"]
             raw = g[g["level"] == "raw"]
             rows.append(f"| {day} | {len(tr[tr['kind'] == 'merge'])}（{len(raw[raw['kind'] == 'merge'])}） | "
                         f"{len(tr[tr['kind'] == 'split'])}（{len(raw[raw['kind'] == 'split'])}） | {int(tr['exec'].sum())} | "
-                        f"${tr['usd'].sum():,.2f} |")
-        L += rows + ["", "## 回合明细（按时间，最多 40 个）", ""] + episode_list(ep, 40)
+                        f"{int(tr['clean'].sum())} | ${tr['usd_clean'].sum():,.2f} |")
+        title, lines = episode_list(ep, 40)
+        L += rows + ["", f"## {title}明细（按时间，最多 40 个）", ""] + lines
     L += ["", "## 说明", "",
           "- 两边盘口几乎处处互为镜像：Polymarket 的撮合把 Up 的买单同时当成 Down 的卖单（买 Up 和买 Down 之和 ≥ 1 时"
           "撮合成铸造一对，卖两边之和 ≤ 1 时撮合成合并），所以 Up 卖一 + Down 卖一 = 1 + Up 价差 ≥ 1，"
           "Up 买一 + Down 买一 = 1 − 价差 ≤ 1。两种套利在一致的快照里按构造就不存在；剩下的几行要么一边盘口交叉"
           "（卖一低于买一，交易所不允许，是缓存里的旧数据），要么两本书在不同时刻取样。",
           "- 一行是缓存的一次快照，单行的“套利”可能是两本书不同时刻的拼接；看持续 ≥ 2 行和按 s + 2 行仍成立的数字。",
+          "- “干净”还要求看到和成交的那一刻前后 2 秒内盘口有变化（cross.HEALTH_ALIVE），且之前 5 秒里录制没有超过 1 秒的空洞："
+          "录制断流时数据会一直重复最后的报价，断流后两本书是一点点重建的，那时的“套利”不是交易所的报价。",
           "- 两腿同一行成交是乐观假设：实际一腿成交、另一腿落空时要按市价平掉，这里没算这部分风险。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
@@ -513,12 +574,15 @@ def hf_report(ep, stats, ndays, out, ndays_total, extra=None):
             L += ["按剩余时间（秒，回合首行）：", ""] + breakdown(e, "tau", TAU_BINS, tau_labels(TAU_BINS)) + [""]
     if len(ep):
         L += ["## 按日期（可成交回合 / 可执行 / 美元，各周期合计）", ""] + breakdown(ep, "day") + [""]
-        L += ["## 可成交回合明细（按时间，最多 30 个）", ""] + episode_list(ep) + [""]
+        title, lines = episode_list(ep, 60)
+        L += [f"## {title}明细（按时间，最多 60 个）", ""] + lines + [""]
     if extra:
         L += extra
     L += ["", f"每天美元按 {ndays_total} 个日档折算。明细见同名 .csv.gz。", "",
           "两种套利都要求两本书合起来交叉。CLOB 会把互补的单子直接撮合（两边买单之和 ≥ 1 时铸造一对，两边卖单之和 ≤ 1 "
-          "时合并一对），所以一致的快照里不会出现；首行“交叉”的回合是某一本书自己卖一低于买一的坏快照，不是能成交的报价。"]
+          "时合并一对），所以一致的快照里不会出现；首行“交叉”的回合是某一本书自己卖一低于买一的坏快照，不是能成交的报价。",
+          "“干净”还要求看到和成交的那一刻前后 2 秒内盘口有变化（cross.HEALTH_ALIVE），且之前 5 秒里快照之间没有超过 1 秒的空洞："
+          "数据集在没有新消息时重复最后的状态，录制断流时的“套利”是冻结的旧报价；断流后两本书是一点点重建的（例：8/06）。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
@@ -696,14 +760,15 @@ def run_forward(root, out, coins=("btc",)):
         ep = pd.DataFrame()
     else:
         stats = row_stats(fr)
-        ep = scan(fr, HF_LAG_MS, gap_ms=np.iinfo(np.int64).max // 4, step_ms=0, max_age_ms=None)
+        ep = scan(fr, HF_LAG_MS, gap_ms=np.iinfo(np.int64).max // 4, step_ms=0, max_age_ms=None, hole_ms=None)
         ndays = pd.to_datetime(fr["start_ms"], unit="ms").dt.date.nunique()
         L += ["价格来自 best_bid_ask（每次变化），挂单量来自每秒一行的 book（最优价一致时）。执行：0.5 秒后（接收时钟）"
               "那一刻的状态仍满足才算可执行。", "", headline(ep, ndays), ""] + summary_table(ep, ndays) + [""] + stats_lines(stats)
         if len(ep):
             ep["day"] = pd.to_datetime(ep["start_ms"], unit="ms").dt.strftime("%Y-%m-%d")
             L += ["", "按剩余时间（秒）：", ""] + breakdown(ep, "tau", TAU_BINS[:8], tau_labels(TAU_BINS[:8]))
-            L += ["", "明细（最多 30 个）：", ""] + episode_list(ep)
+            title, lines = episode_list(ep)
+            L += ["", f"{title}明细（最多 30 个）：", ""] + lines
             ep.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
         L += ["", f"每天美元按 {ndays} 个有数据的日历日折算。"]
     Path(out).parent.mkdir(parents=True, exist_ok=True)

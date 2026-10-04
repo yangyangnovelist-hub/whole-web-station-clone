@@ -62,6 +62,25 @@ def test_spacing_is_per_bucket_and_inclusive():
     assert big == [20, 30, 40] and small == [32, 42]
 
 
+def test_small_jump_that_turns_big_before_the_buy_is_not_a_small_jump():
+    a, b, c, d = (S0 + 300 * k for k in range(4))
+    ts, lp = trades([(a + 100.0, 0.0), (a + 101.0, 1.1), (a + 101.005, 1.3),     # 1.1 then 1.3 bp 5 ms later
+                     (b + 100.0, 0.0), (b + 101.0, 1.1), (b + 103.5, 2.5),       # turns big 2.5 s later: small
+                     (c + 100.0, 0.0), (c + 101.0, 1.1), (c + 102.0, -0.2),      # -1.3 bp 1 s later: other way
+                     (c + 102.5, -0.3),
+                     (d + 100.0, 0.0), (d + 101.0, 1.1), (d + 101.0, 1.25)])     # same receipt time: big
+    j = j2.jumps(ts, lp, win(a, b, c, d))
+    got = sorted((r.market, r.bucket, round(r.t0 - int(r.market[1:]), 3)) for r in j.itertuples())
+    assert got == [(f"m{a}", "big", 101.005), (f"m{b}", "big", 103.5), (f"m{b}", "small", 101.0),
+                   (f"m{c}", "big", 102.0), (f"m{c}", "small", 101.0), (f"m{d}", "big", 101.0)]
+    # 1 s closes: 1.1 bp in second S, 1.5 bp more in S + 1 -> the big one only; with t_obs the same
+    sec = np.array([S0 + 100, S0 + 101, S0 + 102], float)
+    lp = X + 1e-4 * np.array([0.0, 1.1, 2.6])
+    for t_obs in (None, sec + 1.0):
+        j = j2.jumps(sec, lp, win(S0), mode="closes", t_obs=t_obs)
+        assert list(j["bucket"]) == ["big"] and j["t_ex"].iloc[0] == S0 + 102
+
+
 def test_window_filters_inclusive():
     a, b = S0, S0 + 300
     ts, lp = trades([(a + 13.0, 0.0), (a + 14.0, 2.0),     # 14 s after the open: out
@@ -344,6 +363,13 @@ def test_report_tables():
     lines = j2.decision_lines(j2.decide_main(big, j2.HF_BLOCKS), j2.decide_h(big, "h1", j2.HF_BLOCKS),
                               j2.decide_h(big, "h2", j2.HF_BLOCKS))
     assert len(lines) == 3 and lines[0].startswith("- 主规则") and ("成立" in lines[1])
+    # day-clustered SEs beside the design's market-clustered ones (descriptive)
+    T = j2.day_cluster_table(big)
+    assert len(T) == 2 + 1 + 2 * 2 and "天）" in T[2] and T[3].startswith("| H1 子集 |")
+    s_day = j2.stat(j2.with_day(big), cluster="day")
+    assert s_day["k"] == len(set(j2.day_of(big["t0"].to_numpy(float)))) and f"t {s_day['t']:+.1f}" in T[2]
+    one_day = big[j2.day_of(big["t0"].to_numpy(float)) == j2.day_of(big["t0"].to_numpy(float))[0]]
+    assert all(x.rstrip(" |").endswith("–") for x in j2.day_cluster_table(one_day)[2:])  # one day: no day SE
     # a lane without book mids or trade prices still gets its tables
     bare = rows[rows.price_type == "book"].drop(columns=["mid0", "mid2", "fair0", "fair2"])
     assert len(j2.main_table(bare)) == 2 + 4 and "–" in j2.decomp_table(bare, j2.HF_BLOCKS)[-1]

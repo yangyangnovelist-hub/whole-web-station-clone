@@ -32,10 +32,12 @@ def binance(steps=((JUMP, 2.0), (250.0, 1.1)), noise=5e-7, seed=0, t_from=-900.0
     return pd.DataFrame({"trade_ts_ms": ms, "recv_ts_ms": ms + LAG_MS, "price": np.exp(lp)})
 
 
-def book(market="m1", start=S, up_ask=None, size=20.0, drop=None, state="active"):
+def book(market="m1", start=S, up_ask=None, size=20.0, drop=None, state="active", frozen=None):
     """100 ms snapshots from 60 s before the open to the end (recorder clock). Up ask 0.50, 0.55 from
     +101 s up to and including the entry snapshot +102.1 s (= T0 + 2), 0.90 after it; bids 2c
-    below, the Down book the mirror image."""
+    below, the Down book the mirror image. The Up bid size alternates 10 / 11, so every snapshot is
+    a recorded change, except where `frozen(rel)` is true: those rows repeat the row before them
+    (as the archive does when the recorder receives nothing)."""
     k = np.arange(-600, 3001)
     ts = start * 1000 + 100 * k
     rel = k / 10
@@ -43,7 +45,12 @@ def book(market="m1", start=S, up_ask=None, size=20.0, drop=None, state="active"
     ub = ua - 0.02
     f = pd.DataFrame({"timestamp_ms": ts, "market_id": market, "lifecycle_state": state, "observed_halt_flag": False,
                       "up_best_bid": ub, "up_best_ask": ua, "down_best_bid": 1 - ua, "down_best_ask": 1 - ub,
-                      "up_ask_size": size, "down_ask_size": 20.0})
+                      "up_ask_size": size, "down_ask_size": 20.0, "up_bid_size": 10.0 + (k % 2)})
+    if frozen is not None:
+        fz = np.asarray(frozen(rel), bool)
+        grp = np.cumsum(~fz)  # each frozen row takes the state of the last row before the run
+        state_cols = [c for c in hf.STATE_COLS if c in f]
+        f.loc[:, state_cols] = f.loc[~fz, state_cols].iloc[grp - 1].to_numpy()
     if drop is not None:
         f = f[~drop(rel)]
     return f.reset_index(drop=True)
@@ -107,6 +114,19 @@ def test_book_entry_needs_a_fresh_live_snapshot_and_five_shares():
     rows, _ = hf.day_rows(thin, m, binance(), prints([]))
     assert not ((rows["kind"] == "big") & (rows["price_type"] == "book")).any()
     assert one(rows, "opposite", "book")["price"] == pytest.approx(0.47)
+    # a book unchanged for 1.1 s before the entry (rows every 100 ms repeat the old state): no book entry,
+    # the row is kept apart as book_stale; unchanged for 0.9 s: a normal entry
+    stuck = book(frozen=lambda r: (r > 101.0 + 1e-9) & (r < 103))
+    rows, info = hf.day_rows(stuck, m, binance(), prints([]))
+    assert not ((rows["kind"] == "big") & (rows["price_type"] == "book")).any()
+    s = one(rows, "big", "book_stale")
+    assert s["price"] == pytest.approx(0.55) and s["book_age"] == pytest.approx(1.1, abs=1e-6)
+    assert info["priced"][("big", "book_stale")] == 1
+    ok = book(frozen=lambda r: (r > 101.2 + 1e-9) & (r < 103))
+    rows, _ = hf.day_rows(ok, m, binance(), prints([]))
+    b = one(rows, "big", "book")
+    assert b["price"] == pytest.approx(0.55) and b["book_age"] == pytest.approx(0.9, abs=1e-6)
+    assert not (rows["price_type"] == "book_stale").any()
     halted = book(state="pre_open")
     rows, _ = hf.day_rows(halted, m, binance(), prints([]))
     assert not (rows["price_type"] == "book").any()
@@ -159,12 +179,29 @@ def test_continuation_is_the_binance_move_after_the_entry_to_the_end():
     r = one(rows, "big", "book")
     lp = np.log(b["price"].to_numpy())
     x2 = lp[b["recv_ts_ms"].to_numpy() <= MS + round(1000 * (JUMP + 0.1 + 2.0))][-1]
-    x_end = lp[b["trade_ts_ms"].to_numpy() <= MS + 300_000][-1]
+    x_end = lp[b["trade_ts_ms"].to_numpy() < MS + 300_000][-1]  # point settlement: the close of the last second
     assert r["cont_bp"] == pytest.approx((x_end - x2) * 1e4) and r["cont_bp"] == pytest.approx(1.0, abs=0.1)
     # without a print in the last GAP_FILL_S seconds the outcome side is unknown
     gap = b[(b["trade_ts_ms"] < MS + (300 - hf.GAP_FILL_S - 1) * 1000) | (b["trade_ts_ms"] > MS + 300_000)]
     rows, _ = hf.day_rows(book(), markets(("m1", S, 1.0)), gap, prints([]))
     assert np.isnan(one(rows, "big", "book")["cont_bp"])
+
+
+def test_continuation_goes_to_the_twap_settlement_after_08_07():
+    S2 = int(pd.Timestamp("2026-08-20 10:00", tz="UTC").timestamp())  # 60 s TWAP settlement
+    b = binance(steps=((JUMP, 2.0), (230.0, 0.8), (270.0, 0.8)), noise=1e-7)  # +0.8 bp twice, no jumps
+    b[["trade_ts_ms", "recv_ts_ms"]] += (S2 - S) * 1000
+    rows, _ = hf.day_rows(book(start=S2), markets(("m1", S2, 1.0)), b, prints([]))
+    r = one(rows, "big", "book")
+    lp = np.log(b["price"].to_numpy())
+    x2 = lp[b["recv_ts_ms"].to_numpy() <= S2 * 1000 + round(1000 * (JUMP + 0.1 + 2.0))][-1]
+    sec = np.floor(b["trade_ts_ms"].to_numpy() / 1000).astype(np.int64)
+    last = pd.Series(lp, index=sec).groupby(level=0).last()
+    twap = last.loc[S2 + 240:S2 + 299].mean()                          # the 60 closes before the end
+    assert r["cont_bp"] == pytest.approx((twap - x2) * 1e4)
+    x_end = lp[b["trade_ts_ms"].to_numpy() < (S2 + 300) * 1000][-1]
+    assert 1.0 < r["cont_bp"] < 1.4 and (x_end - x2) * 1e4 > 1.5      # half of the second step is in the TWAP
+    assert r["delay"] == pytest.approx(LAG_MS / 1000) and one(rows, "random", "book")["delay"] == pytest.approx(LAG_MS / 1000)
 
 
 def test_carry_gives_the_model_its_lookback_but_no_jumps():
@@ -192,9 +229,10 @@ def parquet_bytes(df):
 
 def archive(path, day):
     """One 5m market (Up won) in the archive layout cross.read_day / read_binance / read_poly_trades read."""
-    f = book().drop(columns=["up_ask_size", "down_ask_size"])
+    f = book().drop(columns=["up_ask_size", "down_ask_size", "up_bid_size"])
     f["up_ask_sizes"] = [[20.0, 7.0]] * len(f)  # read_day keeps the size at the best (first) ask
     f["down_ask_sizes"] = [[20.0]] * len(f)
+    f["up_bid_sizes"] = [[10.0 + (i % 2), 3.0] for i in range(len(f))]  # a recorded change every snapshot
     mk = pd.DataFrame({"timestamp_ms": [MS + 300_000], "market_id": ["m1"], "slug": [f"btc-updown-5m-{S}"],
                        "session_start_ts": [MS], "session_end_ts": [MS + 300_000], "chainlink_open_price": [60000.0],
                        "up_won": [1.0], "lifecycle_state": ["resolved"], "up_token_id": [f"{UP}-m1"],
@@ -259,7 +297,7 @@ def test_subcommand_end_to_end(tmp_path, monkeypatch):
     assert tr["price"].iloc[0] == pytest.approx(0.70)
     text = out.read_text(encoding="utf-8")
     for s in ("## 判定", "主规则（≥ 1.2 bp、盘口价）", "H1 顺势", "H2 趋势型", "| 买法 | 盘口价 | 成交价 |",
-              "连续 3 天合计", "## 分解", "K 线缺", "| 2026-08-05 | 1 | 1 | 1 |"):
+              "连续 3 天合计", "## 分解", "K 线缺", "| 2026-08-05 | 1 | 0 | 1 | 1 | 1 | 0（0%） |"):
         assert s in text, s
     with gzip.open(out.with_suffix(".csv.gz"), "rt") as g:
         assert g.readline().strip().split(",")[:5] == ["market", "t0", "t_ex", "kind", "price_type"]
@@ -284,6 +322,52 @@ def test_klines_cache_download_and_fallback(tmp_path, monkeypatch):
     c = hf.closes_for(kl, own, missing)
     assert c.loc[S - 3600] == kl.loc[S - 3600] and c.loc[S + 10 * 86400] == 2.0
     assert hf.closes_for(kl, own, []).equals(kl)
+
+
+def test_final_resolution_takes_the_last_ok_revision_and_drops_provisional_only_markets():
+    rs = pd.DataFrame({"market_id": ["a", "a", "b", "b", "c", "d"],
+                       "horizon": ["5m", "5m", "5m", "5m", "5m", "15m"],
+                       "outcome_direction": ["DOWN", "UP", "UP", "DOWN", "UP", "UP"],
+                       "consistency_check": ["ok", "chainlink_resolution_price_missing",
+                                             "chainlink_resolution_price_missing", "ok",
+                                             "chainlink_resolution_price_missing", "chainlink_resolution_price_missing"],
+                       "revision": [2, 1, 1, 2, 1, 1], "emitted_at_ts": [9, 5, 5, 9, 5, 5]})
+    mk = pd.DataFrame({"market_id": list("abcd"), "slug": list("abcd"), "session_start_ts": [0, 0, 0, 0],
+                       "session_end_ts": [300_000] * 3 + [900_000], "chainlink_open_price": 1.0, "up_won": None})
+    old = cross.market_table(mk, rs).set_index("market_id")["up_won"]
+    assert old["a"] == 1.0  # file order: the provisional revision 1 listed last wins
+    r, left = hf.final_resolution(rs)
+    new = cross.market_table(mk, r).set_index("market_id")["up_won"]
+    assert new["a"] == 0.0 and new["b"] == 0.0 and np.isnan(new["c"]) and left == 1  # d is 15m: not counted
+    assert hf.final_resolution(rs.drop(columns="consistency_check"))[1] == 0
+    # a provisional row that already carries Polymarket's settled 1 / 0 prices is final
+    closed = {"closed": True, "outcomePrices": '["0", "1"]'}
+    rs2 = rs.assign(final_outcome_fields=[None, None, None, None, closed, None],
+                    outcome_direction=["DOWN", "UP", "UP", "DOWN", "DOWN", "UP"])
+    r2, left2 = hf.final_resolution(rs2)
+    assert left2 == 0 and cross.market_table(mk, r2).set_index("market_id")["up_won"]["c"] == 0.0
+    assert hf._closed_01({"closed": False, "outcomePrices": '["0", "1"]'}, "DOWN") is False
+    assert hf._closed_01({"closed": True, "outcomePrices": '["0.995", "0.005"]'}, "UP") is False
+    assert hf._closed_01('{"closed": true, "outcomePrices": "[\\"1\\", \\"0\\"]"}', "UP") is True
+    assert hf._closed_01({"closed": True, "outcomePrices": '["1", "0"]'}, "DOWN") is False  # disagrees
+    # a 5m market with only a provisional row gets no outcome, so day_rows leaves it out
+    rows, info = hf.day_rows(book(), cross.market_table(mk.assign(market_id="m1", session_start_ts=MS,
+                             session_end_ts=MS + 300_000).iloc[:1], r.assign(market_id="m1").iloc[4:5]),
+                             binance(), prints([]))
+    assert rows.empty and info["markets"] == 0
+
+
+def test_shrink_markets_gives_market_table_the_same_answer():
+    mk = pd.DataFrame({"market_id": ["a", "b", "a", "a", "b"], "slug": ["sa", "sb", "sa", None, "sb"],
+                       "session_start_ts": [0, 300_000, 0, 0, 300_000],
+                       "session_end_ts": [300_000, 600_000, 300_000, 300_000, 600_000],
+                       "chainlink_open_price": [np.nan, 2.0, 1.0, np.nan, 2.5], "up_won": [None, None, 1.0, None, None],
+                       "up_token_id": ["ua", "ub", None, "ua2", None]})
+    small = hf.shrink_markets(mk)
+    assert len(small) == 2
+    a, b = cross.market_table(mk, pd.DataFrame()), cross.market_table(small, pd.DataFrame())
+    pd.testing.assert_frame_equal(a.sort_values("market_id").reset_index(drop=True),
+                                  b.sort_values("market_id").reset_index(drop=True))
 
 
 def test_report_without_rows_and_market_seed():

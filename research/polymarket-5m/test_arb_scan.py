@@ -61,6 +61,7 @@ def test_kacho_episodes_persistence_and_execution():
     assert first["exec_edge"] == pytest.approx(0.10 - fee(0.5) - fee(0.4))
     assert first["usd"] == pytest.approx(first["exec_edge"] * 40.0)
     assert first["tau"] == 290 and not first["crossed0"]
+    assert first["clean"] and first["usd_clean"] == pytest.approx(first["usd"])
     assert not (ep["kind"] == "split").any()
 
 
@@ -73,6 +74,7 @@ def test_age_limit_and_crossed_rows():
     e = ep[(ep["kind"] == "merge") & (ep["level"] == "tradable")]
     assert len(e) == 1 and e["crossed0"].iloc[0]
     assert e["exec"].iloc[0]  # the row at S+2 is the latest at S+7 and only 5 s old
+    assert not e["clean"].iloc[0] and e["usd_clean"].iloc[0] == 0  # crossed, and the feed is silent after S+2
     assert not ar.scan(f, 5000, 1000, 1000, max_age_ms=4000).query("kind == 'merge'")["exec"].any()
 
 
@@ -283,3 +285,63 @@ def test_lean_reader_matches_cross_read_day(tmp_path):
     pd.testing.assert_frame_equal(ref.sort_values(key).reset_index(drop=True),
                                   got.sort_values(key).reset_index(drop=True), check_dtype=False)
     assert np.isnan(got.loc[(got["market"] == "m5") & (got["ts_ms"] == S * 1000 + 10_700), "bu_sz"]).all()
+
+
+def test_alive_needs_changes_on_both_sides():
+    code = np.zeros(6, np.int64)
+    ts = np.array([0, 1000, 2000, 3000, 9000, 9500], np.int64)
+    moved = np.array([True, False, True, False, True, False])
+    a = ar._alive(code, ts, moved, ts, 2000, 2000)
+    # rows 0, 1: a change at or before them and the next one at 2000 -> live; row 2 (2000): the next change is
+    # at 9000 -> not live; rows 4, 5: nothing after them -> not live
+    assert list(a) == [True, True, False, False, False, False]
+    # another market's change does not count
+    assert not ar._alive(np.array([0, 1]), np.array([0, 500]), np.array([True, True]), np.array([0, 500]), 2000, 2000)[0]
+
+
+def test_frozen_feed_is_not_clean():
+    """An arb that appears and then sits unchanged for 20 s (the recorder repeating its last state)."""
+    t = np.arange(0, 60_000, 100)
+    f = pd.DataFrame({"market": "m", "ts_ms": S * 1000 + t, "start_ms": S * 1000, "end_ms": S * 1000 + 300_000,
+                      "horizon": 5, "bu": 0.49, "au": 0.50, "bd": 0.50, "ad": 0.51,
+                      "bu_sz": 100.0, "au_sz": 100.0, "bd_sz": 100.0, "ad_sz": 100.0})
+    f["au_sz"] = 100.0 + (t // 100) % 7  # a live book: something changes every snapshot
+    frozen = (t >= 20_000) & (t < 40_000)
+    f.loc[frozen, ["bd", "ad", "au_sz"]] = (0.39, 0.40, 100.0)
+    ep = ar.scan(f, ar.HF_LAG_MS, 150, 100)
+    m = ep[(ep["kind"] == "merge") & (ep["level"] == "tradable")]
+    assert len(m) == 1 and m["exec"].iloc[0] and not m["live0"].iloc[0] and not m["clean"].iloc[0]
+    assert m["dur_s"].iloc[0] == pytest.approx(20.0)
+
+
+def test_live_arb_is_clean():
+    t = np.arange(0, 60_000, 100)
+    f = pd.DataFrame({"market": "m", "ts_ms": S * 1000 + t, "start_ms": S * 1000, "end_ms": S * 1000 + 300_000,
+                      "horizon": 5, "bu": 0.49, "au": 0.50, "bd": 0.50, "ad": 0.51,
+                      "bu_sz": 100.0, "au_sz": 100.0 + (t // 100) % 7, "bd_sz": 100.0, "ad_sz": 100.0})
+    f.loc[(t >= 20_000) & (t < 21_000), ["bd", "ad"]] = (0.39, 0.40)
+    m = ar.scan(f, ar.HF_LAG_MS, 150, 100).query("kind == 'merge' and level == 'tradable'")
+    assert len(m) == 1 and m["live0"].iloc[0] and m["clean"].iloc[0]
+    assert m["clean_ts_ms"].iloc[0] == S * 1000 + 20_500 and m["usd_clean"].iloc[0] == pytest.approx(m["usd"].iloc[0])
+
+
+def test_arb_right_after_a_recording_hole_is_not_clean():
+    t = np.r_[np.arange(0, 10_000, 100), np.arange(13_000, 60_000, 100)]  # no rows for 3 s
+    f = pd.DataFrame({"market": "m", "ts_ms": S * 1000 + t, "start_ms": S * 1000, "end_ms": S * 1000 + 300_000,
+                      "horizon": 5, "bu": 0.49, "au": 0.50, "bd": 0.50, "ad": 0.51,
+                      "bu_sz": 100.0, "au_sz": 100.0 + (t // 100) % 7, "bd_sz": 100.0, "ad_sz": 100.0})
+    f.loc[(t >= 13_000) & (t < 14_000), ["bd", "ad"]] = (0.39, 0.40)  # just after the hole
+    f.loc[(t >= 30_000) & (t < 31_000), ["bd", "ad"]] = (0.39, 0.40)  # long after it
+    m = ar.scan(f, ar.HF_LAG_MS, 150, 100).query("kind == 'merge' and level == 'tradable'").sort_values("ts_ms")
+    assert list(m["exec"]) == [True, True] and list(m["clean"]) == [False, True]
+    assert ar.scan(f, ar.HF_LAG_MS, 150, 100, hole_ms=None).query("level == 'tradable'")["clean"].all()
+
+
+def test_market_recorded_late_counts_as_a_hole():
+    t = np.arange(150_000, 200_000, 100)  # the first usable row is 150 s into the window
+    f = pd.DataFrame({"market": "m", "ts_ms": S * 1000 + t, "start_ms": S * 1000, "end_ms": S * 1000 + 300_000,
+                      "horizon": 5, "bu": 0.49, "au": 0.50, "bd": 0.39, "ad": 0.40,
+                      "bu_sz": 100.0, "au_sz": 100.0 + (t // 100) % 7, "bd_sz": 100.0, "ad_sz": 100.0})
+    f.loc[t >= 152_000, ["bd", "ad"]] = (0.50, 0.51)
+    m = ar.scan(f, ar.HF_LAG_MS, 150, 100).query("kind == 'merge' and level == 'tradable'")
+    assert len(m) == 1 and m["exec"].iloc[0] and not m["clean"].iloc[0]

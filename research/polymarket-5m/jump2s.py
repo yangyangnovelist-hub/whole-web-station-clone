@@ -24,7 +24,12 @@ Where JUMP2S.md is silent, the conservative choice made here:
 - Window filters on the reported t0 (with `t_obs`, the recorder's receipt time): t0 - start >= 15 and
   end - t0 >= 12, both inclusive. Spacing is greedy: a candidate is kept when it is >= 10 s after the
   last kept jump of the same market and bucket. Big and small are separate rule sets, spaced
-  separately, so one move can appear in both (e.g. 1.1 bp at one print, 1.3 bp at the next).
+  separately. The big rule is exactly JUMP2S.md's. A small candidate (1.0..1.2 bp) is dropped
+  before the small spacing when a same-sign big candidate (>= 1.2 bp, any print) becomes known in
+  [t0, t0 + ENTRY_S]: that move was already a big jump when the buy happens. Without this, in trades
+  mode most "small" rows were the first prints of big moves (a sharp move prints 1.1 bp a few ms
+  before it prints 1.3 bp; 72% of the small jumps of 2026-05-27 had such a big twin, median 8 ms
+  later), so the control was not independent of the big rows. With 1 s closes it drops 9-10%.
 - Controls: "opposite" = every kept big jump, other side, same moment; "random" = one per kept big
   jump, uniform time in the same market's allowed span [start + 15, end - 12], random side (seeded).
 - Trend features: minutes are Binance minute open times; a minute is usable at t0 only once it has
@@ -111,6 +116,8 @@ def jumps(ts_s, logp, windows, mode="trades", t_obs=None):
     `t_obs` (optional, same length): the time each print became known (e.g. recorder receipt); the
     window filters, spacing and the reported t0 then use it, the move itself uses ts_s.
     windows: DataFrame (or dict) with market, start, end in seconds.
+    big: |d| >= JUMP_BP; small: SMALL[0] <= |d| < JUMP_BP and no same-sign big candidate known in
+    [t0, t0 + ENTRY_S] (the move had not become a big jump by the buy).
 
     Returns a DataFrame with JUMP_COLS: market, t0, t_ex (ts_s of the jump print), sign (+1/-1),
     size_bp (|d| in bp), bucket ("big" / "small"), i and ref_i (positions in the input arrays), x0, x1
@@ -142,13 +149,14 @@ def jumps(ts_s, logp, windows, mode="trades", t_obs=None):
     ci = cand[np.argsort(obs[cand], kind="stable")]
     co = obs[ci]
     big = size[ci] >= JUMP_BP - BP_EPS
+    small = ~big & ~_grows_big(co, np.sign(d[ci]), big)
     lo = np.searchsorted(co, st + OPEN_GAP_S - T_EPS, "left")
     hi = np.searchsorted(co, en - END_GAP_S + T_EPS, "right")
     keep, mks, bks = [], [], []
     for m, a, b in zip(mk, lo, hi):
         if b <= a:
             continue
-        for bucket, sel in (("big", big[a:b]), ("small", ~big[a:b])):
+        for bucket, sel in (("big", big[a:b]), ("small", small[a:b])):
             idx, tt = ci[a:b][sel], co[a:b][sel]
             k, got = 0, []
             while k < len(tt):
@@ -164,6 +172,20 @@ def jumps(ts_s, logp, windows, mode="trades", t_obs=None):
                         "size_bp": size[keep], "bucket": bks, "i": keep, "ref_i": jj[keep],
                         "x0": lp[jj[keep]], "x1": lp[keep]})
     return out.sort_values(["t0", "bucket"], kind="stable").reset_index(drop=True)
+
+
+def _grows_big(co, sg, big):
+    """For candidates sorted by known time `co` with signs `sg`: whether a same-sign big candidate
+    is known in [co, co + ENTRY_S] (the small-jump control leaves those out)."""
+    out = np.zeros(len(co), bool)
+    for s in (-1.0, 1.0):
+        tb = co[big & (sg == s)]
+        if not len(tb):
+            continue
+        m = sg == s
+        k = np.searchsorted(tb, co[m] - T_EPS, "left")
+        out[m] = (k < len(tb)) & (tb[np.minimum(k, len(tb) - 1)] <= co[m] + ENTRY_S + T_EPS)
+    return out
 
 
 def random_controls(big, windows, seed=0):
@@ -540,6 +562,43 @@ def by_block(t, blocks, col="pnl", cluster="market"):
     """[(label, stat)] for each block."""
     b = block_of(t["t0"].to_numpy(float), blocks) if len(t) else np.array([], dtype=object)
     return [(name, stat(t[b == name], col, cluster)) for name, _, _ in blocks]
+
+
+def with_day(t):
+    """t plus a 'day' column (UTC day of t0), so stat / diff_stat can cluster by day."""
+    return t.assign(day=day_of(t["t0"].to_numpy(float)) if len(t) else np.array([], dtype=object))
+
+
+def day_cluster_table(t, flags=("h1", "h2"), col="pnl", bp=False):
+    """Descriptive, not in JUMP2S.md: the main rows and the H subsets / differences with the SE
+    clustered by market (the design) and by UTC day (pnl of different markets on one day moves
+    together, so the market-clustered t overstates certainty). Markdown lines."""
+    t = with_day(t)
+
+    def val(m):
+        return "–" if not np.isfinite(m) else (f"{m:+.2f} bp" if bp else _c(m))
+
+    def se(s, k=None, sub=None):
+        days = sub["day"].nunique() if sub is not None and len(sub) else 0
+        if not np.isfinite(s.get("se", np.nan)) or (sub is not None and days < 2):  # one day: no day SE
+            return "–"
+        tt = f"{s['t']:+.1f}" if np.isfinite(s["t"]) else "–"
+        x = f"{s['se']:.2f}" if bp else _c(s["se"], sign=False)[:-1]
+        return f"±{x}（t {tt}" + (f"，{k} 天）" if k is not None else "）")
+
+    L = ["| 项目 | 均值 | ± 按市场聚类（设计） | ± 按天聚类（描述） |", "|---|---:|---:|---:|"]
+    t = _clean(t, col)
+    a, b = stat(t, col), stat(t, col, cluster="day")
+    L.append(f"| 全部 | {val(a['mean'])} | {se(a)} | {se(b, b['k'], t)} |")
+    for fl in flags:
+        if fl not in t:
+            continue
+        f = pd.to_numeric(t[fl], errors="coerce")
+        a, b = stat(t[f == 1], col), stat(t[f == 1], col, cluster="day")
+        L.append(f"| {fl.upper()} 子集 | {val(a['mean'])} | {se(a)} | {se(b, b['k'], t[f == 1])} |")
+        a, b = diff_stat(t, fl, col), diff_stat(t, fl, col, cluster="day")
+        L.append(f"| {fl.upper()} 子集 − 补集 | {val(a['mean'])} | {se(a)} | {se(b, None, t[f.notna()])} |")
+    return L
 
 
 def daily(t, col="pnl", min_n=DAY_MIN_N):

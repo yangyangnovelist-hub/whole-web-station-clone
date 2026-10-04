@@ -9,9 +9,9 @@ shows the numbers the decision thresholds would give, labelled as such.
 
 1. kacho.io books (BTC 5m, official outcome): big jumps (adjacent 1 s kline closes, >= 1.2 bp),
    small jumps (1.0..1.2 bp), the other side at the same moment, a random time and side; bought at
-   the ask of the row stamped S + 2 (S = the jump second; used from S + 3), and as a secondary column
-   at the row stamped S + 1 (used from S + 2); price / outcome decomposition; H1 / H2; by month and
-   by day.
+   the ask of the row stamped S + 2 (S = the jump second; used from S + 3, the design), and as two
+   columns outside the design at the rows stamped S + 1 (one second earlier) and S + 3 (one second
+   later); price / outcome decomposition; H1 / H2; by month and by day.
 2. Binance 1 s klines only: every UTC 5-minute window; per jump the outcome side (continuation, bp,
    from S + 3 to the window end) and the model edge = won (Binance proxy outcome) - the driftless
    model's fair probability of the jump side at S + 3; by month March .. September, H1 / H2, days and
@@ -29,11 +29,20 @@ Where JUMP2S.md is silent, the conservative choice made here (on top of jump2s.p
   S + 1 - start >= 15 and end - (S + 1) >= 12, the 10 s spacing runs on S + 1, and the buy at
   t0 + 2 = S + 3 has >= 10 s left, which is JUMP2S.md's "row stamped S + 2, used from S + 3". The
   4 h / 1 h features use t_ex = S (minutes closed by S; never the jump second's own minute).
-- kacho row: a row stamped s may hold quotes up to s + 0.999 s, so it is used from s + 1; a buy at
-  time t uses the row stamped exactly floor(t) - 1 (S + 2 for a jump). JUMP2S.md allows a snapshot at
-  most 1 s before the buy, and an earlier row holds quotes more than 1 s old, so a missing row means
-  no trade (no fallback; kacho_late.py allowed 5 s, JUMP2S.md does not). Same for the secondary
-  column (row S + 1, used from S + 2, i.e. 1 s after the jump is known).
+- kacho row: JUMP2S.md (as kacho_late.py) takes a row stamped s to hold quotes up to s + 0.999 s, so
+  it is used from s + 1; a buy at time t uses the row stamped exactly floor(t) - 1 (S + 2 for a
+  jump). JUMP2S.md allows a snapshot at most 1 s before the buy, and an earlier row holds quotes more
+  than 1 s old, so a missing row means no trade (no fallback; kacho_late.py allowed 5 s, JUMP2S.md
+  does not). Same for the two side columns (rows S + 1 and S + 3).
+- The row convention is not what the data show. Around a big jump the bought side's mid moves only
+  ~0.5c (7% of the move by row S + 4) in the row stamped S and most of it in rows S + 1 and S + 2,
+  while on the 100 ms Hugging Face books Polymarket has done ~80% of its reaction ~1.2 s after the
+  Binance print; so a row looks like the book at about its stamped second, and the S + 2 ask is up
+  to 1 s old at the S + 3 buy while the ask still rises (~0.9c on average to row S + 3). The design
+  column is therefore kept as written but read as the optimistic end of a bracket, with the row S + 3
+  column (outside the design) as the pessimistic end; the report prints the row-by-row profile
+  (reaction_profile) so the reader can judge. The same 1 s offset is in the decomposition: mid2 is the
+  row S + 2 (book ~ S + 2.0) while fair2 uses close(S + 2) (~ S + 3.0).
 - Ask in 0.02..0.98 and >= 5 shares at the ask (sau / sad; an empty side shows ask 1.0 and a NaN
   size, so it fails both). Official outcome: btc_outcomes.csv up_won (Gamma), via
   kacho_late.load_books. Taker fee 0.07 p (1 - p). Rows that do not trade are dropped (counted).
@@ -86,8 +95,10 @@ import kacho_late
 KACHO_SPAN = ("2026-03-24", "2026-05-19")      # [first day, end day exclusive)
 KLINE_SPAN = ("2026-03-14", "2026-10-01")
 CONT_HOT_BP = 1.0                               # descriptive 3-day threshold for cont_bp (not in JUMP2S.md)
-ENTRY_LAGS = (("book", 2.0), ("book_s1", 1.0))  # main: row S + 2 (buy at S + 3); secondary: row S + 1
-LOCAL_PRICE_NAMES = {"book": "盘口价：S + 2 行（S + 3 起用，设计口径）", "book_s1": "盘口价：S + 1 行（S + 2 起用，副列）"}
+ENTRY_LAGS = (("book", 2.0), ("book_s1", 1.0), ("book_s3", 3.0))  # design: row S + 2; side columns: S + 1, S + 3
+LOCAL_PRICE_NAMES = {"book": "盘口价：S + 2 行（S + 3 起用，设计口径）", "book_s1": "盘口价：S + 1 行（早 1 秒，不在设计里）",
+                     "book_s3": "盘口价：S + 3 行（晚 1 秒，不在设计里）"}
+PROFILE_OFFS = (-1, 0, 1, 2, 3, 4)               # rows S - 1 .. S + 4 around a big jump
 BIN_KINDS = ("big", "small", "random")
 ROW_COLS = ["market", "t0", "t_ex", "kind", "price_type", "sign", "jump_sign", "size_bp", "price", "won",
             "pnl", "mid0", "mid2", "fair0", "fair2", "cont_bp", "ret4h", "vr60", "h1", "h2"]
@@ -223,6 +234,42 @@ def kacho_rows(p, book, sp, closes=None):
     if closes is not None:
         rows = j2.add_trend(rows, closes)
     return rows.reindex(columns=ROW_COLS), counts
+
+
+def reaction_profile(p, book, blocks=j2.KACHO_BLOCKS):
+    """Descriptive (not in JUMP2S.md): for every kept big jump (S = t_ex, the jump second), the bought
+    side's mid and ask in the rows stamped S - 1 .. S + 4, as the mean change from row S - 1 over the
+    jumps where all six rows have a two-sided book. dict(n, rows=[(offset, {block: dmid}, dmid_all,
+    dask_all)])."""
+    b = p[p["kind"] == "big"]
+    start, S = b["market"].to_numpy(np.int64), b["t_ex"].to_numpy(np.int64)
+    sg = b["sign"].to_numpy(float)
+    mids = np.column_stack([book.mid(book.row(start, S + k), sg) for k in PROFILE_OFFS]) if len(b) else \
+        np.empty((0, len(PROFILE_OFFS)))
+    asks = np.column_stack([book.ask(book.row(start, S + k), sg)[0] for k in PROFILE_OFFS]) if len(b) else \
+        np.empty((0, len(PROFILE_OFFS)))
+    ok = np.isfinite(mids).all(axis=1)
+    blk = j2.block_of(b["t0"].to_numpy(float), blocks) if len(b) else np.array([], dtype=object)
+    dm, da = (mids - mids[:, :1])[ok], (asks - asks[:, :1])[ok]
+    out = []
+    for j, k in enumerate(PROFILE_OFFS):
+        by = {name: float(dm[blk[ok] == name, j].mean()) if (blk[ok] == name).any() else np.nan
+              for name, _, _ in blocks}
+        out.append((k, by, float(dm[:, j].mean()) if len(dm) else np.nan, float(da[:, j].mean()) if len(da) else np.nan))
+    return dict(n=int(ok.sum()), rows=out)
+
+
+def profile_lines(prof, blocks=j2.KACHO_BLOCKS):
+    names = [n for n, _, _ in blocks]
+    L = ["| 行（S = 跳变所在秒） | " + " | ".join(f"中间价 {n}" for n in names) + " | 中间价 合计 | 占到 S + 4 行的比例 | 卖一 合计 |",
+         "|---|" + "---:|" * (len(names) + 3)]
+    rows = prof["rows"]
+    last = rows[-1][2] if rows else np.nan
+    for k, by, m, a in rows:
+        lab = "S − 1（基准）" if k == -1 else ("S" if k == 0 else f"S + {k}")
+        share = "–" if not (np.isfinite(m) and np.isfinite(last) and last) else f"{m / last:.0%}"
+        L.append(f"| {lab} | " + " | ".join(j2._c(by[n]) for n in names) + f" | {j2._c(m)} | {share} | {j2._c(a)} |")
+    return L
 
 
 # --------------------------------------------------------------------------- Binance only
@@ -372,21 +419,43 @@ def _band(t, lo, hi):
         return t[(p > lo) & (p <= hi)] if lo > 0 else t[(p >= lo) & (p <= hi)]
 
 
-def matched_diff(rows, bins=FAIR_BINS):
+def _band_of(price, bins=FAIR_BINS):
+    """Band index as _band cuts them ([b0, b1], then (b_i, b_i+1]); -1 outside or NaN."""
+    p = np.asarray(price, float)
+    k = np.searchsorted(np.asarray(bins[1:-1], float), p, "left")
+    with np.errstate(invalid="ignore"):
+        return np.where(np.isfinite(p) & (p >= bins[0]) & (p <= bins[-1]), k, -1)
+
+
+def matched_diff(rows, bins=FAIR_BINS, cluster="market"):
     """Descriptive: big-jump edge minus random-control edge inside each model-price band, weighted by
-    the big jumps' band shares (removes the model's own miscalibration by price). SE treats the bands
-    and the two kinds as independent. dict(mean, se, t, n)."""
+    the big jumps' band shares (removes the model's own miscalibration by price): the mean over big
+    rows of (pnl - the random mean of the row's band), over the bands that have both kinds. SE
+    clustered by market on the per-market influence sums of both kinds (a market holds big and
+    random rows; the band weights' own noise is included). dict(mean, se, t, n)."""
     big, rnd = j2._clean(j2._sel(rows, "big"), "pnl"), j2._clean(j2._sel(rows, "random"), "pnl")
-    nb = len(big)
-    m = v = 0.0
-    for lo, hi in zip(bins[:-1], bins[1:]):
-        sb, sr = j2.stat(_band(big, lo, hi)), j2.stat(_band(rnd, lo, hi))
-        if sb["n"] and sr["n"]:
-            w = sb["n"] / nb
-            m += w * (sb["mean"] - sr["mean"])
-            v += w ** 2 * (sb["se"] ** 2 + sr["se"] ** 2)
-    se = float(np.sqrt(v))
-    return dict(mean=m if nb else np.nan, se=se, t=m / se if se > 0 else np.nan, n=nb)
+    bb, br = _band_of(big["price"], bins), _band_of(rnd["price"], bins)
+    nbands = len(bins) - 1
+    nR = np.bincount(br[br >= 0], minlength=nbands)
+    sR = np.bincount(br[br >= 0], weights=rnd["pnl"].to_numpy(float)[br >= 0], minlength=nbands)
+    keep_b = (bb >= 0) & (nR[np.maximum(bb, 0)] > 0)
+    N = int(keep_b.sum())
+    if not N:
+        return dict(mean=np.nan, se=np.nan, t=np.nan, n=0)
+    mR = np.where(nR > 0, sR / np.maximum(nR, 1), np.nan)
+    yb = big["pnl"].to_numpy(float)[keep_b]
+    kb = bb[keep_b]
+    M = float(np.mean(yb - mR[kb]))
+    nB = np.bincount(kb, minlength=nbands)
+    keep_r = (br >= 0) & (nB[np.maximum(br, 0)] > 0)
+    kr = br[keep_r]
+    psi_b = (yb - mR[kb] - M) / N
+    psi_r = -(nB[kr] / N) * (rnd["pnl"].to_numpy(float)[keep_r] - mR[kr]) / nR[kr]
+    g = pd.concat([pd.Series(psi_b, index=big[cluster].to_numpy()[keep_b]),
+                   pd.Series(psi_r, index=rnd[cluster].to_numpy()[keep_r])]).groupby(level=0).sum()
+    k = len(g)
+    se = float(np.sqrt((g ** 2).sum() * k / max(k - 1, 1)))
+    return dict(mean=M, se=se, t=M / se if se > 0 else np.nan, n=N)
 
 
 def last_days_table(rows, n_days=7, kind="big", price_type=None):
@@ -415,8 +484,9 @@ def run_kacho(kacho, ts, lp, sp, closes, seed=0):
     w = w.drop_duplicates("market").sort_values("start")
     sel = kline_jumps(ts, lp, w)
     p = j2.plan(sel, w, seed=seed)
-    rows, counts = kacho_rows(p, Book(ticks), sp, closes)
-    info = dict(markets=len(w), days=len(set(j2.day_of(w["start"].to_numpy(float)))),
+    book = Book(ticks)
+    rows, counts = kacho_rows(p, book, sp, closes)
+    info = dict(markets=len(w), days=len(set(j2.day_of(w["start"].to_numpy(float)))), profile=reaction_profile(p, book),
                 first=j2.day_of([w["start"].min()])[0], last=j2.day_of([w["start"].max()])[0],
                 big=int((sel["bucket"] == "big").sum()), small=int((sel["bucket"] == "small").sum()), counts=counts)
     return rows, info
@@ -462,7 +532,7 @@ def report(kr, kinfo, br, binfo, kl):
     per_day = binfo["big"] / max(binfo["days"], 1)
     L = ["# 大跳后 2 秒买入：本地旁证（kacho 3–5 月盘口；币安 1 秒 K 线 3–9 月）", "",
          "设计见 JUMP2S.md（跑之前提交）。按设计，这两份数据都是**旁证，不单独判定**；下面给出数，判定门槛算出的结果只作参考。"
-         "生成：`jump2s_local.py`。每份 ± 按市场聚类的标准误（t，笔数）。", "",
+         "生成：`jump2s_local.py`。每份 ± 按市场聚类的标准误（t，笔数）；“按判定门槛算出的数”两节另列按天聚类的标准误作参考。", "",
          "## 数据", "",
          "| 数据 | 时间段（UTC） | 市场 / 窗口 | 入选大跳（≥ 1.2 bp） | 入选小跳（1.0–1.2 bp） | 每天大跳 |",
          "|---|---|---:|---:|---:|---:|",
@@ -477,7 +547,9 @@ def report(kr, kinfo, br, binfo, kl):
          "09-30–10-02 547 笔（约 182 次/天）。用户的规则多半还有 JUMP2S.md 没写的筛选，所以这里的数和他们的不能一笔笔对上，"
          "只能看方向。笔数多 10 倍，每天的均值也稳得多，所以“连续 3 天 ≥ 某门槛”在这里比在用户的样本里更难碰上。", "",
          "跳变秒 S 的收盘在 S + 1 才知道，这里把 S + 1 当跳变时刻：开盘、结束、10 秒间隔都按 S + 1 算，"
-         "跳后 2 秒 = S + 3，用 kacho 标为 S + 2 的那一行（正好是设计写的“S + 3 起才用”）。", ""]
+         "跳后 2 秒 = S + 3，用 kacho 标为 S + 2 的那一行（正好是设计写的“S + 3 起才用”）。", "",
+         "小跳（对照）= 1.0–1.2 bp，且跳后 2 秒内（买入之前）没有同向 ≥ 1.2 bp 的跳变：不然有一部分“小跳”其实是下一秒就长成的大跳，"
+         "对照就不独立了（逐笔数据里这种情况占多数，这里的 1 秒 K 线上约一成）。大跳的规则照 JUMP2S.md 原样。", ""]
 
     # ------------------------------------------------------------- kacho
     c = kinfo["counts"]
@@ -485,22 +557,39 @@ def report(kr, kinfo, br, binfo, kl):
         f"{LOCAL_PRICE_NAMES[pt].split('（')[0]} {j2.KIND_NAMES[k]}：计划 {c[(pt, k)][0]:,}，缺该行 {c[(pt, k)][1]:,}，"
         f"卖一不在 0.02–0.98 或不足 5 份 {c[(pt, k)][2]:,}" for pt, _ in ENTRY_LAGS for k in ("big",))
     s2, s1 = j2.stat(kb), j2.stat(j2._sel(kr, "big", "book_s1"))
-    rnd = j2.stat(j2._sel(kr, "random", "book"))
+    kb3 = j2._sel(kr, "big", "book_s3")
+    s3, kblk3 = j2.stat(kb3), j2.by_block(kb3, j2.KACHO_BLOCKS)
+    rnd, rnd3 = j2.stat(j2._sel(kr, "random", "book")), j2.stat(j2._sel(kr, "random", "book_s3"))
     kblk = j2.by_block(kb, j2.KACHO_BLOCKS)
+    prof = kinfo.get("profile") or dict(n=0, rows=[])
+    pr = {k: (m, a) for k, _, m, a in prof["rows"]}
+    last = pr.get(PROFILE_OFFS[-1], (np.nan, np.nan))[0]
+    row_s = pr.get(0, (np.nan, np.nan))[0]
+    ask23 = pr.get(3, (np.nan, np.nan))[1] - pr.get(2, (np.nan, np.nan))[1]
     kdec = [(name, j2.decomposition(kb[j2.block_of(kb["t0"].to_numpy(float), j2.KACHO_BLOCKS) == name]))
             for name, _, _ in j2.KACHO_BLOCKS]
     kall = j2.decomposition(kb)
     kbest3 = best_three(kb)
     L += ["## 一、kacho.io 每秒盘口（3/24–5/18，BTC 5m，官方结算）", "",
           "每次 1 份，按所买一方的卖一（≥ 5 份，0.02–0.98），付 taker 费 0.07·p(1 − p)，持有到官方结算。"
-          "主列是设计口径（S + 2 行）；副列早 1 秒（S + 1 行），只作参考。", "",
+          "第一列是设计口径（S + 2 行）；另两列早 1 秒（S + 1 行）、晚 1 秒（S + 3 行），不在设计里，只作对照。", "",
           *kacho_main_table(kr), "",
           f"没成交的：{dropped}。", "",
+          "### kacho 一行到底是哪一刻的盘口（描述，不在设计里）", "",
+          "JUMP2S.md 照 kacho_late.py 的假设写：标为 s 的一行可能含到 s + 0.999 秒的报价，所以 S + 3 起才用 S + 2 行。"
+          f"下表是每个大跳前后各行里所买一方的中间价、卖一相对 S − 1 行的平均变化（{prof['n']:,} 个六行都有双边盘口的大跳）：", "",
+          *profile_lines(prof), "",
+          f"跳变所在秒 S 那一行只动了 {j2._c(row_s)}（到 S + 4 行总变动的 {_pct(row_s / last if last else np.nan)}），"
+          "大部分在 S + 1、S + 2 行才出现；而 Hugging Face 的 100 ms 盘口上，Polymarket 在币安成交后约 1.2 秒就完成了约 80% 的反应。"
+          "如果一行真含到该秒末的报价，S 行应已反映不少，所以一行更像是“标注那一秒开头附近”的盘口。照这个读法，S + 2 行在 S + 3 "
+          f"买入时已经约 1 秒旧，而这 1 秒里卖一平均还在涨 {j2._c(ask23)}：设计口径（S + 2 行）偏乐观，S + 3 行偏悲观，"
+          "真实情况大致在两者之间。设计列照原样保留（判定口径不改），读的时候按区间看。", "",
           "### 按月份段（盘口价，S + 2 行）", "", *j2.block_table(kr, j2.KACHO_BLOCKS, "book"), "",
           "### 分解：价格端 vs 结果端（大跳，S + 2 行）", "",
           "中间价 2 秒变动 = 所买一方中间价从 S − 1 行到 S + 2 行的变化；模型应变动 = 无漂移模型从 S（S − 1 收盘）到 S + 3"
           "（S + 2 收盘）的变化；价格端跟上比例 = 两者之和的比。结果端 = 币安从 S + 2 收盘到市场最后一秒收盘、沿所买方向走了多少 bp。"
-          + _calib_note(br), "",
+          "注意：按上一节的读法，S + 2 行的中间价约是 S + 2.0 时刻的，而模型应变动用到 S + 2 收盘（约 S + 3.0），两边差约 1 秒，"
+          "这 1 秒里中间价还在追，所以跟上比例偏低。" + _calib_note(br), "",
           *j2.decomp_table(kr, j2.KACHO_BLOCKS, "book"), "",
           "### H1 顺势（跳变方向与过去 4 小时同号），大跳、盘口价", "", *j2.h_table(kr, "h1", j2.KACHO_BLOCKS, "book"), "",
           "### H2 趋势型（过去 60 分钟 VR > 1），大跳、盘口价", "", *j2.h_table(kr, "h2", j2.KACHO_BLOCKS, "book"), "",
@@ -510,15 +599,22 @@ def report(kr, kinfo, br, binfo, kl):
           "### 按判定门槛算出的数（旁证，不作判定）", "",
           *_soft(j2.decision_lines(j2.decide_main(kb, j2.KACHO_BLOCKS), j2.decide_h(kb, "h1", j2.KACHO_BLOCKS),
                                    j2.decide_h(kb, "h2", j2.KACHO_BLOCKS), scope="kacho 3–5 月")), "",
+          "同一口径按天聚类的标准误（描述，不在 JUMP2S.md 里）：同一天里各市场的盈亏一起涨落，按市场聚类会高估把握。", "",
+          *j2.day_cluster_table(kb), "",
           "### 这一节怎么读", "",
-          f"- 设计口径下大跳每份 {j2.fmt(s2)}，随机时刻 {j2.fmt(rnd)}（价差加手续费的底）。分月："
+          f"- 设计口径（S + 2 行）大跳每份 {j2.fmt(s2)}，随机时刻 {j2.fmt(rnd)}（价差加手续费的底）。分月："
           + "，".join(f"{n} {j2._c(b['mean'])}" for n, b in kblk) + "。",
-          f"- 早 1 秒（S + 1 行）是 {j2.fmt(s1)}，比设计口径多 {j2._c(s1['mean'] - s2['mean'])}：这部分差额来自跳后"
-          "还没改价的卖单。kacho 每秒只记一次、行内报价到底是哪一刻的说不准，这一列只能当乐观上界；它和已经在跑的“扫陈旧单”"
-          "是同一类成交（10-02 实盘那 9 张同类单都没成交）。",
+          f"- 晚 1 秒（S + 3 行，偏悲观的一端）大跳每份 {j2.fmt(s3)}，随机时刻 {j2.fmt(rnd3)}（随机对照几乎不变，"
+          "所以两列的差是跳后报价还在变，不是整体水平不同）。分月：" + "，".join(f"{n} {j2._c(b['mean'])}" for n, b in kblk3)
+          + "。所以 kacho 上大跳每份大致在这两列之间；5 月为正在 S + 3 行上弱得多。",
+          f"- 早 1 秒（S + 1 行）是 {j2.fmt(s1)}，比设计口径多 {j2._c(s1['mean'] - s2['mean'])}：这部分来自跳后还没改价的卖单。"
+          "按上面的读法，这一行在买入时约 2 秒旧，更是乐观上界——而且设计口径本身也已经偏乐观（S + 2 行在买入时约 1 秒旧，"
+          "不只是 S + 1 列）。它和已经在跑的“扫陈旧单”是同一类成交（10-02 实盘那 9 张同类单都没成交）。",
           f"- 分解（合计）：价格端跟上 {_pct(kall['ratio'])}，结果端 {_bp(kall['cont'])}。各月：" + "，".join(
               f"{n} 跟上 {_pct(d['ratio'])}、结果端 {_bp(d['cont'])}、每份 {j2._c(d['pnl']['mean']) if d['pnl']['n'] else '–'}"
-              for n, d in kdec) + "。", ""]
+              for n, d in kdec) + "。5 月跟上比例低，看起来是“钱来自价格端”，但这是 S + 2 行的中间价（约 S + 2.0）对 S + 3 时刻的"
+          "模型价，中间价在这 1 秒里还在追（5 月追得更慢，见上面的逐行表），所以这个说法要打折扣：它同样可能只是 5 月报价更新慢一些、"
+          "S + 2 行更旧。", ""]
 
     # ------------------------------------------------------------- Binance only
     bstat, bcont = j2.stat(bb), j2.stat(bb, "cont_bp")
@@ -555,6 +651,8 @@ def report(kr, kinfo, br, binfo, kl):
                                    j2.decide_h(bb, "h1", j2.KLINE_BLOCKS, need=5),
                                    j2.decide_h(bb, "h2", j2.KLINE_BLOCKS, need=5), scope="币安 3–9 月"),
                  price_word="模型优势"), "",
+          "按天聚类的标准误（描述，不在设计里）。模型优势：", "", *j2.day_cluster_table(bb), "",
+          "结果端（bp）：", "", *j2.day_cluster_table(bb, col="cont_bp", bp=True), "",
           "### 这一节怎么读", "",
           f"- 结果端：大跳 {fmt_bp(bcont)}，随机对照 {fmt_bp(j2.stat(brnd, 'cont_bp'))}；"
           f"大跳为正的月份 {sum(1 for _, s in bblk_c if s['n'] and s['mean'] > 0)} / {len(bblk_c)}。"
