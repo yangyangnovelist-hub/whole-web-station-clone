@@ -110,6 +110,12 @@ Conservative choices where FAV.md is silent (written down before the run):
 - Rule check strict (any differing feature, a missing description, the wrong pair or a mention of another
   coin's pair excludes); end_mismatch excludes (the checkpoints are anchored on the end).
 - Market open for the checkpoint filter is the later of startDate and acceptingOrdersTimestamp.
+- DST: an hourly title time that does not exist (2 AM ET on the spring-forward day) has no valid end and
+  is excluded as end_mismatch, as is a market whose end is not its title hour (either fold on the
+  fall-back day is accepted). Hourly events listed twice under two slug spellings for the same hour are
+  distinct markets (own condition id, own trades) and are both kept; the duplicates are counted.
+- A daily short slug ("ethereum-above-on-september-15") names one date per year; an event is matched to
+  the period date its end falls on, and skipped if none (last year's event).
 - Hourly up/down reference = the hour's 1 h candle open, i.e. the official 1 m open of the hour's first
   minute (known at every checkpoint); its decision time is the end (the candle's close).
 - Day of a market: the ET date in its title (hourly above: the date of the end; hourly up/down: the date
@@ -471,8 +477,12 @@ def hourly_title(title, end_ts, kind):
 
 
 def hourly_expected_end(kind, d, h):
-    """The end(s) an hourly market of title date d, hour h must have (both folds)."""
-    base = {et_ts(d, h, 0), et_ts(d, h, 1)}
+    """The end(s) an hourly market of title date d, hour h must have (both folds of the fall-back day;
+    none if h:00 ET does not exist on d, i.e. 2 AM of the spring-forward day)."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/New_York")
+    base = {b for b in (et_ts(d, h, 0), et_ts(d, h, 1))
+            if datetime.fromtimestamp(b, tz).hour == h and datetime.fromtimestamp(b, tz).date() == d}
     return sorted(b + (3600 if kind == "updown_1h" else 0) for b in base)
 
 
@@ -601,18 +611,19 @@ def discover_daily(http, coins=("ETH", "SOL", "XRP"), first=FIRST, last=LAST, lo
             for kind, ss in daily_slugs_coin(COINS[coin]["name"], d).items():
                 for s in ss:
                     want.append(s)
-                    kind_of[s] = (kind, d)
+                    kind_of.setdefault(s, []).append((kind, d))   # a short slug names one date per year
         evs = rs.events_by_slug(http, want)
         n = 0
         for ev in evs:
-            kind, d = kind_of.get(ev.get("slug"), (None, None))
-            if kind is None:
-                continue
             end = rs.ts_of(ev.get("endDate"))
-            expect = rs.et_midnight(d + timedelta(days=1)) if kind == "hit_daily" else lad.noon_et(d)
-            if not np.isfinite(end) or lad.et_date(int(end) - 1) != d:
-                notes["skipped_events"].append(f"{ev.get('slug')}: endDate {ev.get('endDate')} is not this date's")
+            cands = [(k, d) for k, d in kind_of.get(ev.get("slug"), [])
+                     if np.isfinite(end) and lad.et_date(int(end) - 1) == d]
+            if not cands:
+                if ev.get("slug") in kind_of:
+                    notes["skipped_events"].append(f"{ev.get('slug')}: endDate {ev.get('endDate')} is not this date's")
                 continue
+            kind, d = cands[0]
+            expect = rs.et_midnight(d + timedelta(days=1)) if kind == "hit_daily" else lad.noon_et(d)
             try:
                 rr = rows_of(ev, coin, kind, d, "slug")
             except Exception as e:  # one malformed event leaves out its markets only
@@ -1026,7 +1037,7 @@ def by_kind(rows, rule, group, days_kept):
     """Description: the cell split by market kind and by checkpoint (pnl, t, markets with trades)."""
     r = cell_rows(rows, rule, group, days_kept)
     out = []
-    for col in ("kind", "check"):
+    for col in (("kind", "check") if r["kind"].nunique() > 1 else ("check",)):
         for k, g in r.groupby(col):
             st = cb.stats(g, max(len(days_kept), 1))
             out.append({"by": col, "key": k, "markets": st["markets"], "pnl": st["pnl"], "t": st["t"],
@@ -1081,7 +1092,7 @@ def md(heads, body):
 def cell_table(cells, plan):
     heads = ["规则", "组", "抽样比例", "天数", "在区间市场/天", "有成交市场", "有成交市场/天", "输的市场", "笔数",
              "份/天", "花费 $/天", "利润 $/天", "挂单 ¢/份", "t", "单侧 p", "吃单 ¢/份", "t", "前半 ¢/份（市场）",
-             "后半 ¢/份（市场）", "最大单市场亏损 $", "模型 q", "成交价 p", "成交加权胜率", "判定"]
+             "后半 ¢/份（市场）", "最大单市场亏损 $", "模型 q", "成交价 p", "成交加权胜率", "日聚类 t（描述）", "判定"]
     body = []
     for c in cells:
         if not c["applies"]:
@@ -1094,7 +1105,8 @@ def cell_table(cells, plan):
                      _n(c["shares_day"]), _n(c["cost_day"]), _n(c["profit_day"], 1), _c(c["pnl"]),
                      _t(c["t"], c["markets"]), _pv(c["p1"]), _c(c["pnl_taker"]), _t(c["t_taker"], c["markets"]),
                      hc(h1), hc(h2), _n(min(c["worst"], 0.0) if np.isfinite(c["worst"]) else NAN),
-                     _n(c["q"], 4), _n(c["p"], 4), _n(c["win_tr"], 4), "**通过**" if c["pass"] else "不通过"])
+                     _n(c["q"], 4), _n(c["p"], 4), _n(c["win_tr"], 4), _t(c["t_day"], c["days_cl"]),
+                     "**通过**" if c["pass"] else "不通过"])
     return md(heads, body)
 
 
@@ -1125,7 +1137,9 @@ def rule_evidence(dec, k=2):
         for why, n in bad["rule"].value_counts().iloc[:k].items():
             r0 = bad[bad["rule"] == why].iloc[0]
             ex.append({"why": why, "n": int(n), "slug": r0["slug"], "text": re.sub(r"\s+", " ", str(r0["description"]))[:260]})
-        out.append({"group": g, "kind": kind, "sig": top.index[0], "sig_n": int(top.iloc[0]), "n": len(x),
+        sig = "；".join(f"`{k}`（{v}）" for k, v in top.iloc[:3].items())
+        sig_n = int(top.iloc[:3].sum())
+        out.append({"group": g, "kind": kind, "sig": sig, "sig_n": sig_n, "n": len(x),
                     "bad": ex, "bad_n": len(bad),
                     "sample": re.sub(r"\s+", " ", str(x[x["rule"] == ""]["description"].iloc[0]))[:330]
                     if (x["rule"] == "").any() else ""})
@@ -1140,6 +1154,8 @@ def report(ctx, out_md):
              f"≥ {MIN_MK} 个有成交市场、前后两半都 > 0）：")
     L += [verdict_line(c) for c in cells]
     npass = sum(1 for c in cells if c["applies"] and c["pass"])
+    L.append("- 对照（BTC 日内慢盘，同一规则、同一代码口径）：规则 1 在 NEARCERT 独立段每份 +2.44¢（t 6.70，275 个有成交市场，180 天）；"
+             "规则 2 在 CALIB 的 V 段每份 +5.88¢（t 4.34，64 个市场）。")
     L.append(f"- 通过 {npass} / {sum(1 for c in cells if c['applies'])} 格。"
              + ("通过的组按 FAV.md 上前向（需要把阶梯录制扩展到这些市场，单独写规则）。" if npass else "没有格子通过，不上前向。"))
     L.append("")
@@ -1182,7 +1198,7 @@ def report(ctx, out_md):
     L.append("规则文字（每组每类：最常见的解析签名；纳入的市场描述节选；签名不同而剔除的，附原文）：")
     L.append("")
     for e in ctx["evidence"]:
-        L.append(f"- {GROUP_CN[e['group']]} · {KIND_CN.get(e['kind'], e['kind'])}：`{e['sig']}`（{e['sig_n']}/{e['n']}）。"
+        L.append(f"- {GROUP_CN[e['group']]} · {KIND_CN.get(e['kind'], e['kind'])}（{e['n']} 个市场）：{e['sig']}。"
                  + (f"例：“{e['sample']}…”" if e["sample"] else ""))
         for b in e["bad"]:
             L.append(f"  - 剔除 {b['n']} 个（{b['why']}），如 `{b['slug']}`：“{b['text']}…”")
@@ -1227,6 +1243,12 @@ def coverage_notes(dec, notes):
                      f"中位数 {((x['end'] - x['open_ts']) / 60).median():.0f} 分钟（p10 {((x['end'] - x['open_ts']) / 60).quantile(0.1):.0f}）。")
         else:
             L.append(f"  - 结束 = 标题时刻 + 1 小时；市场开放在结束前中位数 {((x['end'] - x['open_ts']) / 3600).median():.0f} 小时。")
+        ev1 = x.drop_duplicates("event_slug")
+        dup = ev1.groupby("end").size()
+        if (dup > 1).any():
+            ex = ev1[ev1["end"].isin(dup.index[dup > 1])].sort_values("end")["event_slug"].iloc[:2].tolist()
+            L.append(f"  - 同一小时有两个事件（两种 slug 拼法，各自独立的市场，都保留）：{int((dup > 1).sum())} 个小时，"
+                     f"如 `{ex[0]}` 和 `{ex[1]}`。")
         for dd in ("2025-11-02", "2026-03-08"):
             y = x[x["day"] == dd].drop_duplicates("event_slug")
             if len(y):
@@ -1312,7 +1334,8 @@ def fetch_notes(win, plan, inf, kept, fstat):
 # ===================================================================== main
 
 def _timing_text(tm):
-    lab = {"discover": "发现", "klines": "K 线", "decide": "结算核对", "points": "模型", "fetch": "抓成交"}
+    lab = {"discover": "发现", "klines_download": "K 线下载", "klines": "K 线缓存和核对", "decide": "结算核对",
+           "points": "模型", "fetch": "抓成交"}
     return "，".join(f"{lab.get(k, k)} {v / 60:.1f} 分钟" for k, v in tm.items() if k in lab)
 
 

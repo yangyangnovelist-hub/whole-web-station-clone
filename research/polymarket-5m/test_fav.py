@@ -258,6 +258,9 @@ def test_hourly_titles_and_expected_ends():
     assert F.hourly_title("Bitcoin Up or Down - December 31, 11PM ET", utc(2026, 1, 1, 5), "updown_1h") == (date(2025, 12, 31), 23)
     # DST fall-back: 1 AM happens twice
     assert F.hourly_expected_end("above_1h", date(2025, 11, 2), 1) == [utc(2025, 11, 2, 5), utc(2025, 11, 2, 6)]
+    # DST spring-forward: 2 AM does not exist -> no valid end (the market is excluded as end_mismatch)
+    assert F.hourly_expected_end("updown_1h", date(2026, 3, 8), 2) == []
+    assert F.hourly_expected_end("updown_1h", date(2026, 3, 8), 3) == [utc(2026, 3, 8, 8)]
     assert F.hour_slugs("updown_1h", end_u) == ["bitcoin-up-or-down-september-15-2026-12pm-et",
                                                   "bitcoin-up-or-down-september-15-12pm-et"]
     assert F.hour_slugs("above_1h", end) == ["bitcoin-above-on-september-15-2026-4pm-et", "bitcoin-above-on-september-15-4pm-et"]
