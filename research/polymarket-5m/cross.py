@@ -2508,7 +2508,7 @@ def main(argv=None):
                           ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md"),
                           ("cancel", "real/cross-cancel-lead.md"),
                           ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md"),
-                          ("leadlag", "real/cross-leadlag-eth.md")):
+                          ("leadlag", "real/cross-leadlag-eth.md"), ("jump2s", "real/cross-jump2s.md")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -2563,6 +2563,9 @@ def main(argv=None):
         fadefollow(a.cmd, a.workdir, a.out, a.days)
     elif a.cmd == "cancel":
         cancel_lead(a.workdir, a.out, a.days)
+    elif a.cmd == "jump2s":
+        import jump2s_hf
+        jump2s_hf.run(a.workdir, a.out, a.days, dataset=DS)  # JUMP2S.md; as a script this module is not `cross`
     else:
         stale(a.workdir, a.out, a.days)
 

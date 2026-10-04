@@ -208,9 +208,54 @@ def test_main_end_to_end(tmp_path):
     assert g["n"].sum() > 0 and set(g["kind"]) <= set(jl.BIN_KINDS)
 
 
-def test_compact_csv_respects_the_size_limit(tmp_path):
-    kr = pd.DataFrame({"market": [S0], "t0": [S0 + 20.0], "kind": ["big"], "price_type": ["book"], "pnl": [0.1]})
-    br = pd.DataFrame({"t0": [S0 + 20.0], "kind": ["big"], "h1": [1.0], "h2": [np.nan], "pnl": [0.1],
-                       "cont_bp": [1.0], "won": [1.0]})
-    assert jl.compact_csv(kr, br, tmp_path / "a.csv.gz", limit=10) is None and not (tmp_path / "a.csv.gz").exists()
-    assert jl.compact_csv(kr, br, tmp_path / "b.csv.gz") > 0
+def test_compact_csv_tiers_and_size_limit(tmp_path):
+    rng = np.random.default_rng(0)
+    n = 4000
+    kr = pd.DataFrame({"market": S0 + 300 * rng.integers(0, 200, n), "t0": S0 + rng.uniform(0, 3 * 86400, n),
+                       "kind": rng.choice(["big", "random"], n), "price_type": rng.choice(["book", "book_s1"], n),
+                       "sign": rng.choice([-1, 1], n), "price": rng.uniform(0.1, 0.9, n), "won": rng.integers(0, 2, n),
+                       "pnl": rng.normal(0, 0.5, n), "cont_bp": rng.normal(0, 10, n), "h1": rng.choice([0.0, 1.0, np.nan], n),
+                       "h2": rng.choice([0.0, 1.0], n)})
+    br = kr.assign(price_type="model")
+    full = jl.compact_csv(kr, br, tmp_path / "a.csv.gz")
+    assert full[1] == 1
+    d = pd.read_csv(tmp_path / "a.csv.gz")
+    g = d[d.lane == "binance_daily"]
+    assert g["n"].sum() == n and g["pnl_sum"].sum() == pytest.approx(br["pnl"].sum(), abs=1e-3)
+    assert set(g["h1"]) == {-1.0, 0.0, 1.0}
+    agg = jl.compact_csv(kr, br, tmp_path / "c.csv.gz", limit=full[0] - 1)
+    assert agg[1] in (2, 3) and agg[0] < full[0]
+    assert jl.compact_csv(kr, br, tmp_path / "d.csv.gz", limit=10) is None and not (tmp_path / "d.csv.gz").exists()
+
+
+def test_best_three_and_calibration_table():
+    days = [D0 + 86400 * k + 100.0 for k in (0, 1, 2, 3, 5)]
+    pn = [0.0, 0.03, 0.03, 0.06, 0.5]       # 3-day windows: 0..2 (2c), 1..3 (4c); day 5 has no neighbours
+    t = pd.DataFrame({"market": np.repeat(np.arange(5), 20), "t0": np.repeat(days, 20), "pnl": np.repeat(pn, 20)})
+    day, m = jl.best_three(t)
+    assert day == "2026-04-02" and m == pytest.approx(0.04)
+    assert jl.best_three(t.iloc[:40])[0] == ""
+    r = pd.DataFrame({"market": np.arange(8), "t0": S0 + np.arange(8.0), "kind": ["random"] * 4 + ["big"] * 4,
+                      "price": [0.1, 0.9, 0.5, 0.5] * 2, "won": [1, 0, 1, 0] * 2, "cont_bp": [1.0] * 8,
+                      "h1": [1, 1, 1, 0] * 2})
+    r["pnl"] = r["won"] - r["price"]
+    L = jl.calib_table(r)
+    assert len(L) == 2 + len(jl.FAIR_BINS) - 1 + 2 and "+90.00¢" in L[2] and "-90.00¢" in L[-3]
+    assert L[-1].startswith("大跳减随机对照")
+    assert "偏自信" in jl._calib_note(r)
+
+
+def test_matched_diff_removes_the_price_band_bias():
+    rng = np.random.default_rng(4)
+    n = 6000
+    price = rng.uniform(0.01, 0.99, n)
+    bias = np.where(price < 0.5, 0.04, -0.04)           # the model's own bias, by band
+    kind = np.where(np.arange(n) % 2 == 0, "random", "big")
+    pnl = bias + np.where(kind == "big", 0.01, 0.0) + rng.normal(0, 0.01, n)
+    # big jumps sit mostly in the expensive bands, so their raw mean is pulled down by the bias
+    keep = (kind == "random") | (price > 0.4) | (rng.uniform(size=n) < 0.2)
+    r = pd.DataFrame({"market": np.arange(n), "t0": S0 + np.arange(n, dtype=float), "kind": kind, "price": price,
+                      "pnl": pnl})[keep]
+    raw = j2.stat(r[r.kind == "big"])["mean"] - j2.stat(r[r.kind == "random"])["mean"]
+    d = jl.matched_diff(r)
+    assert raw < 0.0 and d["mean"] == pytest.approx(0.01, abs=0.002) and d["t"] > 5

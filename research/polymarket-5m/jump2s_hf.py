@@ -19,16 +19,20 @@ the priced rows are kept):
   market's Polymarket prints with receipt time in [t0 + 2.0, t0 + 4.0] s (the bought token at p, the
   other token at 1 - p, any taker side), same band. Every kind (big, small, opposite, random) is
   priced both ways. Fee 0.07 p (1 - p), 1 share, held to the official result (up_won).
-- Decomposition (big and small rows): the bought token's mid change from t0 - 0.5 s to t0 + 2.0 s
-  against jump2s.model_fair over the same two moments; cont_bp = the Binance log move from t0 + 2 s
-  to the market's end along the jump, in bp.
+- Decomposition: the bought token's mid change from t0 - 0.5 s to t0 + 2.0 s (mid0, mid2; kept on
+  every row with a snapshot) against jump2s.model_fair over the same two moments (fair0, fair2; big
+  and small rows only); cont_bp (big and small rows) = the Binance log move from t0 + 2 s to the
+  market's end along the jump, in bp. The report's decomposition table is the big / book rows.
+- The decisions (jump2s.decide_main / decide_h, blocks jump2s.HF_BLOCKS) use the big rows at the book
+  price only, as JUMP2S.md says; the trade-price and taker-buy rows are reported beside them.
 - H1 / H2: jump2s.add_trend at t_ex on Binance 1-minute klines (data.binance.vision, exchange time,
   2026-04 .. 2026-08, cached in the workdir).
 
 Where JUMP2S.md and the task are silent, the conservative choice made here:
 - Snapshots are de-duplicated per (market, timestamp_ms), keeping the last row. The entry snapshot
   must be lifecycle_state "active" and not observed_halt_flag (as cross.book_health); otherwise no
-  book entry. The size at the best ask is the first entry of the recorded ask ladder (read_day's
+  book entry (on the damaged 08-19 archive every in-window 5m snapshot says pre_open, so that day
+  has trade entries only). The size at the best ask is the first entry of the recorded ask ladder (read_day's
   up_ask_size / down_ask_size; the ladder is best first, checked on the 08-19 archive), as in every
   cross.py study.
 - A print's order within one receipt millisecond is the archive's order. taker_buy (reported as its
@@ -40,10 +44,15 @@ Where JUMP2S.md and the task are silent, the conservative choice made here:
   crossed. The model fair at those two (recorder) times uses x = the log price of the last Binance
   print received by then (<= 5 s old; the jump print is received at t0, so it is in the second
   and not the first), and sigma, the price to beat and the known part of a TWAP from the per-second
-  grid in exchange time (jump2s.Seconds; the recorder's lag is ignored there).
-- cont_bp: x_end = the last Binance print by trade time at or before the end (<= 5 s old, else NaN),
-  a point price also for the TWAP markets of August (as the task defines the outcome side), minus x at
-  t0 + 2 s as above, times the jump's sign.
+  grid in exchange time (jump2s.Seconds; the recorder's lag is ignored there). The recorder's Binance
+  feed has gaps: on 08-28 it skipped 6-18 s about every 30 s (prints in 74% of the seconds, against
+  94% with trades on Binance's own 1 s klines), so the per-second grid forward-fills gaps of up to
+  GAP_FILL_S = 20 s instead of jump2s.Seconds' default 10 s; with 10 s the 60 s TWAP strike was
+  unknown for 22% of the 08-28 big jumps. The gaps come every ~30 s whatever the market does,
+  so either choice only changes coverage; the report states it.
+- cont_bp: x_end = the last Binance print by trade time at or before the end (<= GAP_FILL_S old, else
+  NaN), a point price also for the TWAP markets of August (as the task defines the outcome side), minus
+  x at t0 + 2 s as above, times the jump's sign.
 - Only the archive's own Binance prints can be jumps. The previous archive's last 15 minutes are
   carried over for the model (600 s sigma, 60 s TWAP strike) and the price lookups only. A market
   whose rows sit in two archives is priced from each archive's own prints (the 10 s spacing is not
@@ -68,7 +77,8 @@ import jump2s as j2
 KLINE_URL = "https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-{}.zip"
 KLINE_MONTHS = ("2026-04", "2026-05", "2026-06", "2026-07", "2026-08")
 MID_BEFORE_S = 0.5      # the decomposition's "before" mid: t0 - 0.5 s
-PRICE_MAX_AGE_S = 5.0   # a Binance price older than this is unknown
+PRICE_MAX_AGE_S = 5.0   # a Binance price received longer ago than this is unknown
+GAP_FILL_S = 20         # the recorder's Binance feed skips 6-18 s every ~30 s on some days (08-28)
 CARRY_S = 900           # the previous archive's last 15 min, for sigma (600 s) and the TWAP strike
 OUT_COLS = ["market", "t0", "t_ex", "kind", "price_type", "sign", "jump_sign", "size_bp", "price", "size",
             "won", "pnl", "taker_buy", "mid0", "mid2", "fair0", "fair2", "cont_bp"]
@@ -134,7 +144,7 @@ def day_rows(feat, mkts, binance, prints, carry=None):
     feat / mkts / binance / prints as from cross.read_day + cross.market_table, cross.read_binance and
     cross.read_poly_trades; `carry`: the previous archive's Binance prints (same columns) for the model
     and the price lookups only."""
-    info = dict(markets=0, prints=len(binance), big=0, small=0, delay=(np.nan, np.nan, np.nan),
+    info = dict(markets=0, prints=len(binance), big=0, small=0, delay=(np.nan, np.nan, np.nan), cover=np.nan,
                 plan={}, priced={})
     empty = pd.DataFrame(columns=OUT_COLS)
     if mkts is None or mkts.empty or binance.empty:
@@ -150,6 +160,8 @@ def day_rows(feat, mkts, binance, prints, carry=None):
     ts, lp, rv, _, _ = _binance(binance)
     if len(ts):
         info["delay"] = tuple(np.nanpercentile((rv - ts) * 1000.0, [10, 50, 90]))
+        sec = np.floor(ts)
+        info["cover"] = len(np.unique(sec)) / max(sec[-1] - sec[0] + 1, 1)
     sel = j2.jumps(ts, lp, win, mode="trades", t_obs=rv)
     info["big"], info["small"] = int((sel["bucket"] == "big").sum()), int((sel["bucket"] == "small").sum())
     if sel.empty:
@@ -178,8 +190,7 @@ def day_rows(feat, mkts, binance, prints, carry=None):
                          "down_ask_size")}
         state = f["lifecycle_state"].astype(str).str.lower().to_numpy() if "lifecycle_state" in f else \
             np.full(len(f), "active")
-        halt = f["observed_halt_flag"].fillna(False).astype(bool).to_numpy() if "observed_halt_flag" in f else \
-            np.zeros(len(f), bool)
+        halt = f["observed_halt_flag"].eq(True).to_numpy(bool) if "observed_halt_flag" in f else np.zeros(len(f), bool)
         live = (state == "active") & ~halt
         with np.errstate(invalid="ignore"):
             mid_up = np.where(col["up_best_bid"] <= col["up_best_ask"], (col["up_best_bid"] + col["up_best_ask"]) / 2,
@@ -244,7 +255,7 @@ def day_rows(feat, mkts, binance, prints, carry=None):
     if jump.any():
         both = binance if carry is None or carry.empty else pd.concat([carry, binance], ignore_index=True)
         cts, clp, _, crv, crlp = _binance(both)
-        sp = j2.Seconds(cts, np.exp(clp))
+        sp = j2.Seconds(cts, np.exp(clp), ffill=GAP_FILL_S)
         st = dict(zip(win["market"], win["start"]))
         en = dict(zip(win["market"], win["end"]))
         start = np.array([st[m] for m in mk[jump]], float)
@@ -254,7 +265,7 @@ def day_rows(feat, mkts, binance, prints, carry=None):
         x2 = _last_before(crv, crlp, tj + j2.ENTRY_S)
         fair0[jump] = j2.model_fair(sp, sj, start, tj - MID_BEFORE_S, x=x0)
         fair2[jump] = j2.model_fair(sp, sj, start, tj + j2.ENTRY_S, x=x2)
-        x_end = _last_before(cts, clp, end)
+        x_end = _last_before(cts, clp, end, GAP_FILL_S)
         cont[jump] = p["jump_sign"].to_numpy(float)[jump] * (x_end - x2) * 1e4
 
     won_up = dict(zip(m5["market_id"], m5["up_won"].astype(float)))
@@ -362,9 +373,9 @@ def run(workdir, out, days=None, dataset=None):
     own_c = pd.concat(own).groupby(level=0).last() if own else pd.Series(dtype=float)
     closes = closes_for(kl, own_c, missing)
     rows = j2.add_trend(rows, closes, t_col="t_ex") if len(rows) else rows.assign(ret4h=[], vr60=[], h1=[], h2=[])
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
     rows.round(ROUND).to_csv(Path(out).with_suffix(".csv.gz"), index=False)
     L = report(rows, infos, failed, len(arcs), kl, own_c, missing, ds=cross.DS)
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
     return rows
@@ -418,7 +429,8 @@ def report(rows, infos, failed, n_arcs, kl=None, own=None, missing=(), ds=None):
     if missing:
         L += [f"K 线缺 {'、'.join(missing)}，这些月份的分钟收盘改用日档里的币安逐笔（按成交时间）推出。", ""]
     if nk:
-        L += [f"核对：{nk:,} 个两边都有的分钟里，K 线收盘与日档逐笔推出的分钟收盘一致（差 < 0.0001%）的占 {ok:.1%}。", ""]
+        L += [f"核对：{nk:,} 个两边都有的分钟里，K 线收盘与日档逐笔推出的分钟收盘一致（差 < 0.0001%）的占 {ok:.1%}"
+              "（不一致的多是记录机漏了那一分钟最后几笔成交，见文末的空档），说明 K 线和日档的时间对得上。", ""]
     nd = max(len(days), 1)
     L += [f"跳变次数：大跳 {nbig:,}（每天约 {nbig / nd:,.0f}），小跳 {nsmall:,}（每天约 {nsmall / nd:,.0f}）。"
           "用户的口径约每天 108 次（9 月）到 182 次（09-30–10-02），他们的规则可能还有这里没写的筛选，"
@@ -444,8 +456,12 @@ def report(rows, infos, failed, n_arcs, kl=None, own=None, missing=(), ds=None):
         L += ["", f"## 按月份段（{j2.PRICE_NAMES[pt]}）", ""]
         L += j2.block_table(rows, B, pt)
     L += ["", "## 分解：价格端还是结果端（大跳，盘口价）", "",
-          "中间价变动、模型应变动都是这一方的、每笔平均；跟上比例是两者总和之比；结果端是买后到市场结束 BTC 顺跳变方向的 bp。", ""]
+          "中间价变动、模型应变动都是这一方的、每笔平均；跟上比例是两者总和之比；结果端是买后到市场结束 BTC 顺跳变方向的 bp。"
+          "用户本地（他们的定义）：跟上比例 9 月 83%、09-30–10-02 87%；结果端 +0.08 bp、+1.06 bp。", ""]
     L += j2.decomp_table(rows, B, "book")
+    dd = j2.decomposition(big)
+    L += ["", f"有两端模型公平价和中间价的大跳 {dd['ratio_n']:,} / {dd['n']:,} 笔，有结果端的 {dd['cont']['n']:,} / {dd['n']:,} 笔"
+          f"（记录机的币安成交有空档，按秒补价最多补 {GAP_FILL_S} 秒，见文末）。"]
     sm = rows[(rows["kind"] == "small") & (rows["price_type"] == "book")]
     if len(sm):
         d = j2.decomposition(sm)
@@ -469,15 +485,19 @@ def report(rows, infos, failed, n_arcs, kl=None, own=None, missing=(), ds=None):
     L += ["", "## 按天（大跳、成交价）", ""]
     L += j2.daily_lines(rows, "trade", "big")
     L += ["", "## 数据覆盖", "", "<details><summary>每个日档</summary>", "",
-          "| 日期 | 市场 | 大跳 | 小跳 | 大跳盘口价入场 | 大跳成交价入场 | 币安收到 − 成交时间 p10 / 中位 / p90（ms） |",
-          "|---|---:|---:|---:|---:|---:|---|"]
+          "| 日期 | 市场 | 大跳 | 小跳 | 大跳盘口价入场 | 大跳成交价入场 | 币安收到 − 成交时间 p10 / 中位 / p90（ms） | 有币安成交的秒 |",
+          "|---|---:|---:|---:|---:|---:|---|---:|"]
     for i in infos:
         q = i["delay"]
         dl = "–" if not np.isfinite(q[1]) else f"{q[0]:.0f} / {q[1]:.0f} / {q[2]:.0f}"
         L.append(f"| {i['day']} | {i['markets']} | {i['big']:,} | {i['small']:,} | {i['priced'].get(('big', 'book'), 0):,} | "
-                 f"{i['priced'].get(('big', 'trade'), 0):,} | {dl} |")
+                 f"{i['priced'].get(('big', 'trade'), 0):,} | {dl} | "
+                 + ("–" if not np.isfinite(i.get("cover", np.nan)) else f"{i['cover']:.0%}") + " |")
     L += ["", "</details>", "",
           "记录机时钟：触发、盘口和成交都用记录机收到的时间，它比交易所晚（见上表；README 里都柏林盘口录制中位晚约 60 ms，"
           "个别日子币安成交收到得晚好几秒），这对 2 秒后的买入影响小，但收到晚的日子“跳变”本身已经旧了。"
+          "记录机录到的币安成交有空档（08-28 大约每 30 秒断 6–18 秒，只有 74% 的秒有成交，币安自己的 1 秒 K 线是 94%）："
+          "跨过 5 秒以上空档的变动不算跳变，所以跳变比完整的成交流里少一些；模型和结果端按秒补价最多补 "
+          f"{GAP_FILL_S} 秒。空档大约每 30 秒一次，和行情无关，只影响样本量。"
           "逐行数据在 `real/cross-jump2s.csv.gz`（t0 = 收到时刻，t_ex = 币安成交时间，秒）。"]
     return L
