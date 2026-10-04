@@ -12,7 +12,9 @@ real/mix-inputs/ (built locally by `build_inputs`, see below). Only a run that r
 of MANIFEST.txt freezes rules into the committed file; `mix N` (the last N archives) or
 run(names=...) is a trial (see the lockbox below).
 
-Pipeline (MIX.md; every constant below was fixed before anything was run):
+Pipeline (MIX.md; the constants were fixed before the full run. Review fixes made after dev smoke runs on
+a few archives, before any full run: taker exits wait for a usable bid, the jump reference and klines use
+only received prints (60 s kline guard), verified downloads, trial runs, the lockbox record):
 1. Per daily archive (downloaded, checked against MANIFEST.txt's size and sha256, read and deleted one
    at a time; per-day rows written to <workdir>/mix-shards/<day>.parquet, then concatenated): BTC 5m
    markets with a final official outcome (jump2s_hf.final_resolution: provisional resolution rows
@@ -43,10 +45,11 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
    (bid size - ask size) / (sum) at the side's best; spread = ask - bid; price = the side's ask; fee
    = 0.07 p (1 - p); tau = seconds left; trend_agree = sign(d) x sign(ret4h) (is the move with the
    4 h trend), trend_side = sign(s x ret4h); vr60 (jump2s.trend_features on Binance 1 m klines from
-   data.binance.vision; a minute is used only when it closed at least 10 s before the latest exchange
-   time among the prints received by t, a function of what had arrived; 10 s is above the largest
-   receipt disorder seen, 8.9 s on 07-17, and the report counts per archive the points whose last
-   minute still had a print in flight anyway); f_ridge5, f_hgb5, f_ridge15, f_hgb15 = s x (P(up) - 0.5)
+   data.binance.vision; a minute is used only when it closed at least 60 s before the latest exchange
+   time among the prints received by t, a function of what had arrived; 60 s is above the receipt
+   disorder seen (8.9 s 07-17, 9.6 s 08-28, 38 s on the damaged 08-19 archive) and costs at most one
+   minute of a 4 h / 60 min feature; the report counts per archive the points whose last minute still
+   had a print in flight anyway); f_ridge5, f_hgb5, f_ridge15, f_hgb15 = s x (P(up) - 0.5)
    of the factor study's walk-forward out-of-sample predictions for the window starting at the
    market's open (FACTORS.md; known at the open); dvol_rv = DVOL / 100 (last hourly candle closed by
    t, known at its hour's end) - rv30 (annualised std of the 1 s log returns of the 1,800 s ending
@@ -98,11 +101,11 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
    - Effective bid: pnl_eff_{tk*, mk*} = the same policies when a sale may also match the other
      token's asks (Polymarket matches a sell of one token against sell orders of the other): the
      bid is max(own best bid, 1 - the other token's best ask), each candidate with >= 5 shares and
-     its own token's book uncrossed; maker fills also count 1 - other ask >= L in fresh snapshots and
-     taker SELL prints of the other token at <= 1 - L (= a buy of ours at >= L). MIX.md and the task
-     price each token on its own book, so the verdict does; real taker sells print at 1 - the other
-     ask much more often than at a dropped own bid (07-14), so own-book taker exits are an upper
-     bound on the cost.
+     its own token's book uncrossed, 1 - other ask below the token's own ask; maker fills also count
+     1 - other ask >= L in fresh snapshots and taker SELL prints of the other token at <= 1 - L (= a
+     buy of ours at >= L). MIX.md and the task price each token on its own book, so the verdict
+     does; real taker sells print at 1 - the other ask much more often than at a dropped own bid
+     (07-14), so own-book taker exits are an upper bound on the cost.
 6. Report (Chinese, with units) and the traded rows of the frozen rules and their controls (with
    their strict-fill and effective-bid pnl).
 
@@ -172,7 +175,7 @@ Where MIX.md and the task are silent, the conservative choice made here:
   report splits each frozen rule's B and C results by settlement rule (the verdict does not).
 - Binance prints arrive out of trade order (0.25% of the 06-02 prints by at most 0.64 s, 3.2% of
   the 07-17 prints by up to 8.9 s): sigma and rv30 use a receipt-clock grid, the jump reference and
-  d only prints received by then, and the klines a 10 s guard on the latest exchange time received
+  d only prints received by then, and the klines a 60 s guard on the latest exchange time received
   (see 2, 3). The report gives per archive the largest disorder, the jump points whose trade-time
   reference had not arrived (skipped here) and the points whose last minute still had a print in
   flight (diagnostics computed on the whole day, never features).
@@ -214,7 +217,7 @@ BOOK_MAX_AGE_S = 1.0
 PRICE_MAX_AGE_S = 5.0
 H_ANCHOR_S = 2.0
 RV_N, RV_MIN = 1800, 900
-KLINE_GUARD_S = 10.0        # a 1 m kline counts once it closed >= 10 s before the latest exchange time received (> the 8.9 s disorder of 07-17)
+KLINE_GUARD_S = 60.0        # a 1 m kline counts once it closed >= 60 s before the latest exchange time received (disorder: 9.6 s 08-28, 38 s 08-19)
 GAP_FILL_S = hf.GAP_FILL_S
 CARRY_S = 1800
 SEC_YEAR = 365 * 86400
@@ -740,8 +743,9 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
 class SideBook:
     """One market's snapshots seen from side sd. A sellable bid ("own": the verdict) is the token's own
     best bid; "eff" (sensitivity) is max(own best bid, 1 - the other token's best ask). Each candidate
-    needs an active snapshot, its token's book not crossed, a price > 0 and >= 5 shares at it. Maker
-    bid events: fresh snapshots, any size (own bid; eff adds 1 - other ask)."""
+    needs an active snapshot, its token's book not crossed, a price > 0 and >= 5 shares at it; 1 - other
+    ask also has to stay below this token's own ask (otherwise the snapshot pairs a stale book with a
+    fresh one). Maker bid events: fresh snapshots, any size (own bid; eff adds 1 - other ask)."""
 
     def __init__(self, bk, a, b, sd):
         self.T, self.lc = bk.T[a:b], bk.last_chg[a:b]
@@ -755,10 +759,13 @@ class SideBook:
             oth_ok = live & ~(np.isfinite(xb) & np.isfinite(xa) & (xb >= xa))
             self.fresh = self.T - self.lc <= BOOK_MAX_AGE_S + T_EPS
             own = own_ok & np.isfinite(ob) & (ob > 0) & np.isfinite(obs) & (obs >= MIN_SHARES - 1e-12)
-            comp = oth_ok & np.isfinite(xa) & (xa < 1) & np.isfinite(xas) & (xas >= MIN_SHARES - 1e-12)
+            # 1 - other ask counts only while the two books are consistent: below this token's own ask
+            # (else one book is stale and the two asks would already have been merged)
+            consistent = oth_ok & np.isfinite(xa) & (xa < 1) & ~(np.isfinite(oa) & (1.0 - xa >= oa - 1e-9))
+            comp = consistent & np.isfinite(xas) & (xas >= MIN_SHARES - 1e-12)
             use_c = comp & (~own | (1.0 - xa > ob))
             ev_own = np.where(own_ok & self.fresh & np.isfinite(ob), ob, -np.inf)
-            ev_cmp = np.where(oth_ok & self.fresh & np.isfinite(xa), 1.0 - xa, -np.inf)
+            ev_cmp = np.where(consistent & self.fresh, 1.0 - xa, -np.inf)
         self.sell = {"own": (np.where(own, ob, np.nan), np.where(own, obs, np.nan)),
                      "eff": (np.where(use_c, 1.0 - xa, np.where(own, ob, np.nan)),
                              np.where(use_c, xas, np.where(own, obs, np.nan)))}
@@ -1270,7 +1277,7 @@ def trade_extras(tr, pol):
     policies: the share held to settlement although the planned exit was before the end (no usable bid
     came) and the mean wait of the taker sales beyond te + h + 0.5 s."""
     out = dict(n=len(tr), markets=int(tr["market"].nunique()) if len(tr) else 0, pairs=0, held_early=np.nan,
-               wait=np.nan)
+               held_won=np.nan, wait=np.nan)
     if not len(tr):
         return out
     g = tr.groupby([tr["market"].astype(str), tr["kind"].astype(str), tr["t"].round(3)], observed=True)["side"].nunique()
@@ -1281,6 +1288,8 @@ def trade_extras(tr, pol):
         early = te + h + LAT_S < tr["start"].to_numpy(float) + 300.0 - T_EPS
         how = tr[f"how_{pol}"].to_numpy(float)
         out["held_early"] = float(np.mean(how[early] == 0)) if early.any() else np.nan
+        held = early & (how == 0)
+        out["held_won"] = float(np.mean(tr["won"].to_numpy(float)[held] == 1)) if held.any() else np.nan
         sold = how == 1
         if sold.any():
             out["wait"] = float(np.mean(tr[f"hold_{pol}"].to_numpy(float)[sold] - (h + LAT_S)))
@@ -1635,7 +1644,7 @@ def cost_table(rows, segs=("A", "B")):
                 cells.append("–" if not k.any() else
                              " / ".join(f"{np.mean(rows[f'how_mk{x}_10'].to_numpy()[k] == 2):.0%}" for x in MAKER_X))
             L.append("| 挂单 10 秒内成交率（+1 / +2 / +3 / +5¢） | " + " | ".join(cells) + " | |")
-        if all(f"fs{x}" in rows for x in MAKER_X):
+        if all(f"fs{x}" in rows and f"how_mk{x}_10" in rows for x in MAKER_X):
             left = rows["start"].to_numpy(float) + 300.0 - rows["t"].to_numpy(float) - LAT_S
             cells = []
             for _, m in groups:
@@ -1725,8 +1734,8 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
                      f"{int((k & (kind == 'fixed')).sum()):,} | {int((k & (kind == 'random')).sum()):,} | "
                      + " / ".join(f"{int((mw == v).sum()):,}" for v in (0, 30, 60)) + " |")
         L += ["", "每个急动 / 固定决策点算两行（买 Up、买 Down 各一行）；只留下 0.5 秒后能按卖一买进的行"
-              "（盘口 1 秒内变过、在交易状态、没交叉、0.02–0.98、卖一 ≥ 5 份）。A 段全是点价结算；B 段混有点价、30 秒和 60 秒均价结算；"
-              "C 段全是 60 秒均价结算（模型只在点价结算的行上训练过）。", ""]
+              "（盘口 1 秒内变过、在交易状态、没交叉、0.02–0.98、卖一 ≥ 5 份）。最后一列是各段市场的结算方式"
+              "（8/07 前点价、8/07–8/13 30 秒均价、8/14 起 60 秒均价）；模型只在 A 段的行上训练。", ""]
     L += ["## 规则（照 MIX.md）", "",
           f"- **决策点**（记录机收到时刻）：币安逐笔成交相对 1–5 秒前的最后一笔 ≥ {JUMP_BP:g} bp 的急动（参照的那一笔也必须在触发那一笔收到时已经收到；"
           "剩 285–20 秒，同一市场间隔 ≥ 5 秒），加每个市场剩 240、180、120、60 秒的固定时点。",
@@ -1833,6 +1842,8 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
             t = f"{name} 段 {e['n']:,} 笔落在 {e['markets']:,} 个市场（每个市场 {e['n'] / max(e['markets'], 1):.1f} 笔），同一时点两方都买 {e['pairs']:,} 次"
             if np.isfinite(e.get("held_early", np.nan)):
                 t += f"；计划在结束前卖、却因到结束都没有可用买一而持有到结算的占 {e['held_early']:.1%}"
+                if np.isfinite(e.get("held_won", np.nan)):
+                    t += f"（其中最后赢的占 {e['held_won']:.0%}：多是没人买的输家一方）"
             if np.isfinite(e.get("wait", np.nan)):
                 t += f"；吃单卖平均比计划晚 {e['wait']:.1f} 秒成交（等下一个可用买一）"
             ex.append(t + "。")

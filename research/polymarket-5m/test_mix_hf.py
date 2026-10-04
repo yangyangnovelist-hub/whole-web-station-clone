@@ -257,6 +257,10 @@ def test_effective_bid_sensitivity_uses_the_other_tokens_ask():
     assert u["pnl_tk5"] == pytest.approx(0.05 - fee(0.05) - c5)
     assert u["pnl_eff_tk5"] == pytest.approx(eff - fee(eff) - c5, abs=1e-6)
     assert u["pnl_eff_tk10"] == pytest.approx(u["pnl_tk10"])  # outside the hole the two agree
+    # a Down ask so low that 1 - it reaches the Up ask (0.95) pairs a stale book with a fresh one: ignored
+    f.loc[hole, "down_best_ask"] = 0.03
+    u_ = one(day(f=f, won=0.0)[0], "jump", 1, T0)
+    assert u_["pnl_eff_tk5"] == pytest.approx(u_["pnl_tk5"]) == pytest.approx(0.05 - fee(0.05) - c5)
     # a taker SELL of the Down token at 0.485 (= a buy of Up at 0.515 >= 0.51) fills the +1c resting sell in
     # the sensitivity only; the verdict falls back to the 5 s taker exit
     rows, _ = day(pr=[(103.6, "dn", 0.485, "sell")])
@@ -541,6 +545,22 @@ def test_report_shows_the_sensitivities_settlement_split_and_stacking(tmp_path, 
     for s in ("严格排队", "有效买一", "按结算方式拆开", "60 秒均价结算", "同一时点两方都买", "叠在一起",
               "在这些行上挑的，样本内", "（急动这一方 − 反方向）÷ 2"):
         assert s in text, s
+
+
+def test_report_flags_a_maker_rule_that_passes_B_only_at_the_front_of_the_queue(tmp_path, monkeypatch, fast_models):
+    monkeypatch.setattr(M, "POLICIES", ["mk1_5", "tk5"])
+    rows = synth_rows()
+    rows["pnl_mk1_5"] = rows["pnl_tk5"] + np.float32(0.01)
+    rows["pnl_tk5"] = rows["pnl_tk5"] - np.float32(0.2)  # the fallback when the resting sell is not filled
+    rows["how_mk1_5"] = np.int8(2)
+    for x in M.MAKER_X:
+        rows[f"fs{x}"] = np.float32(np.nan)  # strictly (a print above L) never filled
+    out = tmp_path / "q" / "mix-hf.md"
+    _, spec, res = M.analyze(rows, out, log=lambda s: None)
+    r1 = res[0]
+    assert r1["rule"]["policy"] == "mk1_5" and r1["b_pass"] and r1["strict"]["B"]["mean"] < 0
+    text = out.read_text(encoding="utf-8")
+    assert "排在队首）的口径下才通过 B 的挂单规则：R1" in text
 
 
 def test_download_is_checked_against_the_manifest_and_retried(tmp_path, monkeypatch):
