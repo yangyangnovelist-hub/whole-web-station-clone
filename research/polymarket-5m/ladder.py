@@ -62,6 +62,7 @@ GAMMA_SEARCH = "https://gamma-api.polymarket.com/public-search?q=bitcoin&limit_p
 CLOB_MARKET = "https://clob.polymarket.com/clob-markets/{cid}"
 # Binance's market-data-only REST host (api.binance.com answers 451 on US runners).
 KLINE = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime={ms}&limit=1"
+KLINES = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime={ms}&endTime={end}&limit=1000"
 MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september",
           "october", "november", "december")
 DAILY = {"above": "bitcoin-above-on-{d}", "range": "bitcoin-price-on-{d}",
@@ -69,6 +70,7 @@ DAILY = {"above": "bitcoin-above-on-{d}", "range": "bitcoin-price-on-{d}",
 H4, H4_S = "btc-updown-4h-{ts}", 4 * 3600
 TYPES = ("above", "range", "hit_up", "hit_down", "updown_day", "updown_4h")
 REDISCOVER_S = 1800
+PRE = ("pre_high", "pre_low", "pre_at")  # hit markets: the day's Binance high / low before the recording
 DEPTH_CAP = 0.99  # hit markets: ask depth below this price (ladder_check barrier events)
 NAN = float("nan")
 
@@ -281,21 +283,43 @@ def _kline(fetch, open_ts):
 def reference(m, fetch, now):
     """(price, source) of an up/down market's reference, if it has been fixed: the close of the
     Binance 1m candle closing at the day market's reference time, or, for the 4-hour market, the
-    open of the Binance 1m candle at its start (an approximation of Chainlink's price then)."""
+    mean of open, high, low and close of the Binance 1m candle closing at its start (an
+    approximation of Chainlink's 60 s TWAP then)."""
     if m["type"] == "updown_day" and m["ref_ts"] and now >= m["ref_ts"] + 5:
         k = _kline(fetch, m["ref_ts"] - 60)
         return (float(k[4]), "binance 1m close") if k else (None, None)
     if m["type"] == "updown_4h" and m["ref_ts"] and now >= m["ref_ts"] + 5:
-        k = _kline(fetch, m["ref_ts"])
-        return (float(k[1]), "binance 1m open (approximates chainlink)") if k else (None, None)
+        k = _kline(fetch, m["ref_ts"] - 60)
+        return (sum(float(x) for x in k[1:5]) / 4, "binance 1m OHLC mean before start (approximates chainlink TWAP)") \
+            if k else (None, None)
     return None, None
+
+
+def day_extremes(fetch, start, now):
+    """(high, low) of the Binance BTCUSDT 1m candles from `start` up to `now` (the open candle so far
+    included); (None, None) before `start`."""
+    if now < start:
+        return None, None
+    hi, lo, ms, end = -np.inf, np.inf, int(start) * 1000, int(now * 1000)
+    while ms <= end:
+        ks = fetch(KLINES.format(ms=ms, end=end)) or []
+        for k in ks:
+            hi, lo = max(hi, float(k[2])), min(lo, float(k[3]))
+        if len(ks) < 1000:
+            break
+        ms = int(ks[-1][0]) + 60_000
+    if not np.isfinite(hi):
+        raise ValueError(f"no 1m candles from {start}")
+    return hi, lo
 
 
 def discover(fetch=fetch_json, now=None, days=3, cache=None):
     """(markets, notes): every open market of the undelayed types ending after `now`, with the
     /clob-markets check ("itode" absent) and, for up/down, the reference price if fixed. Markets
     whose /clob-markets record holds taker orders are left out and named in the notes. `cache`
-    (condition id -> /clob-markets record) saves lookups across re-discoveries."""
+    (condition id -> /clob-markets record) saves lookups across re-discoveries. Hit markets carry
+    the day's Binance high and low up to `now` (pre_high, pre_low; pre_at = now, None if unknown), so
+    a level touched before a recording starts is known as reached."""
     now = time.time() if now is None else now
     cache = {} if cache is None else cache
     rows, notes = [], []
@@ -319,7 +343,10 @@ def discover(fetch=fetch_json, now=None, days=3, cache=None):
                       if str(ev.get("slug", "")).startswith("what-price-will-bitcoin-hit")
                       and not ev.get("closed") and (iso_ts(ev.get("endDate")) or 0) > now]
             for ev in events:
-                rows += event_markets(ev, "hit")
+                try:
+                    rows += event_markets(ev, "hit")
+                except Exception as e:
+                    notes.append(f"{ev.get('slug')}: {type(e).__name__}: {e}; event left out")
             if not events:
                 notes.append("bitcoin public search: no active hit event")
             continue
@@ -327,8 +354,11 @@ def discover(fetch=fetch_json, now=None, days=3, cache=None):
         if not events:
             notes.append(f"{slug}: not listed")
         for ev in events:
-            rows += event_markets(ev, kind, d)
-    out, seen = [], set()
+            try:
+                rows += event_markets(ev, kind, d)
+            except Exception as e:  # one malformed event leaves out its markets only
+                notes.append(f"{slug}: {type(e).__name__}: {e}; event left out")
+    out, seen, ext = [], set(), {}
     eligible = []
     for m in rows:
         if m["condition_id"] in seen or m["closed"] or not m["end_ts"] or m["end_ts"] <= now:
@@ -347,7 +377,7 @@ def discover(fetch=fetch_json, now=None, days=3, cache=None):
         if isinstance(info, Exception):
             notes.append(f"{m['slug']}: /clob-markets {type(info).__name__}: {info}; left out")
             continue
-        info = info or {}
+        info = info if isinstance(info, dict) else {}
         clob_tokens = {str(x.get("t")) for x in info.get("t", []) if isinstance(x, dict) and x.get("t")}
         if clob_tokens != {m["yes_token"], m["no_token"]} or not info.get("mts"):
             notes.append(f"{m['slug']}: incomplete /clob-markets record; left out")
@@ -365,6 +395,16 @@ def discover(fetch=fetch_json, now=None, days=3, cache=None):
                 m["ref_price"], m["ref_source"] = reference(m, fetch, now)
             except Exception as e:
                 notes.append(f"{m['slug']}: reference {type(e).__name__}: {e}")
+        if m["type"] in ("hit_up", "hit_down") and m["start_ts"]:
+            if m["start_ts"] not in ext:
+                try:
+                    ext[m["start_ts"]] = day_extremes(fetch, m["start_ts"], now)
+                except Exception as e:
+                    ext[m["start_ts"]] = None
+                    notes.append(f"{m['event_slug']}: day high / low {type(e).__name__}: {e}")
+            hl = ext[m["start_ts"]]
+            m["pre_high"], m["pre_low"] = hl if hl is not None else (None, None)
+            m["pre_at"] = int(now) if hl is not None else None
         out.append(m)
     out.sort(key=lambda m: (TYPES.index(m["type"]), m["end_ts"], m["lo"] or 0, m["hi"] or 0))
     return out, notes
@@ -414,6 +454,8 @@ class LadderRecorder(pt.LiveTrader):
             old = self.ladder.get(m["condition_id"])
             if old is not None and old.get("ref_price") is not None and m.get("ref_price") is None:
                 m = {**m, "ref_price": old["ref_price"], "ref_source": old["ref_source"]}
+            if old is not None and "pre_at" in old:  # the high / low before the recording, not since
+                m = {**m, **{k: old.get(k) for k in PRE}}
             self.ladder[m["condition_id"]] = m
             for tok in (m["yes_token"], m["no_token"]):
                 self.token_coin[tok] = "btc"
@@ -453,6 +495,7 @@ class LadderRecorder(pt.LiveTrader):
         asyncio.get_running_loop().set_exception_handler(
             lambda loop, ctx: self.rec.write("errors", {"at": pt.now_ms(), "where": "loop",
                                                         "err": repr(ctx.get("exception") or ctx.get("message"))}))
+        deadline = time.time() + hours * 3600  # the recording ends on the clock, however long discovery takes
         first = False
         for _ in range(10):  # subscribe with the first discovery rather than an empty list
             try:
@@ -464,7 +507,7 @@ class LadderRecorder(pt.LiveTrader):
             await asyncio.sleep(30)
         tasks = [asyncio.create_task(c) for c in (self.discover_loop(first), self.clob_loop(), self.binance_loop())]
         try:
-            await asyncio.sleep(hours * 3600)
+            await asyncio.sleep(max(0.0, deadline - time.time()))
         finally:
             for t in tasks:
                 t.cancel()
@@ -489,10 +532,13 @@ def book_rows(records, depth_tokens=(), ticks=None):
     "top" rows are recording.book_events' "xtop" rows (top of book and first-level sizes whenever
     they change, stamped with the exchange time of the message that changed them, one row per
     message; messages without a time are applied but not stamped), plus the token's tick size
-    (from `ticks`, then tick_size_change messages) and, for `depth_tokens`, the ask depth below
-    DEPTH_CAP (a change there also makes a row). "trade" rows are last_trade_price prints."""
+    (from `ticks`, then tick_size_change messages, whose change also makes a row) and, for
+    `depth_tokens`, the ask depth below DEPTH_CAP (a change there also makes a row). A token's
+    stamps never go back: one earlier than its last row is moved up to it and reported as a
+    ("back", row). A message that cannot be applied is skipped and reported as ("bad", row).
+    "trade" rows are last_trade_price prints that carry the exchange's time."""
     depth_tokens, tick = set(depth_tokens), dict(ticks or {})
-    ladders, last = {}, {}
+    ladders, last, latest = {}, {}, {}
     for rec in records:
         ms, msg = int(rec["recv_ms"]), rec.get("msg")
         for m in msg if isinstance(msg, list) else [msg]:
@@ -501,41 +547,51 @@ def book_rows(records, depth_tokens=(), ticks=None):
             et = m.get("event_type")
             if et == "last_trade_price":
                 try:
-                    yield "trade", {"asset_id": m["asset_id"], "ts": int(m.get("timestamp") or ms) / 1000,
+                    yield "trade", {"asset_id": m["asset_id"], "ts": int(m["timestamp"]) / 1000,
                                     "recv_ms": ms, "price": float(m["price"]), "size": float(m.get("size") or "nan"),
                                     "side": m.get("side")}
                 except (KeyError, ValueError, TypeError):
                     pass
                 continue
-            if et == "tick_size_change":
-                try:
-                    tick[m["asset_id"]] = float(m["new_tick_size"])
-                except (KeyError, ValueError, TypeError):
-                    pass
+            try:
+                if et == "tick_size_change":
+                    toks = [m["asset_id"]]
+                    tick[toks[0]] = float(m["new_tick_size"])
+                elif et == "book":
+                    toks = [m["asset_id"]]
+                    pt.apply_clob_message(ladders, m, ms)
+                elif et == "price_change":
+                    toks = list(dict.fromkeys(pc["asset_id"] for pc in m.get("price_changes", [])))
+                    pt.apply_clob_message(ladders, m, ms)
+                else:
+                    continue
+                stamp = int(m.get("timestamp") or 0)
+            except (KeyError, ValueError, TypeError, AttributeError) as e:
+                yield "bad", {"recv_ms": ms, "event_type": et, "err": repr(e)}
                 continue
-            if et == "book":
-                toks = [m["asset_id"]]
-            elif et == "price_change":
-                toks = list(dict.fromkeys(pc["asset_id"] for pc in m.get("price_changes", [])))
-            else:
-                continue
-            pt.apply_clob_message(ladders, m, ms)
-            stamp = m.get("timestamp")
             if not stamp:
                 continue
             for tok in toks:
-                lad = ladders[tok]
+                lad = ladders.get(tok)
+                if lad is None:
+                    continue
+                t = stamp
+                if t < latest.get(tok, t):
+                    yield "back", {"asset_id": tok, "ts": t / 1000, "last": latest[tok] / 1000}
+                    t = latest[tok]
+                latest[tok] = t
                 x = (lad.bid, lad.ask, lad.size_at("bid", lad.bid), lad.size_at("ask", lad.ask))
                 d = ask_depth(lad.asks) if tok in depth_tokens else (NAN, NAN)
-                if (x, d) != last.get(tok):
-                    last[tok] = (x, d)
-                    yield "top", {"asset_id": tok, "ts": int(stamp) / 1000, "recv_ms": ms, "top": x,
+                if (x, d, tick.get(tok)) != last.get(tok):
+                    last[tok] = (x, d, tick.get(tok))
+                    yield "top", {"asset_id": tok, "ts": t / 1000, "recv_ms": ms, "top": x,
                                   "tick": tick.get(tok, NAN), "depth": d}
 
 
 def raw_markets(src):
     """Market rows from a recording: the latest discovery of each condition id (keeping a reference
-    price an earlier one had), from raw/*/markets.jsonl.gz and, if present, <src>/markets.json."""
+    price an earlier one had, and the first one's pre_high / pre_low / pre_at), from
+    raw/*/markets.jsonl.gz and, if present, <src>/markets.json."""
     out = {}
 
     def take(rows):
@@ -545,6 +601,8 @@ def raw_markets(src):
             old = out.get(m["condition_id"])
             if old is not None and old.get("ref_price") is not None and m.get("ref_price") is None:
                 m = {**m, "ref_price": old["ref_price"], "ref_source": old.get("ref_source")}
+            if old is not None and "pre_at" in old:  # the first discovery's: before the recording
+                m = {**m, **{k: old.get(k) for k in PRE}}
             out[m["condition_id"]] = m
 
     for snap in rc.iter_jsonl(rc.raw_files(src, "markets")):
@@ -574,7 +632,7 @@ def build(src, out):
     (out / "markets.json").write_text(json.dumps(markets, indent=1))
     depth = {m["yes_token"] for m in markets if m.get("type") in ("hit_up", "hit_down")}
     ticks = {tok: m["tick"] for m in markets if m.get("tick") for tok in (m["yes_token"], m["no_token"])}
-    counts = {"markets": len(markets), "books": 0, "clob_trades": 0}
+    counts = {"markets": len(markets), "books": 0, "clob_trades": 0, "bad_messages": 0, "stamps_back": 0}
     with gzip.open(out / "books.csv.gz", "wt", newline="") as fb, gzip.open(out / "clob_trades.csv.gz", "wt",
                                                                             newline="") as ft:
         wb, wt = csv.writer(fb), csv.writer(ft)
@@ -586,6 +644,10 @@ def build(src, out):
                 wb.writerow([r["asset_id"], f"{r['ts']:.3f}", f"{r['recv_ms'] / 1000:.3f}", _f(bid), _f(ask), _f(bs),
                              _f(az), _f(r["tick"]), _f(r["depth"][0]), _f(r["depth"][1], 4)])
                 counts["books"] += 1
+            elif kind == "bad":
+                counts["bad_messages"] += 1
+            elif kind == "back":
+                counts["stamps_back"] += 1
             else:
                 wt.writerow([r["asset_id"], f"{r['ts']:.3f}", f"{r['recv_ms'] / 1000:.3f}", _f(r["price"]),
                              _f(r["size"]), r["side"] or ""])
@@ -620,7 +682,7 @@ def load(d):
     for c in ("yes_token", "no_token", "condition_id"):
         if c in markets:
             markets[c] = markets[c].astype(str)
-    for c in ("lo", "hi", "end_ts", "start_ts", "ref_ts", "ref_price", "tick"):
+    for c in ("lo", "hi", "end_ts", "start_ts", "ref_ts", "ref_price", "tick") + PRE:
         if c in markets:
             markets[c] = pd.to_numeric(markets[c], errors="coerce")
     rows = lt._binance(d, "binancews")

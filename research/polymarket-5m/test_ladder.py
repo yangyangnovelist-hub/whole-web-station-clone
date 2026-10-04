@@ -125,7 +125,11 @@ def test_discover_types_bounds_times_and_the_delay_check():
     assert (by["a84"]["yes_token"], by["a84"]["no_token"], by["u1"]["yes_outcome"]) == ("a84-a", "a84-b", "Up")
     # the day market's reference: the close of the candle closing at 16:00 UTC the day before
     assert by["u1"]["ref_ts"] == _utc("2026-10-04T16:00:00Z") and by["u1"]["ref_price"] == 84999.5
-    assert by["f1"]["ref_price"] == 85000.5 and by["f1"]["settle"] == "chainlink-twap"
+    # the 4-hour market's: the mean of open, high, low and close of the candle closing at its start
+    assert by["f1"]["ref_price"] == 85000.0 and by["f1"]["settle"] == "chainlink-twap"
+    # hit markets carry the day's Binance high / low before now; the other types do not
+    assert (by["h1"]["pre_high"], by["h1"]["pre_low"], by["h1"]["pre_at"]) == (85010.0, 84990.0, T + 30)
+    assert "pre_high" not in by["a84"]
     assert "9 undelayed markets" in ld.summary(markets, notes)
 
 
@@ -195,17 +199,33 @@ def test_book_rows_are_book_events_xtop_rows_plus_tick_and_depth():
     ours = list(ld.book_rows(recs, depth_tokens={"y"}, ticks={"y": 0.01}))
     xtop = [r for k, r in rc.book_events(recs) if k == "xtop"]
     tops = [r for k, r in ours if k == "top"]
-    # the depth change at +200 ms (0.70 removed, top unchanged) is one more row for a depth token
-    assert [(r["asset_id"], r["ts"], r["top"]) for r in tops if r["ts"] != 1000.2] == \
+    # the tick size change at +150 ms and the depth change at +200 ms (0.70 removed, top unchanged)
+    # are one more row each for a depth token
+    assert [(r["asset_id"], r["ts"], r["top"]) for r in tops if r["ts"] not in (1000.15, 1000.2)] == \
         [(r["asset_id"], r["ts"], r["top"]) for r in xtop]
-    assert [r["ts"] for r in tops] == [1000.0, 1000.1, 1000.1, 1000.2]
-    assert [r["tick"] for r in tops if r["asset_id"] == "y"] == [0.01, 0.01, 0.001]
+    assert [r["ts"] for r in tops] == [1000.0, 1000.1, 1000.1, 1000.15, 1000.2]
+    assert [r["tick"] for r in tops if r["asset_id"] == "y"] == [0.01, 0.01, 0.001, 0.001]
     fee = lambda p: 0.07 * p * (1 - p)  # noqa: E731
     assert tops[0]["depth"] == (25.0, pytest.approx(round((0.4 - fee(0.6)) * 20 + (0.3 - fee(0.7)) * 5, 6)))
     assert tops[-1]["depth"] == (28.0, pytest.approx(round((0.45 - fee(0.55)) * 8 + (0.4 - fee(0.6)) * 20, 6)))
     assert np.isnan(tops[2]["depth"][0])  # "n" is not a depth token
     trades = [r for k, r in ours if k == "trade"]
     assert trades == [{"asset_id": "y", "ts": 1000.25, "recv_ms": 1_000_400, "price": 0.55, "size": 3.0, "side": "BUY"}]
+
+
+def test_book_rows_skip_bad_messages_and_keep_stamps_in_order():
+    recs = [{"recv_ms": 1_000_400, "msg": _frame(1_000_000)},
+            # a price change without a size, a print without the exchange's time, a stamp gone back
+            {"recv_ms": 1_000_500, "msg": {"event_type": "price_change", "timestamp": "1000300",
+                                           "price_changes": [{"asset_id": "y", "price": "0.5", "side": "SELL"}]}},
+            {"recv_ms": 1_000_500, "msg": {"event_type": "last_trade_price", "asset_id": "y", "price": "0.5"}},
+            {"recv_ms": 1_000_600, "msg": {"event_type": "price_change", "timestamp": "1000050", "price_changes": [
+                {"asset_id": "y", "price": "0.53", "size": "1", "side": "SELL"}]}}]
+    rows = list(ld.book_rows(recs, ticks={"y": 0.01}))
+    kinds = [k for k, _ in rows]
+    assert kinds.count("bad") == 1 and kinds.count("back") == 1 and kinds.count("trade") == 1
+    tops = [r for k, r in rows if k == "top" and r["asset_id"] == "y"]
+    assert tops[-1]["ts"] == 1000.2 and tops[-1]["top"][1] == 0.53  # moved up to the token's last stamp
 
 
 def test_build_and_load_a_recording(tmp_path):
@@ -222,6 +242,8 @@ def test_build_and_load_a_recording(tmp_path):
     r.on_clob(json.dumps({"event_type": "price_change", "timestamp": str(T * 1000 + 300), "price_changes": [
         {"asset_id": tok, "price": "0.54", "size": "2", "side": "SELL"}]}), T * 1000 + 350)
     r.on_clob(json.dumps({"event_type": "book", "asset_id": "not-ours", "bids": [], "asks": []}), T * 1000 + 400)
+    r.rec.write("clob-btc", {"recv_ms": T * 1000 + 450, "msg": [{"event_type": "price_change", "timestamp": "1",
+                                                                  "price_changes": [{"asset_id": tok}]}]})
     r.on_clob("PONG", T * 1000 + 500)
     for k in range(5):
         r.on_binance(json.dumps({"stream": "btcusdt@aggTrade", "data": {
@@ -231,17 +253,32 @@ def test_build_and_load_a_recording(tmp_path):
     r.rec.write("errors", {"at": T * 1000 + 900, "where": "clob", "err": "closed 1006"})
     r.rec.close()
     counts = ld.build(tmp_path, tmp_path / "built")
-    assert counts == {"markets": 9, "books": 3, "clob_trades": 1, "binance": 5, "clob_closes": 1}
+    assert counts == {"markets": 9, "books": 4, "clob_trades": 1, "binance": 5, "clob_closes": 1, "bad_messages": 1,
+                      "stamps_back": 0}
     books, mk, spot, trades, closes = ld.load(tmp_path / "built")
-    # one row per top-of-book change, at the exchange's time; the removal of a second level is none
-    assert list(books["ts"]) == [T, T + 0.1, T + 0.3] and list(books["recv"]) == [T + 0.3, T + 0.3, T + 0.35]
-    assert list(books["ask"]) == [0.6, 0.55, 0.54] and list(books["bid"]) == [0.4, 0.45, 0.45]
-    assert list(books["tick"]) == [0.01, 0.01, 0.001] and list(books["ask_size"]) == [20, 8, 2]
+    # one row per top-of-book or tick size change, at the exchange's time; the removal of a second
+    # level is none
+    assert list(books["ts"]) == pytest.approx([T, T + 0.1, T + 0.15, T + 0.3])
+    assert list(books["recv"]) == pytest.approx([T + 0.3, T + 0.3, T + 0.3, T + 0.35])
+    assert list(books["ask"]) == [0.6, 0.55, 0.55, 0.54] and list(books["bid"]) == [0.4, 0.45, 0.45, 0.45]
+    assert list(books["tick"]) == [0.01, 0.01, 0.001, 0.001] and list(books["ask_size"]) == [20, 8, 8, 2]
     assert books["market_id"].iloc[0] == tok and np.isnan(books["depth99"]).all()  # an above market
     assert list(spot["trade_ts"]) == pytest.approx([T + 0.1 * k for k in range(5)])
     assert spot["receive_ts"].iloc[0] == pytest.approx(T + 0.04)
     assert list(trades["price"]) == [0.55] and list(closes) == [pytest.approx(T + 0.9)]
     assert set(mk["type"]) == set(ld.TYPES) and mk.loc[mk["condition_id"] == "u1", "ref_price"].iloc[0] == 84999.5
+
+
+def test_raw_markets_keep_the_first_discoverys_day_high(tmp_path):
+    """A later discovery's high / low includes the recording itself: the first one's is kept."""
+    r = ld.LadderRecorder(tmp_path, fetch=_fetch)
+    markets, notes = ld.discover(_fetch, now=T + 30)
+    r.rec.write("markets", {"at": 0, "markets": markets, "notes": notes})
+    later = [{**m, "pre_high": 99999.0, "pre_at": T + 3600} if m["type"] == "hit_up" else m for m in markets]
+    r.rec.write("markets", {"at": 1, "markets": later, "notes": notes})
+    r.rec.close()
+    h1 = next(m for m in ld.raw_markets(tmp_path) if m["condition_id"] == "h1")
+    assert (h1["pre_high"], h1["pre_at"]) == (85010.0, T + 30)
 
 
 # ------------------------------------------------------------------ model
@@ -306,7 +343,7 @@ def fixture():
             ("y2", J - 100, 0.55, 0.60, 10, 100, 0.01, 150, edge),
             ("y2", J + 0.25, 0.98, 0.995, 500, 20, 0.001, 0, 0)]
     rows += [("hb", float(t), 0.1 + 0.01 * (k % 2), 0.2, 1, 1, 0.01, np.nan, np.nan)
-             for k, t in enumerate(np.arange(S0, S0 + 800, 5.0))]  # another token, so the feed shows alive
+             for k, t in enumerate(np.arange(S0, S0 + 800, 2.0))]  # another token, so the feed shows alive
     books = pd.DataFrame(rows, columns=["market_id", "ts", "bid", "ask", "bid_size", "ask_size", "tick", "depth99",
                                         "edge99"])
     books["recv"] = books["ts"] + 0.1
@@ -359,6 +396,7 @@ def test_barrier_event(fixture):
     assert r["t"] == pytest.approx(J) and r["below"] == pytest.approx(0.25)
     assert (r["ask-1"], r["ask+0"], r["ask+0.2"], r["ask+0.3"], r["ask+5"]) == (0.60, 0.60, 0.60, 0.995, 0.995)
     assert r["depth"] == 150 and r["trades"] == 1 and r["traded"] == 50
+    assert (r["depth0.1"], r["depth0.3"]) == (150, 0)  # what a taker 100 / 300 ms late finds
     # the hit market is settled from the jump on: no pair after it
     p = lc.analyze(books, markets, spot)["pairs"]
     assert not ((p["type"] == "hit_up") & (p["jump"] > J + 1)).any()
@@ -382,3 +420,55 @@ def test_report_from_built_directories(fixture, tmp_path):
     text = out.read_text()
     assert "录制段 1 个" in text and "标记不是结算盈亏" in text and "| ↑ " in text
     assert "| above（高于） | 1 | 100% | 350 / 350 | 0% | 0% | 0% | 100% | 100% | 100% |" in text
+
+
+def test_a_silent_book_feed_after_the_jump_drops_it(fixture):
+    """No close logged, but no book row of any token for 139 s: the quotes after t0 are not seen."""
+    books, markets, spot, trades = fixture
+    quiet = books[~((books["ts"] > J + 1) & (books["ts"] < J + 140))]
+    p = lc.analyze(quiet, markets, spot, closes=np.array([]), trades=trades)["pairs"]
+    assert not (len(p) and at_j(p).any())
+
+
+def test_a_binance_gap_before_the_move_is_not_a_jump(fixture):
+    books, markets, spot, trades = fixture
+    gap = spot[~((spot["trade_ts"] > J - 3.5) & (spot["trade_ts"] < J))].reset_index(drop=True)
+    js = lc.jumps(gap)
+    assert not ((js["t0"] >= J - 1e-6) & (js["t0"] <= J + 2)).any()
+
+
+def test_a_level_reached_before_the_recording_is_settled(fixture):
+    books, markets, spot, trades = fixture
+    mk = markets.assign(pre_high=np.where(markets["type"] == "hit_up", markets["lo"] + 1, np.nan))
+    res = lc.analyze(books, mk, spot, closes=None, trades=trades)
+    assert res["barriers"].empty and not (res["pairs"]["type"] == "hit_up").any()
+
+
+def test_a_disconnect_within_a_minute_after_a_touch_drops_it(fixture):
+    books, markets, spot, trades = fixture
+    assert lc.analyze(books, markets, spot, closes=np.array([J + 30.0]), trades=trades)["barriers"].empty
+
+
+def test_taker_rule_limits():
+    """One take per token per 120 s; none when the market ends before the last markout, when the
+    jump print reached the recorder after t0 + lag, or outside the ask band."""
+    base = {"jump": 1000.0, "recv0": 1000.05, "token": "a", "event": "e", "type": "above", "change": 0.2,
+            "to_end": 3600.0, "fair1": 0.9, "fair_m2": 0.5, "mid_m2": 0.5, "mid30": 0.8, "mid120": 0.8}
+    base.update({f"ask{lag:g}": 0.5 for lag in lc.LAGS})
+    base.update({f"size{lag:g}": 10.0 for lag in lc.LAGS})
+    rows = [base, {**base, "jump": 1002.0, "recv0": 1002.05}, {**base, "jump": 1130.0, "recv0": 1130.05},
+            {**base, "token": "b", "to_end": 150.0}, {**base, "token": "c", "recv0": 1000.25},
+            {**base, "token": "d", **{f"ask{lag:g}": 0.01 for lag in lc.LAGS}}]
+    t = lc.taker_rows(pd.DataFrame(rows))
+    cell = t[(t["variant"] == "model") & (t["theta"] == 0.05) & (t["lag"] == 0.1)]
+    assert sorted(zip(cell["token"], cell["jump"])) == [("a", 1000.0), ("a", 1130.0)]
+    late = t[(t["variant"] == "model") & (t["theta"] == 0.05) & (t["lag"] == 0.3)]
+    assert sorted(set(late["token"])) == ["a", "c"]
+
+
+def test_one_sided_books_keep_their_markouts():
+    books = pd.DataFrame({"market_id": ["a", "a"], "ts": [1.0, 2.0], "bid": [np.nan, 0.4], "ask": [0.006, np.nan],
+                          "bid_size": 1.0, "ask_size": 1.0, "tick": 0.001, "depth99": np.nan, "edge99": np.nan})
+    toks = lc.Tokens(books)
+    assert np.isnan(toks.asof("a", 1.5, "mid")) and toks.asof("a", 1.5, "mark") == pytest.approx(0.003)
+    assert toks.asof("a", 2.5, "mark") == pytest.approx(0.7)

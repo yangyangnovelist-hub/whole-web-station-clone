@@ -21,14 +21,15 @@ on:
     paths: [research/polymarket-5m/ci/ladder.request]
   workflow_dispatch:
 
-permissions:
-  contents: write
-  actions: write
+permissions: {}
 
 jobs:
   record:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    permissions:
+      contents: read
+      actions: write   # gh workflow run (the next recording)
     concurrency:
       group: polymarket-ladder-record
       cancel-in-progress: false
@@ -41,6 +42,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,11 +58,16 @@ jobs:
           c = json.load(open("ci/ladder.json"))
           on = c.get("enabled", True) and datetime.date.today().isoformat() <= c.get("until", "2000-01-01")
           print(f"enabled={'true' if on else 'false'}")
-          print(f"hours={float(c.get('hours', 5.5))}")
+          hours = float(c.get("hours", 5.5))
+          print(f"hours={hours}")
+          # a recorder that ran shorter than this crashed: the job fails after its data is uploaded
+          # (last step), so the external monitor does not start the next run
+          print(f"min_secs={int(min(1800, hours * 3600 / 2))}")
           PY
 
       - name: Discover the undelayed markets
         if: steps.cfg.outputs.enabled == 'true'
+        timeout-minutes: 3
         run: |
           python ladder.py discover --days 1 --out "$RUNNER_TEMP/ladder/markets-start.json"
           python - "$RUNNER_TEMP/ladder/markets-start.json" <<'PY'
@@ -72,15 +79,21 @@ jobs:
           PY
 
       - name: Record (market data only, no orders)
+        id: rec
         if: steps.cfg.outputs.enabled == 'true'
         run: |
-          secs=$(python -c "print(int(float('${{ steps.cfg.outputs.hours }}') * 3600) + 900)")
-          timeout "$secs" python ladder.py record --out "$RUNNER_TEMP/ladder" --hours ${{ steps.cfg.outputs.hours }}
+          secs=$(python -c "print(int(float('${{ steps.cfg.outputs.hours }}') * 3600) + 300)")
+          t0=$(date +%s)
+          # SIGINT lets the recorder close its files; SIGKILL a minute later if it does not stop
+          timeout -s INT -k 60 "$secs" python ladder.py record --out "$RUNNER_TEMP/ladder" \
+            --hours ${{ steps.cfg.outputs.hours }} || true
+          echo "secs=$(( $(date +%s) - t0 ))" >> "$GITHUB_OUTPUT"
           ls -la "$RUNNER_TEMP"/ladder/raw/*/ && du -sh "$RUNNER_TEMP/ladder/raw" && df -h "$RUNNER_TEMP" | tail -1
           zcat "$RUNNER_TEMP"/ladder/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
 
       - name: Build the tables
         if: steps.cfg.outputs.enabled == 'true'
+        timeout-minutes: 10
         run: |
           python ladder.py build --src "$RUNNER_TEMP/ladder" --out "$RUNNER_TEMP/ladder/built"
           python - "$RUNNER_TEMP/ladder/built/counts.json" <<'PY'
@@ -91,7 +104,7 @@ jobs:
           PY
 
       - name: Pack the recording
-        if: steps.cfg.outputs.enabled == 'true'
+        if: always() && steps.cfg.outputs.enabled == 'true'   # keep the raw data even if build failed
         run: |
           cd "$RUNNER_TEMP/ladder"
           tar czf "$RUNNER_TEMP/ladder.tgz" built markets*.json raw/*/markets.jsonl* raw/*/errors.jsonl* \
@@ -99,24 +112,40 @@ jobs:
           tar czf "$RUNNER_TEMP/ladder-raw.tgz" raw/*/clob-*.jsonl* 2>/dev/null || true
           ls -la "$RUNNER_TEMP"/ladder*.tgz
       - uses: actions/upload-artifact@v4
-        if: steps.cfg.outputs.enabled == 'true'
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true   # the raw upload below still runs
         with:
           name: ladder-${{ github.run_id }}
           path: ${{ runner.temp }}/ladder.tgz
           retention-days: 30
+          overwrite: true          # a re-run of the job reuses the run id
+          compression-level: 0     # already gzipped
       - uses: actions/upload-artifact@v4
-        if: steps.cfg.outputs.enabled == 'true'
+        if: always() && steps.cfg.outputs.enabled == 'true'
         continue-on-error: true
         with:
           name: ladder-raw-${{ github.run_id }}
           path: ${{ runner.temp }}/ladder-raw.tgz
           retention-days: 30
+          overwrite: true
+          compression-level: 0
+
+      - name: Fail a recorder that crashed (after the upload, so its data is kept)
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          if [ "${{ steps.rec.outputs.secs || 0 }}" -lt "${{ steps.cfg.outputs.min_secs }}" ]; then
+            echo "the recorder ran ${{ steps.rec.outputs.secs || 0 }} s (< ${{ steps.cfg.outputs.min_secs }} s)"
+            exit 1
+          fi
 
   report:
     needs: record
     if: always() && needs.record.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write   # commit the report
+      actions: read     # list the runs, download their artifacts
     concurrency:
       group: polymarket-ladder-report
       cancel-in-progress: false
@@ -140,14 +169,14 @@ jobs:
         run: |
           set -u
           rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"
-          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
                 --jq '.workflow_runs[] | select(.name == "polymarket-ladder") | .id')
           for id in $ids; do
             gh run download "$id" -n "ladder-$id" -D "$rec/$id" 2>/dev/null || continue
             tar xzf "$rec/$id/ladder.tgz" -C "$rec/$id" 2>/dev/null || true
             rm -f "$rec/$id/ladder.tgz"
-            if [ ! -s "$rec/$id/built/books.csv.gz" ]; then
-              # the run's own build failed: rebuild from its raw CLOB messages
+            if [ ! -s "$rec/$id/built/counts.json" ]; then
+              # the run's own build failed (it writes counts.json last): rebuild from its raw CLOB messages
               gh run download "$id" -n "ladder-raw-$id" -D "$rec/$id" 2>/dev/null \
                 && tar xzf "$rec/$id/ladder-raw.tgz" -C "$rec/$id" 2>/dev/null || true
               rm -f "$rec/$id/ladder-raw.tgz"
