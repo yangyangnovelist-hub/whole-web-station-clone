@@ -1246,6 +1246,9 @@ def report(cache=CACHE, out="real/factors.md"):
         assert LP["frozen_made"] == fz["made"] and LB is not None and LP["lockbox_run"] == LB["run"], \
             "lockbox_prices.json does not belong to this lock box"
     V1 = dict(frozen=_load_json(Path(cache) / "frozen_v1.json"), lockbox=_load_json(Path(cache) / "lockbox_v1.json"))
+    DR = _load_json(Path(cache) / "dryrun_B_prices.json")  # the lock-box code run on B relabelled as C
+    if DR is not None and DR["frozen_made"] != fz["made"]:
+        DR = None
     ic = R["ic"]
     mtests = len(FACTORS) * len(HORIZONS)
     tcrit = stats.norm.isf(0.05 / mtests / 2)
@@ -1385,7 +1388,7 @@ def report(cache=CACHE, out="real/factors.md"):
         L.append(f"| {model} | {_f(d['rho_mid'])} | {_f(d['rho_up'])} | {_f(d['rho_mid_up'])} | {_f(d['diff'])} ±{_f(d['diff_se'], 3, False)} | "
                  f"{_f(d['b_p'], 4)} ({_f(d['t_p'], 1)}) | {_f(d['b_mid'], 4)} ({_f(d['t_mid'], 1)}) | {d['n']:,}（{d['days']}） |")
     # frozen + lockbox
-    L += _lockbox_section(R, fz, LB, LP)
+    L += _lockbox_section(R, fz, LB, LP, DR)
     # hypotheses
     vlines, vres = verdicts(R, main)
     L += ["", "## 5. 事先写下的假设", ""] + vlines + ["", "### 持仓量 × 价格（过去 1 小时同向/反向之后，朝过去 1 小时方向的延续，bp）", "",
@@ -1450,6 +1453,9 @@ def _revision(V1, fz, LB):
          f"只在 A + B 上用改好的数据重新冻结（{fz['made'][:19]} UTC），然后 C 只算这一次"
          + (f"（{LB['run'][:19]} UTC）" if LB else "（还没跑）") + "。评审期间有人把第一次冻结的 C 交易按官方结算和真实价格重算过；"
          "这些数字没有用来选任何东西（规则、模型、θ 都和第一次一样的选法）。", "",
+         "两次冻结不同的 h：" + ("、".join(f"{h}（{f1['horizons'][h]['model']} θ{f1['horizons'][h]['theta']} → {fz['horizons'][h]['model']} θ{fz['horizons'][h]['theta']}）"
+                                    for h, _ in HORIZONS if (f1['horizons'][h]['model'], f1['horizons'][h]['theta']) != (fz['horizons'][h]['model'], fz['horizons'][h]['theta']))
+                          or "无") + "。", "",
          "第一次（作废）的冻结和 C（按币安标签、0.51）：", "",
          "| h | 冻结 | B 每份（笔） | C 每份 ± SE（笔） | C 单侧 p |", "|---|---|---:|---:|---:|"]
     for h, _ in HORIZONS:
@@ -1458,7 +1464,7 @@ def _revision(V1, fz, LB):
     return L + [""]
 
 
-def _lockbox_section(R, fz, LB, LP):
+def _lockbox_section(R, fz, LB, LP, DR=None):
     L = ["", "## 4. 冻结（只用 A + B）和锁箱 C（只算一次）", "",
          "规则：每个 h 在 B 滚动样本外（0.51，按结算）每份最高、且 B 至少 300 笔的（模型, θ）；4 小时到不了 300，取至少 100 笔里最高的，C 上无法检验。"
          "冻结文件 `frozen.json`。B 每份是从最多 6 个候选里挑的最高值，有选择偏差（期望偏高约 1 个标准误）。", "",
@@ -1470,6 +1476,12 @@ def _lockbox_section(R, fz, LB, LP):
         cell = lambda k: _c(sp[k]["ev"], sp[k]["se"], sp[k]["n"]) if k in sp else "–"
         L.append(f"| {h} | {name} | {'是' if s['meets_rule'] else '否（不足 300 笔）'} | {_c(s['B_ev'], s['B_se'], s['B_n'])}；{s.get('B_candidates', '–')} | "
                  f"{cell('B < 08-07')} | {cell('B ≥ 08-07')} | {cell('B，币安标签')} |")
+    if DR:
+        L += ["", "冻结之后、跑 C 之前，把锁箱代码在 B 上演练了一遍（B 当作 C，结果和上表的 B 一致），顺带按真实吃单价算了 B（方法同下，不用于任何选择）：", "",
+              "| h | 有价格 / 全部 | B 按真实价每份 ± SE | 买入价均值 | 同样交易按 0.51 |", "|---|---:|---:|---:|---:|"]
+        for h, _ in HORIZONS:
+            c = DR["horizons"][h]
+            L.append(f"| {h} | {c['n_priced']} / {c['n_trades']} | {_c(c['ev'], c['se'])} | {_f(c['px_mean'], 3, False)} | {_c(c['ev_051_same'], c['se_051_same'])} |")
     if not LB:
         return L + ["", "锁箱还没跑。"]
     L += ["", f"### C（{LB['run'][:19]} UTC，只算一次）：0.51 吃单，按官方结算（FACTORS.md 的通过标准）", "",
@@ -1577,9 +1589,10 @@ def conclusions(R, LB, LP, good, two, vres, main):
              + ("、".join(stable) if stable else "无") + "。")
     c5 = R["coef"]["5m"].reindex(R["coef"]["5m"]["coef"].abs().sort_values(ascending=False).index).head(6)
     pt = [r for r in c5.itertuples() if FAMILY[r.factor] in ("价格", "主动买卖")]
-    if pt and all(r.coef < 0 for r in pt):
-        L.append(f"- 方向：5 分钟岭回归最大的 6 个系数里 {len(pt)} 个是价格或主动买卖因子，全部为负，即“过去涨、主动买多 → 接下来回落”的短期反转，"
-                 "和“趋势延续”的设想相反。")
+    npt = [r for r in pt if r.coef < 0]
+    L.append(f"- 方向：5 分钟岭回归最大的 6 个系数里 {len(pt)} 个是价格或主动买卖因子，其中 {len(npt)} 个为负"
+             + ("（“过去涨、主动买多 → 接下来回落”的短期反转，和“趋势延续”的设想相反）" if len(npt) > len(pt) / 2 else "")
+             + ("；为正的：" + "、".join(f"{r.factor} {100 * r.coef:+.2f}%" for r in pt if r.coef >= 0) if len(npt) < len(pt) else "") + "。")
     e = R["econ"]
     eB = e[e.period == "B"]
     bcrit = bonferroni_t(int(eB["days"].max()), len(eB))
@@ -1587,12 +1600,23 @@ def conclusions(R, LB, LP, good, two, vres, main):
     posb = eB[(eB.ev > 0) & (eB.ev / eB.se > bcrit)]
     L.append(f"- 0.51 吃单（按结算）：B 段 {len(eB)} 个组合里每份为正且单侧 t > 1.645 的 {len(pos)} 个，按 {len(eB)} 格 Bonferroni 后 {len(posb)} 个"
              + ("（" + "、".join(f"{r.h} {r.model} θ{r.theta} {100 * r.ev:+.2f}¢，胜率 {100 * r.win:.1f}%" for r in posb.itertuples()) + "）" if len(posb) else "")
-             + f"。盈亏平衡是成交窗口胜率 52.75%；B 段成交胜率范围 {100 * eB.win.min():.1f}–{100 * eB.win.max():.1f}%。")
+             + f"。盈亏平衡是成交窗口胜率 52.75%（不是全部窗口的方向准确率）；B 段至少 300 笔的组合成交胜率 "
+             + f"{100 * eB[eB.n >= MIN_TRADES].win.min():.1f}–{100 * eB[eB.n >= MIN_TRADES].win.max():.1f}%。")
     bn = R["bench"]
     bb = bn[bn.period == "B"]
     L.append("- 基准（B，0.51，按结算）：" + "；".join(
         f"{h} 都买涨 {100 * bb[(bb.h == h) & (bb.side == 'up')].ev.iloc[0]:+.2f}¢、都买跌 {100 * bb[(bb.h == h) & (bb.side == 'down')].ev.iloc[0]:+.2f}¢"
-        for h, _ in HORIZONS) + "。买涨占比在 A、B 之间大幅摆动（见第 3 节），1h、4h 的成交更像几次方向押注。")
+        for h, _ in HORIZONS) + "。")
+    fz = R["frozen"]["horizons"]
+
+    def share(h, pn):
+        q = e[(e.h == h) & (e.model == fz[h]["model"]) & (e.theta == fz[h]["theta"]) & (e.period == pn)]
+        return float(q.share_up.iloc[0]) if len(q) else np.nan
+
+    L.append("- 冻结组合的买涨占比（A → B" + (" → C" if LB else "") + "）：" + "；".join(
+        f"{h} {100 * share(h, 'A'):.0f}% → {100 * share(h, 'B'):.0f}%" + (f" → {100 * LB['horizons'][h]['share_up']:.0f}%" if LB else "")
+        for h, _ in HORIZONS) + "。阈值以 0.5 为中心，P(涨) 的整体水平随训练期上涨比例和水平类因子漂移，也会决定买哪边；"
+        "第 2 节稳健性表里因果居中后的 B 每份见“全部 55 个，因果居中”。")
     k = R["kacho"]
     km = R["kacho_mid"]
     L.append(f"- 0.51 不是真实价格：kacho（4/7–5/18）上模型所选一边的开盘卖一平均比 0.51 高 {100 * k.gap.min():.1f}–{100 * k.gap.max():.1f}¢；"
@@ -1615,6 +1639,10 @@ def conclusions(R, LB, LP, good, two, vres, main):
                          f"IC 币安 {c['ic']:+.3f}（t {c['ic_t']:+.1f}）、结算代理 {c['ic_settle']:+.3f}（t {c['ic_settle_t']:+.1f}）；最小可检测 {100 * c['mde']:.1f}¢）")
         L.append("- 锁箱 C（按 A + B 重新冻结后只算一次；0.51、官方结算）：" + ("通过的：" + "、".join(ps) if ps else "**没有一个 h 通过**")
                  + ("；" + "、".join(untest) + " 窗口不足 300，无法检验" if untest else "") + "。" + "；".join(parts) + "。")
+        flip = [h for h, c in hz.items() if c["ic_t"] > 1.96 and c["ic_settle"] < 0]
+        if flip:
+            L.append("- " + "、".join(flip) + " 对币安目标的排序能力在 C 还在，但对实际结算是负的：TWAP 结算的起点是开盘前一段时间的平均价，"
+                     "落后于开盘时的现价，而模型押的是最近一两分钟走势的反转，正好和这个滞后的方向相反。")
         if LP:
             hp = LP["horizons"]
             pp = [h for h, c in hp.items() if c["passed"]]

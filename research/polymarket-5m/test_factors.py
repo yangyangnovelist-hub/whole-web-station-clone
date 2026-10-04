@@ -414,3 +414,12 @@ def test_kacho_mid_test_sees_information_beyond_the_mid():
 def test_mde_and_bonferroni():
     assert np.isclose(F.mde(1.0), 1.6448536 + 0.8416212, atol=1e-6)
     assert F.bonferroni_t(46, 24) > F.bonferroni_t(46, 1) > 1.64
+
+
+def test_report_refuses_a_lockbox_of_another_freeze(tmp_path):
+    import pickle
+    with open(tmp_path / "factors_study.pkl", "wb") as fh:
+        pickle.dump({"frozen": {"made": "2026-10-04T10:00:00"}}, fh)
+    (tmp_path / "lockbox.json").write_text(json.dumps({"frozen_made": "2026-10-04T09:00:00", "run": "x", "horizons": {}}))
+    with pytest.raises(AssertionError):
+        F.report(cache=tmp_path, out=str(tmp_path / "r.md"))
