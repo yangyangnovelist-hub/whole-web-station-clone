@@ -104,7 +104,8 @@ def _last_before(ts, val, t, max_age=PRICE_MAX_AGE_S):
 def _binance(binance):
     """Finite prints as float arrays: (trade-time sorted ts, logp, recv) and (recv-sorted recv, logp)."""
     b = binance[["trade_ts_ms", "recv_ts_ms", "price"]].apply(pd.to_numeric, errors="coerce")
-    b = b[np.isfinite(b.to_numpy(float)).all(axis=1) & (b["price"] > 0)].drop_duplicates()
+    v = b.to_numpy(float)
+    b = b[np.isfinite(v).all(axis=1) & (v[:, 2] > 0)].drop_duplicates()
     b = b.sort_values(["trade_ts_ms", "recv_ts_ms"], kind="stable")
     ts = b["trade_ts_ms"].to_numpy(float) / 1000.0
     rv = b["recv_ts_ms"].to_numpy(float) / 1000.0
@@ -202,8 +203,9 @@ def day_rows(feat, mkts, binance, prints, carry=None):
     if len(prints) and tok:
         q = prints[prints["instrument"].astype(str).isin(tok)]
         if len(q):
-            q = q.assign(_m=q["instrument"].astype(str).map(lambda x: tok[x][0]),
-                         _up=q["instrument"].astype(str).map(lambda x: tok[x][1]).astype(bool))
+            ins = q["instrument"].astype(str)
+            q = q.assign(_m=ins.map({k: v[0] for k, v in tok.items()}),
+                         _up=ins.map({k: v[1] for k, v in tok.items()}).astype(bool))
             q = q.sort_values(["_m", "recv_ts_ms"], kind="stable")
             PT = q["recv_ts_ms"].to_numpy(float) / 1000.0
             PX = q["price"].to_numpy(float)
