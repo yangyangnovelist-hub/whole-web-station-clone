@@ -119,10 +119,24 @@ jobs:
         run: |
           # a run started after this one (by hand) and not finished continues the chain instead
           me=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}" --jq .created_at || true)
-          later=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-ladder.yml/runs?per_page=30" \
-                  --jq "[.workflow_runs[] | select(.status != \"completed\" and .created_at > \"$me\")] | length" || echo 0)
+          later=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${GITHUB_REF_NAME}&per_page=30" \
+                  --jq "[.workflow_runs[] | select(.name == \"polymarket-ladder\" and .status != \"completed\" and .created_at > \"$me\")] | length" || echo 0)
           if [ -n "$me" ] && [ "${later:-0}" -gt 0 ]; then echo "a later run is already queued"; exit 0; fi
-          gh workflow run polymarket-ladder.yml --ref "${{ github.ref_name }}"
+          # workflow_dispatch only resolves workflow files registered on the default branch.
+          # This research workflow intentionally lives on the research branch, so advance the
+          # branch trigger file instead. The successful recording is the gate for this commit.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '%s run=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ github.run_id }}" > ci/ladder.request
+          git add ci/ladder.request
+          git commit -q -m "ci: continue ladder recorder after ${{ github.run_id }}"
+          for i in 1 2 3 4 5; do
+            git pull -q --rebase origin "${GITHUB_REF_NAME}" \
+              && git push -q origin "HEAD:${GITHUB_REF_NAME}" \
+              && exit 0
+            sleep $((2 ** i))
+          done
+          exit 1
 
   report:
     needs: record
@@ -152,8 +166,8 @@ jobs:
         run: |
           set -u
           rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"
-          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-ladder.yml/runs?per_page=100" \
-                --jq '.workflow_runs[].id')
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
+                --jq '.workflow_runs[] | select(.name == "polymarket-ladder") | .id')
           for id in $ids; do
             gh run download "$id" -n "ladder-$id" -D "$rec/$id" 2>/dev/null || continue
             tar xzf "$rec/$id/ladder.tgz" -C "$rec/$id" 2>/dev/null || true
