@@ -2509,7 +2509,7 @@ def main(argv=None):
                           ("cancel", "real/cross-cancel-lead.md"),
                           ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md"),
                           ("leadlag", "real/cross-leadlag-eth.md"), ("jump2s", "real/cross-jump2s.md"),
-                          ("mix", "real/mix-hf.md")):
+                          ("mix", "real/mix-hf.md"), ("regime", "real/regime-windows.csv.gz")):
         p = sub.add_parser(name)
         p.add_argument("days", nargs="?", type=int, help="only the last N daily archives")
         p.add_argument("--workdir", default="/tmp/cross")
@@ -2570,6 +2570,9 @@ def main(argv=None):
     elif a.cmd == "mix":
         import mix_hf
         mix_hf.run(a.workdir, a.out, a.days, dataset=DS)  # MIX.md; as a script this module is not `cross`
+    elif a.cmd == "regime":
+        import regime_hf
+        regime_hf.run(a.workdir, a.out, a.days, dataset=DS)  # REGIME.md; as a script this module is not `cross`
     else:
         stale(a.workdir, a.out, a.days)
 

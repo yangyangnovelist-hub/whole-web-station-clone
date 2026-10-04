@@ -118,9 +118,16 @@ P&L over the previous 12 / 48 windows is built in regime_learn.py from the table
 Where REGIME.md and the task are silent, the conservative choice made here:
 - Evaluable: book_cov = share of the window's 300 seconds with a live top-of-book change, bin_cov =
   share with a Binance print received. A strategy is NaN (not evaluable, no usable data) when
-  book_cov < 0.5, and for H, follow, revert, late and maker also when bin_cov < 0.5 (the recorder's
-  Binance feed skips seconds: 74-73% coverage on whole days), and for direction when its P(up) is
-  missing. A market with no snapshot in its window in the archive (plus the carry) is skipped there.
+  book_cov < 0.5, and for H, follow, revert, late and maker also when bin_cov < 0.25 (the recorder's
+  Binance feed skips seconds every day: 73-74% of the seconds on whole days, 50-97% per window on
+  06-02; a gap only removes trades), and for direction when its P(up) is missing. A market with no
+  snapshot in its window in the archive (plus the carry) is skipped there.
+- Mid (revert's signal, maker's quotes): a token's own (bid + ask) / 2, only where that token's
+  spread is <= 5c. On 06-02, 22% of in-window Up snapshots had a wider spread (one level pulled for
+  a snapshot or two, e.g. bid 0.44 -> 0.10 -> 0.44 within 0.3 s), and 77% of the 10 s "mid moves >= 8c"
+  had such a hole at one end: a mid across a hole is not a price. Each token's own mid, because a
+  Down quote derived from the Up mid crossed the Down book whenever an Up level flickered. H keeps
+  its own rule's plain Up mid (fill_rate.sends), a convention of that rule.
 - "pre_open": the recorder labels a 5m market "active" only 0.6-21.5 s after its start (median 11 s
   on 06-02), while its book trades before the start. A "pre_open" snapshot counts as live from the
   start to 30 s after it; before the start it is used for the features only.
@@ -195,7 +202,8 @@ LATE_MARGIN = 0.01
 MM_OFFSET = 0.02
 MID_MAX_SPREAD = 0.05       # a mid across a wider hole in the book is not a price (revert signal, maker quotes)
 MM_PAUSE_S = 1.0
-COV_MIN = 0.5
+COV_BOOK = 0.5              # share of the window's seconds with a live top-of-book change
+COV_BIN = 0.25              # ... with a Binance print received (the recorder's feed: ~73% on whole days)
 CARRY_BIN_S = 1800
 CARRY_BOOK_S = 900
 BUDGET_S = 285 * 60
@@ -981,7 +989,8 @@ def day_trades(feat, mkts, binance, prints, inputs=None, closes=None, day="", st
         bin_cov = spot.coverage(w.start, w.end)
         cov.append((book_cov, bin_cov, int(live_chg.sum()), mk.w))
         for s in strats:
-            if book_cov < COV_MIN or (s in NEEDS_BINANCE and bin_cov < COV_MIN) or (s == "direction" and not np.isfinite(fac[r])):
+            if book_cov < COV_BOOK or (s in NEEDS_BINANCE and bin_cov < COV_BIN) or \
+                    (s == "direction" and not np.isfinite(fac[r])):
                 continue
             f = {"H": strat_H, "follow": strat_follow, "revert": strat_revert, "late": strat_late,
                  "maker": strat_maker}.get(s)
@@ -996,7 +1005,7 @@ def day_trades(feat, mkts, binance, prints, inputs=None, closes=None, day="", st
                          "n_chg": cov[:, 2]})
     rows = pd.concat([rows, env.reset_index(drop=True), agg.reset_index(drop=True)], axis=1)
     for s in STRATS:
-        bad = (rows["book_cov"] < COV_MIN) | ((rows["bin_cov"] < COV_MIN) if s in NEEDS_BINANCE else False)
+        bad = (rows["book_cov"] < COV_BOOK) | ((rows["bin_cov"] < COV_BIN) if s in NEEDS_BINANCE else False)
         if s == "direction":
             bad |= ~np.isfinite(rows["fac_up"])
         if s not in strats:

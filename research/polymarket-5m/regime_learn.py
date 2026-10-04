@@ -7,7 +7,7 @@ market data only (no orders, no keys); it reads only the windows table.
                            [--frozen real/regime-frozen.json] [--allow-partial-c]
 
 The windows table (real/regime-windows.csv.gz) is written by regime_hf.py (the REGIME.md producer,
-run on GitHub through cross.py). Expected columns, by their canonical names here (COLMAP below
+run on GitHub as `python cross.py regime --out real/regime-windows.csv.gz`). Expected columns, by their canonical names here (COLMAP below
 maps the producer's names onto them; names are compared lower-cased with everything but letters
 and digits removed, so "pnl_H", "PNL-h" and "pnlH" are one name; the first alias present wins;
 every mapping used is printed in the report):
@@ -23,9 +23,13 @@ every mapping used is printed in the report):
   (60-minute variance ratio, trend > 1 > range), dvol_rv (DVOL - realised vol), ret4h, vol_rel
   (Binance volume / its 24 h mean), funding, basis, hour (UTC), weekend (0 / 1), pm_spread
   (Polymarket opening spread), ask_size (shares at the best ask at the open), book_ups (book updates
-  per second). Missing ones are NaN (said in the report); hour and weekend are derived from start
-  when absent. Any other column is ignored (in particular, any trailing-performance column of the
-  producer: the trailing features are rebuilt here, so their timing is checked here).
+  per second of the previous window) and book_ups_pre (of this market's book in the minute before
+  its open; regime_hf.py measures REGIME.md's 盘口每秒更新次数 both ways, both are used). Missing ones
+  are NaN (said in the report); hour and weekend are derived from start when absent. Any other
+  column is ignored: in particular the producer's won (the outcome), book_cov / bin_cov (in-window
+  coverage), dvol (the level; REGIME.md lists DVOL - RV only), pm_up and fac_up (not in REGIME.md's
+  list), its 20-share columns (pnl20_s ...: the 5-share ones are used) and any trailing-performance
+  column (the trailing features are rebuilt here, so their timing is checked here).
 
 What is done (REGIME.md, fixed 2026-10-04 before running; constants below):
 1. Trailing features, per strategy s: hot12_s, hot48_s = the sum of pnl_s over the previous 12 / 48
@@ -110,7 +114,7 @@ FROZEN = HERE / "real" / "regime-frozen.json"
 STRATS = ("H", "follow", "revert", "direction", "late", "maker")
 QTYS = ("pnl", "trades", "shares", "cost", "caph")
 ENV = ("rv5m", "rv30m", "rv1h", "vr60", "dvol_rv", "ret4h", "vol_rel", "funding", "basis", "hour", "weekend",
-       "pm_spread", "ask_size", "book_ups")
+       "pm_spread", "ask_size", "book_ups", "book_ups_pre")
 
 _S_ALIAS = {"H": ("h", "s1", "stale", "hfair", "h_fair", "snipe"),
             "follow": ("follow", "s2", "fol", "chase", "jump", "follow_scalp", "scalp"),
@@ -146,6 +150,7 @@ COLMAP = {
     "ask_size": ("ask_size", "open_ask_size", "ask_sz", "ask_depth", "asksize", "ask_size_open"),
     "book_ups": ("book_ups", "book_rate", "updates_per_s", "book_hz", "upd_per_s", "ups", "book_updates_per_s",
                  "book_ups_s"),
+    "book_ups_pre": ("book_ups_pre", "book_ups_pre_open", "pre_ups", "ups_pre"),
     **{f"{q}_{s}": tuple(dict.fromkeys([f"{q}_{s}"] + [f"{qa}_{sa}" for qa in _Q_ALIAS[q] for sa in _S_ALIAS[s]]
                                        + [f"{sa}_{qa}" for qa in _Q_ALIAS[q] for sa in _S_ALIAS[s]]))
        for s in STRATS for q in QTYS},
@@ -547,7 +552,7 @@ def day_t(x):
         return dict(mean=np.nan, se=np.nan, t=np.nan, n=0, pos=np.nan)
     m = float(x.mean())
     se = float(x.std(ddof=1) / math.sqrt(n)) if n > 1 else np.nan
-    t = m / se if se and np.isfinite(se) and se > 0 else np.nan
+    t = m / se if np.isfinite(se) and se > 1e-9 * max(1.0, abs(m)) else np.nan   # identical days: no t
     return dict(mean=m, se=se, t=float(t), n=n, pos=float((x > 0).mean()))
 
 

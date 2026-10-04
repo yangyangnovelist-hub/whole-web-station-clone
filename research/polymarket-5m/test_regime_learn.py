@@ -4,6 +4,8 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn.ensemble  # noqa: F401  (loads the OpenMP runtime before the thread limit below)
+from threadpoolctl import threadpool_limits
 
 import regime_learn as R
 
@@ -57,6 +59,14 @@ def synth(seed=0, start="2026-05-18", end="2026-08-30", flip_b=False, edge=0.30)
     return W
 
 
+@pytest.fixture(scope="module", autouse=True)
+def one_thread():
+    """One OpenMP / BLAS thread: on a shared machine the boosting threads otherwise oversubscribe the
+    cores (minutes instead of seconds). Results do not depend on it."""
+    with threadpool_limits(1):
+        yield
+
+
 @pytest.fixture
 def fast_models(monkeypatch):
     """Fewer boosting iterations: the logic tests do not depend on the fixed parameters."""
@@ -97,6 +107,32 @@ def test_loader_maps_producer_names_and_derives_hour_and_weekend():
     assert W["weekend"].tolist() == wk == [1.0, 0.0]     # 05-30 is a Saturday, 06-01 a Monday
     assert "hour" not in missing and "rv5m" in missing and np.isnan(W["rv5m"]).all()
     assert list(W["segment"]) == ["A", "A"]
+
+
+# regime_hf.py's columns (its META, ENV, QTY lists and pnl_none), copied so this test does not import it
+PRODUCER_META = ["day", "market", "start", "won", "w", "book_cov", "bin_cov", "n_chg"]
+PRODUCER_ENV = ["rv5m", "rv30m", "rv1h", "vr60", "dvol", "dvol_rv", "ret4h", "vol_rel", "funding", "basis", "hour",
+                "weekend", "pm_spread", "ask_size", "pm_up", "book_ups", "book_ups_pre", "fac_up"]
+PRODUCER_QTY = ("trades", "shares", "sh20", "cost", "cost20", "pnl", "pnl20", "pps", "caph", "caph20")
+
+
+def test_loader_reads_the_producer_table_and_never_uses_outcome_or_in_window_columns():
+    cols = PRODUCER_META + PRODUCER_ENV + [f"{q}_{s}" for s in R.STRATS for q in PRODUCER_QTY] + ["pnl_none"]
+    rng = np.random.default_rng(2)
+    raw = pd.DataFrame(rng.normal(size=(3, len(cols))), columns=cols)
+    raw["start"] = [ts("2026-06-01 00:00"), ts("2026-06-01 00:05"), ts("2026-06-01 00:10")]
+    raw["market"] = ["a", "b", "c"]
+    W, mapping, strats, missing = R.load_windows(raw, log=quiet)
+    assert strats == list(R.STRATS) and missing == []
+    for s in R.STRATS:
+        for q in R.QTYS:
+            assert mapping[f"{q}_{s}"] == f"{q}_{s}"            # the 5-share columns, not pnl20 / sh20 / cost20
+            np.testing.assert_array_equal(W[f"{q}_{s}"].to_numpy(), raw[f"{q}_{s}"].to_numpy())
+    feats = set(R.env_features(R.add_trailing(W, strats)))
+    assert feats == set(R.ENV)
+    for c in ("won", "book_cov", "bin_cov", "n_chg", "dvol", "pm_up", "fac_up", "pnl_none", "w", "day"):
+        assert c not in feats and c not in mapping.values()
+    assert all(not c.startswith(("pnl", "trades", "shares", "cost", "caph")) for c in R.features_for("H", feats))
 
 
 def test_loader_widens_a_long_table_and_takes_start_from_end():
