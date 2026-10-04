@@ -587,6 +587,8 @@ class Spot:
         self.H = np.where(np.isfinite(H), H, C)  # a minute without trades: a flat candle at the last close
         self.L = np.where(np.isfinite(L), L, C)
         self.C = C
+        self.Hs, self.Ls, self.Cs = self.H, self.L, self.C  # the 1 s aggregates, kept for comparison
+        self.source = "1s"
         lr = np.zeros(self.n)
         with np.errstate(all="ignore"):
             lr[1:] = np.diff(np.log(self.ff))
@@ -605,6 +607,17 @@ class Spot:
         k = t - sec0
         H[k], L[k], C[k] = hi, lo, cl
         return cls(sec0, H, L, C)
+
+    def set_minutes(self, t_open, H, L, C):
+        """Use Binance's own 1-minute klines (the settlement source) for High / Low / Close where
+        given; minutes without one keep the 1 s aggregate."""
+        i = np.asarray(t_open, np.int64) // 60 - self.m0
+        ok = (i >= 0) & (i < len(self.C))
+        self.H, self.L, self.C = self.Hs.copy(), self.Ls.copy(), self.Cs.copy()
+        self.H[i[ok]], self.L[i[ok]], self.C[i[ok]] = np.asarray(H, float)[ok], np.asarray(L, float)[ok], np.asarray(C, float)[ok]
+        self.m1 = np.zeros(len(self.C), bool)
+        self.m1[i[ok]] = True
+        self.source = "1m"
 
     def covers(self, a, b):
         """Every minute opening in [a, b) has at least one 1 s kline."""
@@ -640,24 +653,31 @@ class Spot:
         return math.sqrt(max(var, 0.0))
 
 
-def first_touch(spot, ws, we, level, up):
+def first_touch(spot, ws, we, level, up, with_flag=False):
     """(T*, t_sec) for a barrier: T* = close time (open + 60) of the first 1-minute candle opening in
     [ws, we) whose High >= level (up) / Low <= level (down), t_sec = the first 1 s kline in that minute
     that crosses; (we, NaN) if none; (NaN, NaN) if the window is not covered by the klines. level in
     cents."""
     if not (np.isfinite(ws) and np.isfinite(we)) or not spot.covers(ws, we):
-        return NAN, NAN
+        return (NAN, NAN, NAN) if with_flag else (NAN, NAN)
     i, j = int(ws // 60 - spot.m0), int(math.ceil(we / 60) - spot.m0)
     seg = spot.H[i:j] >= level if up else spot.L[i:j] <= level
     hit = np.flatnonzero(seg)
     if not len(hit):
-        return float(we), NAN
-    mi = i + int(hit[0])
-    t_open = (spot.m0 + mi) * 60
-    a = t_open - spot.sec0
-    sec = spot.hi[a:a + 60] >= level if up else spot.lo[a:a + 60] <= level
+        return (float(we), NAN, 0.0) if with_flag else (float(we), NAN)
+    t_open = (spot.m0 + i + int(hit[0])) * 60
+    out = float(t_open + 60), first_second(spot, ws, t_open + 60, level, up)
+    return (*out, 1.0) if with_flag else out
+
+
+def first_second(spot, ws, we, level, up):
+    """Open time of the first 1 s kline in [ws, we) whose high >= level (up) / low <= level (down)."""
+    a, b = int(ws) - spot.sec0, int(we) - spot.sec0
+    if a < 0 or b > spot.n:
+        return NAN
+    sec = spot.hi[a:b] >= level if up else spot.lo[a:b] <= level
     s = np.flatnonzero(sec)
-    return float(t_open + 60), float(t_open + int(s[0])) if len(s) else NAN
+    return float(ws + int(s[0])) if len(s) else NAN
 
 
 def noon_open(d, conv):
@@ -703,10 +723,8 @@ def decide(mk, spot):
                 out[f"tstar_{c}"][i] = o + 60
                 out[f"comp_{c}"][i] = rule_outcome(r.kind, close, r.lo * 100, r.hi * 100, ref)
         elif r.kind in HIT_KINDS:
-            t, s = first_touch(spot, r.ws, r.we, r.level * 100, r.type == "hit_up")
-            out["tstar_hit"][i], out["tsec"][i] = t, s
-            if np.isfinite(t):
-                out["comp_hit"][i] = float(t < r.we or (t == r.we and np.isfinite(s)))
+            out["tstar_hit"][i], out["tsec"][i], out["comp_hit"][i] = first_touch(
+                spot, r.ws, r.we, r.level * 100, r.type == "hit_up", with_flag=True)
         elif r.kind == "updown_4h":
             a, b = spot.price_before(r.ws), spot.price_before(r.we)
             out["tstar_hit"][i] = r.we
@@ -744,14 +762,13 @@ def slim_trades(url, data):
     return [[r.get(k) for k in TRADE_FIELDS] for r in data]
 
 
-def fetch_trades(get, cid, start, page=PAGE, max_offset=MAX_OFFSET):
-    """(records, info): every taker trade of market `cid` with timestamp >= start. get(url) returns a
+def fetch_trades(get, cid, start, page=PAGE, max_offset=MAX_OFFSET, end=None):
+    """(records, info): every taker trade of market `cid` with start <= timestamp (<= end if given). get(url) returns a
     slim page (lists in TRADE_FIELDS order, newest first). Offset paging up to max_offset; past it,
     the next window ends at the oldest timestamp seen (inclusive) and paging restarts; records are
     merged by key with their largest multiplicity in any one page. info: pages, windows, truncated."""
     counts, recs = Counter(), {}
     info = {"pages": 0, "windows": 0, "truncated": False, "note": ""}
-    end = None
     while True:
         info["windows"] += 1
         oldest, capped, offset = None, False, 0
@@ -780,9 +797,11 @@ def fetch_trades(get, cid, start, page=PAGE, max_offset=MAX_OFFSET):
         if not capped:
             break
         if end is not None and oldest is not None and oldest >= end:
+            # the whole capped window is one second: what is past the cap there is out of reach
             info["truncated"] = True
-            info["note"] = f"more than {max_offset + page} trades at ts {end}"
-            break
+            info["note"] += f"{max_offset + page}+ trades at ts {end}; "
+            end = oldest - 1
+            continue
         end = oldest
     out = []
     for k, v in counts.items():
@@ -817,7 +836,11 @@ def fetch_all_trades(http, mk, cache, workers=4, log=print):
     t0, lock, k = time.time(), threading.Lock(), [0]
 
     def one(r):
-        recs, info = fetch_trades(get, r.cid, r.fstart)
+        try:
+            recs, info = fetch_trades(get, r.cid, r.fstart)
+        except Exception as e:  # one market's failure is recorded, not fatal; a rerun asks again
+            log(f"  {r.cid}: {type(e).__name__}: {e}")
+            return None, None
         with lock:
             k[0] += 1
             if k[0] % 500 == 0:
@@ -827,8 +850,9 @@ def fetch_all_trades(http, mk, cache, workers=4, log=print):
 
     with ThreadPoolExecutor(workers) as ex:
         for f, info in ex.map(one, list(todo.itertuples(index=False))):
-            frames.append(f)
-            infos.append(info)
+            if f is not None:
+                frames.append(f)
+                infos.append(info)
     if frames:
         old = pd.read_parquet(tp) if tp.exists() else None
         new_cids = {i["cid"] for i in infos}
@@ -840,6 +864,47 @@ def fetch_all_trades(http, mk, cache, workers=4, log=print):
     trades = pd.read_parquet(tp) if tp.exists() else pd.DataFrame(columns=["cid", "ts", "taker_buy", "is_yes", "price", "size"])
     info_df = pd.read_parquet(ip) if ip.exists() else pd.DataFrame()
     return trades, info_df
+
+
+def fetch_pre_tstar(http, mk, cache, log=print):
+    """Hit markets settled Yes: the trades between the first 1 s crossing and T* (the touch candle's
+    close), which the main fetch (from min(T*, end - 3600)) may not cover. Cached as pre_trades.parquet."""
+    path = Path(cache) / "pre_trades.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    m = mk[mk["kind"].isin(HIT_KINDS) & (mk["excluded"] == "") & (mk["official"] == 1.0) & mk["tsec"].notna()]
+    get = lambda url: http.get(url, slim=slim_trades)
+    frames = []
+    for r in m.itertuples(index=False):
+        try:
+            recs, _ = fetch_trades(get, r.cid, int(r.tsec), end=int(r.tstar) - 1)
+        except Exception as e:
+            log(f"  pre-T* {r.cid}: {type(e).__name__}: {e}")
+            continue
+        frames.append(trade_frame(r.cid, recs, r.yes_token, r.no_token))
+    out = pd.concat(frames, ignore_index=True) if frames else trade_frame("", [], "", "")
+    out.to_parquet(path)
+    return out
+
+
+def second_level(pre, mk, spot, lags=(0, 1, 5)):
+    """Hit markets: winning-token trades at p < 1 in [t_sec + L, T*) (the touch already shows in the
+    1 s klines, the 1-minute candle has not closed), and how often a 1 s crossing inside the window
+    was NOT a touch on Binance's 1-minute candles (markets settled No whose 1 s High / Low crossed)."""
+    m = mk[mk["kind"].isin(HIT_KINDS) & (mk["excluded"] == "") & (mk["official"] == 1.0) & mk["tsec"].notna()]
+    t = pre.merge(m[["cid", "kind", "tsec", "tstar"]], on="cid")
+    t = t[t["is_yes"] & (t["price"] < 1) & (t["ts"] < t["tstar"])]
+    rows = []
+    for L in lags:
+        s = t[t["ts"] >= t["tsec"] + L]
+        rows.append({"L": L, "markets": len(m), "mk_tr": s["cid"].nunique(), "trades": len(s),
+                     "notional": (s["price"] * s["size"]).sum(), "profit": ((1 - s["price"]) * s["size"]).sum(),
+                     "vwap": (s["price"] * s["size"]).sum() / s["size"].sum() if len(s) else NAN,
+                     "sell_profit": ((1 - s["price"]) * s["size"])[~s["taker_buy"]].sum()})
+    no = mk[mk["kind"].isin(HIT_KINDS) & (mk["excluded"] == "") & (mk["official"] == 0.0)]
+    false_cross = sum(np.isfinite(first_second(spot, r.ws, r.we, r.level * 100, r.type == "hit_up"))
+                      for r in no.itertuples(index=False) if np.isfinite(r.ws) and np.isfinite(r.we))
+    return pd.DataFrame(rows), int(false_cross), len(no)
 
 
 # ===================================================================== near-certain model
@@ -1060,6 +1125,32 @@ def build_spot(klines=KLINES, cache=CACHE, http=None, log=print):
     return Spot(sec0, f(hi), f(lo), f(cl)), missing
 
 
+def attach_1m(spot, http, cache=CACHE, first=SPOT_FIRST, last=SPOT_LAST, log=print):
+    """Download Binance's 1m klines for every day, compare them with the 1 s aggregates minute by
+    minute and use them for High / Low / Close. Returns the per-day comparison."""
+    ts, hs, ls, cs, rows = [], [], [], [], []
+    for d in days(first, last):
+        f = Path(cache) / "klines1m" / f"BTCUSDT-1m-{d}.zip"
+        try:
+            http.download(VISION.format(iv="1m", d=d), f)
+        except Exception as e:
+            rows.append({"day": d.isoformat(), "minutes": 0, "bad_h": -1, "bad_l": -1, "bad_c": -1, "note": repr(e)})
+            continue
+        t, h, l, c = read_kline_zip(f)
+        i = t // 60 - spot.m0
+        ok = (i >= 0) & (i < len(spot.Cs))
+        i = i[ok]
+        rows.append({"day": d.isoformat(), "minutes": int(ok.sum()),
+                     "bad_h": int((spot.Hs[i] != h[ok]).sum()), "bad_l": int((spot.Ls[i] != l[ok]).sum()),
+                     "bad_c": int((spot.Cs[i] != c[ok]).sum()),
+                     "h_wider": int((spot.Hs[i] > h[ok]).sum()), "l_wider": int((spot.Ls[i] < l[ok]).sum()),
+                     "max_diff_cents": float(max(np.abs(spot.Hs[i] - h[ok]).max(), np.abs(spot.Ls[i] - l[ok]).max())),
+                     "note": ""})
+        ts.append(t[ok]); hs.append(h[ok]); ls.append(l[ok]); cs.append(c[ok])
+    spot.set_minutes(np.concatenate(ts), np.concatenate(hs), np.concatenate(ls), np.concatenate(cs))
+    return pd.DataFrame(rows)
+
+
 def check_minutes(spot, http, cache=CACHE, n=20, seed=20261004, log=print):
     """Our 1-minute H/L/C against data.binance.vision 1m klines on n random days."""
     rng = random.Random(seed)
@@ -1077,8 +1168,8 @@ def check_minutes(spot, http, cache=CACHE, n=20, seed=20261004, log=print):
         ok = (i >= 0) & (i < len(spot.C))
         i = i[ok]
         rows.append({"day": d.isoformat(), "minutes": int(ok.sum()),
-                     "bad_h": int((spot.H[i] != h[ok]).sum()), "bad_l": int((spot.L[i] != l[ok]).sum()),
-                     "bad_c": int((spot.C[i] != c[ok]).sum()), "note": ""})
+                     "bad_h": int((spot.Hs[i] != h[ok]).sum()), "bad_l": int((spot.Ls[i] != l[ok]).sum()),
+                     "bad_c": int((spot.Cs[i] != c[ok]).sum()), "note": ""})
     return pd.DataFrame(rows)
 
 
@@ -1103,9 +1194,10 @@ def daily_dollars(w, L=5, cap=0.995, first=FIRST, last=LAST):
     s = w[(w["dt"] >= L) & (w["price"] <= cap)]
     alld = [d.isoformat() for d in days(first, last)]
     per = s.groupby("day").agg(notional=("notional", "sum"), profit=("profit", "sum"))
-    per = per.reindex(alld, fill_value=0.0)
+    idx = sorted(set(alld) | set(per.index))   # a settlement can spill into the day after the period
+    per = per.reindex(idx, fill_value=0.0)
     ss = s[~s["taker_buy"]].groupby("day").agg(sell_notional=("notional", "sum"), sell_profit=("profit", "sum"))
-    return per.join(ss.reindex(alld, fill_value=0.0))
+    return per.join(ss.reindex(idx, fill_value=0.0))
 
 
 def lag_md(lt, a, b, title):
@@ -1126,13 +1218,17 @@ def lag_md(lt, a, b, title):
 
 
 def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w, lose, cp, near, notes, runtime,
-           out_md, out_csv, spot_missing):
+           out_md, out_csv, spot_missing, mall=None, sl=None):
     L = []
     nmk = len(mk)
     excl = mk["excluded"].value_counts()
     L.append("# BTC 市场“结果已定、还没结算”的成交（RESOLVED.md 的测量）\n")
+    tj = Path(CACHE) / "timing.json"
+    tinfo = json.loads(tj.read_text()) if tj.exists() else {}
     L.append(f"数据：Gamma 已结束事件（{FIRST}–{LAST}，日期按 ET）、data-api 逐笔成交（taker 记录，每笔撮合一次）、"
-             f"币安 BTCUSDT 1 秒 K 线聚合成 1 分钟（按开盘时间）。运行时间 {runtime / 60:.1f} 分钟。\n")
+             f"币安 BTCUSDT 1 秒 K 线和官方 1 分钟 K 线。本次运行 {runtime / 60:.1f} 分钟"
+             + (f"；首次抓取成交 {tinfo['fetch_s'] / 60:.0f} 分钟、{tinfo['requests']:,} 次请求（≤ 4 次/秒）" if tinfo else "")
+             + "。\n")
     L.append("## 覆盖\n")
     c2 = cov.copy()
     c2["missing_days"] = [len(missing.get(k, [])) if k in missing else "–" for k in c2["kind"]]
@@ -1157,6 +1253,11 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
     L.append(f"- 1 分钟 K 线核对（{len(minutes_chk)} 个随机日，data.binance.vision 1m）：比较 {int(minutes_chk['minutes'].sum()):,} 分钟，"
              f"最高价不一致 {int(minutes_chk['bad_h'].clip(lower=0).sum())}、最低价 {int(minutes_chk['bad_l'].clip(lower=0).sum())}、"
              f"收盘价 {int(minutes_chk['bad_c'].clip(lower=0).sum())}。")
+    if mall is not None and len(mall):
+        L.append(f"- 全部 {len(mall)} 天逐分钟核对：{int(mall['minutes'].sum()):,} 分钟里 1 秒聚合的最高价比官方 1m 高的 "
+                 f"{int(mall['h_wider'].sum())} 分钟、最低价更低的 {int(mall['l_wider'].sum())} 分钟（从不反向，收盘价全部一致；"
+                 f"最大差 {mall['max_diff_cents'].max() / 100:.2f} 美元）。所以 T* 和结果用 data.binance.vision 的 1m K 线（结算源），"
+                 f"1 秒 K 线只用于秒级时刻和波动率。")
     L.append("\n## 规则核对\n")
     L.append(f"- 中午 K 线：两种约定与官方结果不符的市场数 open12（12:00 开盘、12:01 收盘）= {mism['open12']}，"
              f"close12（11:59 开盘、12:00 收盘）= {mism['close12']}；采用 **{conv}**，T* = 该 K 线收盘时刻。")
@@ -1166,7 +1267,10 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
         b = bad.copy()
         b["lvl"] = [f"{r.level:,.0f}" if np.isfinite(r.level) else f"{_f(r.lo)}–{_f(r.hi)}" for r in b.itertuples()]
         b["comp_s"], b["off_s"] = b["comp"].map(lambda x: _f(x, 1)), b["official"].map(lambda x: _f(x, 1))
-        L.append(md_table(b.head(60), ["kind", "slug", "lvl", "comp_s", "off_s"], ["类型", "市场", "档位", "算出", "官方"]))
+        utc = lambda x: pd.Timestamp(x, unit="s").strftime("%m-%d %H:%M") if np.isfinite(x) else "–"
+        b["t_s"], b["c_s"], b["w_s"] = b["tstar"].map(utc), b["created"].map(utc), b["ws"].map(utc)
+        L.append(md_table(b.head(60), ["kind", "slug", "lvl", "w_s", "t_s", "c_s", "comp_s", "off_s"],
+                          ["类型", "市场", "档位", "窗口开始(UTC)", "T*(UTC)", "createdAt(UTC)", "算出", "官方"]))
     h4 = mk[mk["kind"] == "updown_4h"]
     L.append(f"- 4 小时（Chainlink 结算，只作对照）：币安代理（结束前最后价 vs 开始前最后价）与官方不同的 {int(h4['proxy_disagrees'].sum())}/"
              f"{int(h4['comp'].notna().sum())}，不据此排除。")
@@ -1200,6 +1304,17 @@ def report(mk, cov, missing, conv, mism, near_kind, minutes_chk, trades, info, w
     L.append(md_table(d5, ["kind", "mkx", "trades", "shares", "vwap", "taker_profit", "n995", "sell_n995", "med_h"],
                       ["类型", "有成交市场/市场", "笔数", "份数", "均价", "吃单收益$", "名义$(p≤0.995)",
                        "卖方主动名义$(p≤0.995)", "到结算小时(中位)"]))
+    if sl is not None:
+        st, false_cross, n_no = sl
+        st2 = st.copy()
+        for c in ("notional", "profit", "sell_profit"):
+            st2[c] = st2[c].map(lambda x: _f(x, 1))
+        st2["vwap"] = st2["vwap"].map(lambda x: _f(x, 4))
+        L.append("\n触及类“秒级上限”：1 秒 K 线已越过、所在 1 分钟 K 线还没收盘（[t_sec + L, T*)）时赢方 p<1 的成交：\n")
+        L.append(md_table(st2, ["L", "markets", "mk_tr", "trades", "notional", "vwap", "profit", "sell_profit"],
+                          ["L 秒", "触及市场", "有成交", "笔数", "名义$", "均价", "收益$", "卖方主动收益$"]))
+        L.append(f"\n风险：官方 No 的触及市场里，1 秒 K 线在窗口内越过档位的有 {false_cross}/{n_no} 个（1 秒数据比 1m 宽），"
+                 f"只看秒级就动手会买错。")
     s5 = w[w["dt"] >= 5]
     if len(s5):
         pb = s5.assign(b=pbucket(s5["price"])).groupby("b", observed=False).agg(
@@ -1311,6 +1426,10 @@ def run(args, log=print):
         mchk = check_minutes(spot, http, cache, log=log)
         mchk.to_parquet(mchk_path)
     log(f"1m check: {int(mchk['minutes'].sum())} minutes, bad H/L/C {int(mchk['bad_h'].sum())}/{int(mchk['bad_l'].sum())}/{int(mchk['bad_c'].sum())}")
+    mall = attach_1m(spot, http, cache, log=log)
+    mall.to_parquet(cache / "minute_check_all.parquet")
+    log(f"1m all days: {int(mall['minutes'].sum())} minutes, bad H/L/C {int(mall['bad_h'].sum())}/{int(mall['bad_l'].sum())}/"
+        f"{int(mall['bad_c'].sum())}; 1 s wider H/L {int(mall['h_wider'].sum())}/{int(mall['l_wider'].sum())}")
     if args.step == "spot":
         return
     mk, conv, mism = decide(mk, spot)
@@ -1320,9 +1439,14 @@ def run(args, log=print):
     if args.step == "decide":
         return
     if args.limit:
-        mk = mk.groupby("kind", group_keys=False).apply(lambda s: s.head(args.limit))
+        mk = mk[mk.groupby("kind").cumcount() < args.limit]
+    t_fetch, calls0 = time.time(), http.calls
     trades, info = fetch_all_trades(http, mk, cache, workers=args.workers, log=log)
+    if http.calls - calls0 > 100 and not args.limit:
+        (cache / "timing.json").write_text(json.dumps({"fetch_s": time.time() - t_fetch, "requests": http.calls - calls0}))
     trades = trades[trades["cid"].isin(set(mk["cid"]))]
+    pre = fetch_pre_tstar(http, mk, cache, log=log) if not args.limit else trade_frame("", [], "", "")
+    sl = second_level(pre, mk, spot)
     if args.step == "trades":
         return
     pt = post_tstar(trades, mk)
@@ -1333,7 +1457,7 @@ def run(args, log=print):
     cp.to_parquet(cache / "checkpoints.parquet")
     rt = time.time() - t_start
     text = report(mk, cov, missing, conv, mism, near_kind, mchk, trades, info[info["cid"].isin(set(mk["cid"]))] if len(info) else info,
-                  w, lose, cp, near, notes, rt, args.out, args.csv, spot_missing)
+                  w, lose, cp, near, notes, rt, args.out, args.csv, spot_missing, mall=mall, sl=sl)
     log(text)
     log(f"runtime {rt:.0f} s; requests {http.calls:,} (cache hits {http.hits:,})")
 

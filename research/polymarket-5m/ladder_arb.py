@@ -112,7 +112,7 @@ KIND_NAMES = {
     "above-above": "above 单调（同日 Yes(K1)+No(K2)）", "range-range": "range 两两互斥",
     "above-range": "range ⊂ above / 互斥", "above-hit_up": "above × hit_up（正午 K 线在当天窗口内）",
     "above-hit_down": "above × hit_down", "range-hit_up": "range × hit_up", "range-hit_down": "range × hit_down",
-    "updown_day-hit_up": "updown_day × hit_up", "updown_day-hit_down": "updown_day × hit_down",
+    "hit_up-updown_day": "updown_day × hit_up", "hit_down-updown_day": "updown_day × hit_down",
     "above-updown_day": "above × updown_day", "range-updown_day": "range × updown_day",
     "hit_up-hit_up": "hit_up 嵌套（买低价位 Yes + 高价位 No）", "hit_down-hit_down": "hit_down 嵌套（买高价位 Yes + 低价位 No）",
     "range_sum_yes": "range 全买 Yes（付 1）", "range_sum_no": "range 全买 No（付 N−1）",
@@ -172,7 +172,8 @@ def prep_markets(markets, spot=None):
                 m["t_from"] = m["ref_ts"] if np.isfinite(m["ref_ts"]) else -np.inf
         elif typ in HIT_TYPES:
             start = m["start_ts"] if np.isfinite(m["start_ts"]) else -np.inf
-            m["window"] = (start, m["end_ts"])
+            # an unknown start contains no candle and nests only inside its own event (same window)
+            m["window"] = (start if np.isfinite(start) else np.inf, m["end_ts"])
             pre = (m["pre_high"] >= m["lo"]) if typ == "hit_up" else (m["pre_low"] <= m["hi"])
             if bool(pre):
                 m["touch"] = -np.inf
@@ -267,13 +268,23 @@ class Basket:
         return " + ".join(f"{'Yes' if s == 'Y' else 'No'}({_mname(m)})" for m, s in self.legs)
 
 
+def _day(m):
+    d = m.get("day")
+    if isinstance(d, str) and len(d) >= 10:
+        return d[5:10]
+    return time.strftime("%m-%d", time.gmtime(m["end_ts"])) if np.isfinite(m["end_ts"]) else "?"
+
+
 def _mname(m):
-    d = str(m.get("day") or m.get("event_slug") or "")[-5:]
-    t = m["type"]
+    t, d = m["type"], _day(m)
     if t == "above":
         return f"above {m['lo']:,.0f} {d}"
     if t == "range":
-        return f"[{'' if not np.isfinite(m['lo']) else f'{m[chr(108)+chr(111)]:,.0f}'},{'' if not np.isfinite(m['hi']) else f'{m[chr(104)+chr(105)]:,.0f}'}) {d}"
+        if not np.isfinite(m["lo"]):
+            return f"<{m['hi']:,.0f} {d}"
+        if not np.isfinite(m["hi"]):
+            return f"≥{m['lo']:,.0f} {d}"
+        return f"[{m['lo']:,.0f}, {m['hi']:,.0f}) {d}"
     if t == "hit_up":
         return f"↑{m['lo']:,.0f} {_wname(m)}"
     if t == "hit_down":
@@ -285,7 +296,7 @@ def _mname(m):
 
 def _wname(m):
     s, e = m["window"]
-    if not np.isfinite(s):
+    if not np.isfinite(s) or not np.isfinite(e):
         return "…" + time.strftime("%m-%d", time.gmtime(e))
     return time.strftime("%m-%d", time.gmtime(s + 12 * 3600)) + ("" if e - s <= 90000 else "+")
 
@@ -334,11 +345,13 @@ def baskets(ms):
             if a is b or a["type"] != b["type"]:
                 continue
             (sa, ea), (sb, eb) = a["window"], b["window"]
-            if not (sb <= sa and ea <= eb):
+            if not (np.isfinite(sa) and np.isfinite(sb)):
+                if not (sa == sb and ea == eb and a.get("event_slug") == b.get("event_slug")):
+                    continue
+            elif not (sb <= sa and ea <= eb):
                 continue
             if (a["type"] == "hit_up" and b["lo"] <= a["lo"]) or (a["type"] == "hit_down" and b["hi"] >= a["hi"]):
-                if (b["lo"], b["hi"], sb, eb) != (a["lo"], a["hi"], sa, ea) or a["condition_id"] < b["condition_id"]:
-                    add(_kind([(a, "N"), (b, "Y")]), [(a, "N"), (b, "Y")], 1.0)
+                add(_kind([(a, "N"), (b, "Y")]), [(a, "N"), (b, "Y")], 1.0)
     events = {}
     for m in close:                                        # neg-risk range sums
         if m["type"] == "range":
@@ -444,7 +457,9 @@ def evaluate(b, arrs, times, feed, max_age=MAX_AGE):
 
 def scan(b, books, feed, max_age=MAX_AGE, later=LATER):
     """(summary dict, list of episode dicts) of one basket over one recording."""
-    summ = {"kind": b.kind, "valid_s": 0.0, "best": np.nan, "med_cost": np.nan, "label": b.label()}
+    m0 = b.legs[0][0]
+    summ = {"kind": b.kind, "valid_s": 0.0, "best": np.nan, "med_cost": np.nan, "label": b.label(), "n": len(b.legs),
+            "pay": b.pay, "event": m0.get("event_slug"), "candle": m0.get("candle")}
     arrs = [books.by.get(t) for t in b.tokens]
     if any(a is None for a in arrs):
         return summ, []
@@ -488,12 +503,14 @@ def scan(b, books, feed, max_age=MAX_AGE, later=LATER):
         held = float((dt[s:e] * hold[s:e]).sum())
         v5, e5, z5, _ = evaluate(b, arrs, np.array([ts + later]), feed, max_age)
         ok5 = bool(v5[0] and e5[0] > EPS and ts + later < t1)
-        legs_ask = [float(np.asarray(Books.__dict__ and a["ask"])[np.searchsorted(a["ts"], ts, "right") - 1]) for a in arrs]
+        legs_ask = [float(a["ask"][np.searchsorted(a["ts"], ts, "right") - 1]) for a in arrs]
         eps.append({"kind": b.kind, "label": b.label(), "tokens": list(b.tokens), "boundary": b.boundary,
                     "start": ts, "end": te, "censored": e >= len(times), "dur": held, "edge": float(edge[s]),
                     "peak": float(edge[s:e][hold[s:e]].max()), "size": float(size[s]), "cost": float(cost[s]),
                     "pay": b.pay, "asks": legs_ask, "later": ok5, "edge5": float(e5[0]) if ok5 else np.nan,
                     "size5": float(z5[0]) if ok5 else np.nan, "to_settle_h": (b.settle - ts) / 3600,
+                    "apy": float(edge[s] / cost[s] * 8760 / max((b.settle - ts) / 3600, 1.0))
+                    if b.kind != "range_sum_no" else np.nan,   # all No converts to N - 1 USDC at once
                     "take": min(float(size[s]), TAKE) * float(edge[s]) if np.isfinite(size[s]) else 0.0,
                     "take5": min(float(z5[0]), TAKE) * float(e5[0]) if ok5 and np.isfinite(z5[0]) else 0.0})
     return summ, eps
@@ -511,13 +528,16 @@ def dedupe(eps):
     return keep
 
 
+SUMM_COLS = ["kind", "valid_s", "best", "med_cost", "label", "n", "pay", "event", "candle"]
+
+
 def scan_all(bs, books, feed, max_age=MAX_AGE):
     summ, eps = [], []
     for b in bs:
         s, e = scan(b, books, feed, max_age)
         summ.append(s)
         eps += e
-    return pd.DataFrame(summ), eps
+    return pd.DataFrame(summ, columns=SUMM_COLS), eps
 
 
 # ------------------------------------------------------------------ reward scoring
@@ -642,6 +662,8 @@ def l1_samples(books, track, t_from, t_to, step=SAMPLE_S, off=SAMPLE_OFF):
             bids = {b: x} if np.isfinite(b) and np.isfinite(x) else {}
             asks = {a: y} if np.isfinite(a) and np.isfinite(y) else {}
             b0, a0, mid = adjusted_mid(bids, asks, ms)
+            if not np.isfinite(mid) and np.isfinite(b0) and np.isfinite(a0):
+                mid = (b0 + a0) / 2      # deeper levels unseen: the top-of-book mid
             q1, q2 = book_q(bids, asks, mid, v, ms) if np.isfinite(mid) else (0.0, 0.0)
             rows.append((tok, t, b0, a0, mid, q1, q2))
     return pd.DataFrame(rows, columns=["token", "t", "bid", "ask", "mid", "q1", "q2"])
@@ -732,6 +754,7 @@ class Fetcher:
         self.offline, self.gap, self.retries, self.opener, self.sleep = offline, gap, retries, opener, sleep
         self.last = 0.0
         self.requests = 0
+        self.at = None   # fetch time of the last response returned
 
     def path(self, url):
         return self.cache / f"{hashlib.sha1(url.encode()).hexdigest()[:24]}.json"
@@ -746,6 +769,7 @@ class Fetcher:
                 old = None
         if old is not None and (self.offline or ttl is None or time.time() - old["at"] < ttl
                                 or (final is not None and final(old["data"]))):
+            self.at = old["at"]
             return old["data"]
         if self.offline:
             raise LookupError(f"offline and not cached: {url}")
@@ -761,6 +785,7 @@ class Fetcher:
                 tmp = f.with_suffix(".tmp")
                 tmp.write_text(json.dumps({"at": time.time(), "url": url, "data": data}))
                 tmp.replace(f)
+                self.at = time.time()
                 return data
             except urllib.error.HTTPError as e:
                 err = e
@@ -771,6 +796,7 @@ class Fetcher:
             self.last = time.monotonic()
             self.sleep(min(30.0, 2.0 ** k))
         if old is not None:
+            self.at = old["at"]
             return old["data"]
         raise err if err else LookupError(url)
 
@@ -803,9 +829,10 @@ def reward_params(ms, fetcher, notes, now=None):
     snap_dir = fetcher.cache / "rewards-snapshots"
     snap_dir.mkdir(exist_ok=True)
     try:
-        allr, cur = [], ""
+        allr, cur, at = [], "", now
         for _ in range(1000):
             d = fetcher.get(REWARDS_CURRENT.format(cur=urllib.parse.quote(cur)), ttl=TTL_OPEN)
+            at = min(at, fetcher.at or now)
             allr += d.get("data") or []
             cur = d.get("next_cursor") or ""
             if not cur or cur == "LTE=":
@@ -814,7 +841,7 @@ def reward_params(ms, fetcher, notes, now=None):
         snap = {r["condition_id"]: {k: r.get(k) for k in ("total_daily_rate", "native_daily_rate", "sponsored_daily_rate",
                                                           "rewards_min_size", "rewards_max_spread")}
                 for r in allr if isinstance(r, dict) and r.get("condition_id") in want}
-        (snap_dir / f"snap-{int(now)}.json").write_text(json.dumps({"at": int(now), "n_all": len(allr), "markets": snap}))
+        (snap_dir / f"snap-{int(at)}.json").write_text(json.dumps({"at": int(at), "n_all": len(allr), "markets": snap}))
     except Exception as e:
         notes.append(f"CLOB rewards/markets/current: {type(e).__name__}: {e}（用缓存里以前的快照）")
     seen = {}
@@ -868,9 +895,10 @@ def settlements(ms, cids, fetcher, notes, now=None):
     return out
 
 
-def rewards(ms, books, feed, trades, prm, src=None, settle=None):
-    """(samples with our shares per quote, fills) for markets with a min size and max spread."""
-    settle = settle or {}
+def rewards(ms, books, feed, trades, prm, src=None, settle_fn=None):
+    """(samples with our share per quote, fills, depth source) for the markets with a min size and
+    a max spread. settle_fn(condition ids) -> {condition id: Yes payoff} is asked only about the
+    markets our quotes traded in."""
     track, by_tok = {}, {}
     for m in ms:
         p = prm.get(m["condition_id"]) or {}
@@ -878,43 +906,56 @@ def rewards(ms, books, feed, trades, prm, src=None, settle=None):
             track[m["yes_token"]] = (float(p["max_spread"]), float(p["min_size"]))
             by_tok[m["yes_token"]] = m
     raw = depth_samples(src, track, feed.start, feed.end) if src is not None else None
-    s = raw if raw is not None and len(raw) else l1_samples(books, track, feed.start, feed.end)
-    depth = "full" if raw is not None and len(raw) else "L1"
+    full = raw is not None and len(raw) > 0
+    s = raw if full else l1_samples(books, track, feed.start, feed.end)
     rows = []
-    for r in s.itertuples(index=False):
-        m = by_tok[r.token]
-        if not (r.t < m["t_to"] and r.t >= max(m["t_from"], feed.start)) or not feed.alive([r.t])[0] or not np.isfinite(r.mid):
-            continue
-        p = prm[m["condition_id"]]
-        x = {"cid": m["condition_id"], "type": m["type"], "t": r.t, "mid": r.mid, "rate": p["rate"]}
-        for how in QUOTES:
-            sh, pb, pa = quote_share(r.mid, r.bid, r.ask, r.q1, r.q2, p["max_spread"], p["min_size"], m["tick"], how)
-            x[f"share_{how}"] = sh
-            x[f"usd_{how}"] = p["rate"] / 1440.0 * sh * (SAMPLE_S / 60.0)
-        rows.append(x)
+    if len(s):
+        alive = feed.alive(s["t"].to_numpy(float))
+        for r, ok in zip(s.itertuples(index=False), alive):
+            m = by_tok[r.token]
+            if not (ok and np.isfinite(r.mid) and max(m["t_from"], feed.start) <= r.t < m["t_to"]):
+                continue
+            p = prm[m["condition_id"]]
+            x = {"cid": m["condition_id"], "type": m["type"], "t": r.t, "mid": r.mid, "rate": p["rate"]}
+            for how in QUOTES:
+                sh, _, _ = quote_share(r.mid, r.bid, r.ask, r.q1, r.q2, p["max_spread"], p["min_size"], m["tick"], how)
+                x[f"share_{how}"] = sh
+                x[f"usd_{how}"] = p["rate"] / 1440.0 * sh * (SAMPLE_S / 60.0)
+            rows.append(x)
     samples = pd.DataFrame(rows)
     tr = yes_trades(trades, ms)
-    fills = []
-    for tok, m in by_tok.items():
-        sub = tr[tr["cid"] == m["condition_id"]]
-        for how in QUOTES:
-            fills += [{**f, "how": how} for f in maker_fills(m, prm[m["condition_id"]], books, feed, sub, how,
-                                                             settle.get(m["condition_id"], np.nan))]
-    return samples, pd.DataFrame(fills), depth
+
+    def sim(settle):
+        out = []
+        for tok, m in by_tok.items():
+            sub = tr[tr["cid"] == m["condition_id"]]
+            for how in QUOTES:
+                out += [{**f, "how": how} for f in maker_fills(m, prm[m["condition_id"]], books, feed, sub, how,
+                                                               settle.get(m["condition_id"], np.nan))]
+        return out
+
+    fills = sim({})
+    if fills and settle_fn is not None:
+        settle = settle_fn(sorted({f["cid"] for f in fills}))
+        if settle:
+            fills = sim(settle)
+    return samples, pd.DataFrame(fills), "full" if full else "L1"
 
 
 # ------------------------------------------------------------------ one recording
 
-def analyze(books, markets, spot, closes=None, trades=None, src=None, prm=None, settle=None, max_ages=(MAX_AGE, np.inf)):
+def analyze(books, markets, spot, closes=None, trades=None, src=None, prm=None, settle_fn=None,
+            max_ages=(MAX_AGE, np.inf)):
     ms = prep_markets(markets, spot)
     bk, feed = Books(books), Feed(books, closes)
     bs = baskets(ms)
-    res = {"markets": ms, "hours": feed.hours, "span": (feed.start, feed.end), "baskets": len(bs), "scans": {}}
+    res = {"markets": ms, "hours": feed.hours, "span": (feed.start, feed.end), "baskets": len(bs), "scans": {},
+           "prm": prm}
     for a in max_ages:
         res["scans"][a] = scan_all(bs, bk, feed, a)
     res["windows"] = nest_windows(bs)
     if prm is not None:
-        res["samples"], res["fills"], res["depth"] = rewards(ms, bk, feed, trades, prm, src, settle)
+        res["samples"], res["fills"], res["depth"] = rewards(ms, bk, feed, trades, prm, src, settle_fn)
     return res
 
 
@@ -944,23 +985,24 @@ def _n(x, nd=0):
 
 
 def kind_table(summ, eps, hours):
-    L = ["| 类型 | 篮子 | 可评估 篮子·时 | 最好边际 ¢ | 套利片段 | 时长中位 / 最长 s | 边际中位 ¢ | 份数中位 | 0.5 s 后仍在 | $/天（立即） | $/天（+0.5 s） | 距结算 h |",
-         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    L = ["| 类型 | 篮子 | 可评估 篮子·时 | 最好边际 ¢ | 套利片段 | 时长中位 / 最长 s | 边际中位 ¢ | 份数中位 | 0.5 s 后仍在 | $/天（立即） | $/天（+0.5 s） | 距结算 h | 年化中位 |",
+         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     e = pd.DataFrame(eps)
     per_day = 24.0 / hours if hours > 0 else np.nan
-    for k in KIND_NAMES:
+    kinds = list(KIND_NAMES) + sorted(set(summ["kind"]) - set(KIND_NAMES) if len(summ) else [])
+    for k in kinds:
         s = summ[summ["kind"] == k] if len(summ) else summ
         if not len(s):
             continue
         q = e[e["kind"] == k] if len(e) else e
         best = s["best"].max() if s["best"].notna().any() else np.nan
         if len(q):
-            L.append(f"| {KIND_NAMES[k]} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | {len(q)} | "
+            L.append(f"| {KIND_NAMES.get(k, k)} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | {len(q)} | "
                      f"{q['dur'].median():.1f} / {q['dur'].max():.1f} | {_c(q['edge'].median())} | {_n(q['size'].median())} | "
                      f"{100 * q['later'].mean():.0f}% | {q['take'].sum() * per_day:,.2f} | {q['take5'].sum() * per_day:,.2f} | "
-                     f"{q['to_settle_h'].median():.1f} |")
+                     f"{q['to_settle_h'].median():.1f} | {_pct(q['apy'].median())} |")
         else:
-            L.append(f"| {KIND_NAMES[k]} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | 0 | – | – | – | – | 0 | 0 | – |")
+            L.append(f"| {KIND_NAMES.get(k, k)} | {len(s)} | {s['valid_s'].sum() / 3600:,.1f} | {_c(best)} | 0 | – | – | – | – | 0 | 0 | – | – |")
     return L
 
 
@@ -976,13 +1018,15 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
     when = f"{_t(min(s[0] for s in spans), '%Y-%m-%d %H:%M')} → {_t(max(s[1] for s in spans), '%Y-%m-%d %H:%M')} UTC" if spans else "–"
     strict = [r["scans"][max_age] for r in results]
     relax = [r["scans"].get(np.inf) for r in results]
-    summ = pd.concat([s for s, _ in strict], ignore_index=True) if strict else pd.DataFrame(columns=["kind", "valid_s", "best"])
+    summ = pd.concat([s for s, _ in strict], ignore_index=True) if strict else pd.DataFrame(columns=SUMM_COLS)
     eps = [e for _, x in strict for e in x]
     ded = dedupe(eps)
     L = [f"# 无延迟 BTC 阶梯市场：结构性套利与流动性奖励（{time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC）", ""]
     if note:
         L += [f"> {note}", ""]
-    L += [f"**样本**：录制 {len(results)} 段，共 {hours:.2f} 小时（{when}）；市场 {len(ms)} 个（"
+    if hours < 1.0:
+        L += [f"> 样本只有 {hours:.2f} 小时：数字只说明程序能跑通，不能外推；正式结果由 CI（polymarket-ladder-arb）在 5.5 小时的录制上生成。", ""]
+    L += [f"**样本**：录制 {len(results)} 段（{', '.join(names[:8])}{' …' if len(names) > 8 else ''}），共 {hours:.2f} 小时（{when}）；市场 {len(ms)} 个（"
           + "，".join(f"{t} {by_type.get(t, 0)}" for t in ld.TYPES if by_type.get(t, 0)) + f"）；候选篮子 {sum(r['baskets'] for r in results):,} 个。"
           "只用市场数据，不下单。", ""]
     L += ["## 1. 吃单套利（全部腿按卖一买入，扣 taker 费）", "",
@@ -1019,19 +1063,23 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
           "把 N 个 No 换成 N−1 USDC），Σ(No 卖一+费) < N−1 才是套利。「按买一卖出全部 Yes」需要先 split（每份 1 USDC 拆成 Yes+No）、"
           "卖 Yes、再把 N 个 No convert 成 N−1 USDC，净得 Σ买一 − 1，与在镜像的 No 盘口上全买 No 完全相同（No 卖一 = 1 − Yes 买一），"
           "所以只按全买 No 计，不需要 split；Polymarket 上可行。", "",
-          "| 事件（结算 K 线，UTC） | N | 全买 Yes：Σ成本中位 / 最低 | 全买 No：Σ成本中位 / 最低（对 N−1） | 可评估 h |", "|---|---:|---:|---:|---:|"]
+          "| 事件（结算 K 线，UTC） | N | 口径 | 全买 Yes：Σ成本中位 / 最低（对 1） | 全买 No：Σ成本中位 / 最低（对 N−1） | 可评估 h |",
+          "|---|---:|---|---:|---:|---:|"]
     for r in results:
-        for s, _ in [r["scans"][max_age]]:
-            ys = s[s["kind"] == "range_sum_yes"] if len(s) else s
-            for row in ys.itertuples():
-                no = s[(s["kind"] == "range_sum_no") & (s["label"].str.split(" + ").str[0].str.replace("Yes(", "No(", regex=False)
-                                                        == row.label.split(" + ")[0].replace("Yes(", "No(", 1))]
-                nrow = no.iloc[0] if len(no) else None
-                n = row.label.count("+") + 1
-                L.append(f"| {row.label.split(' + ')[0][4:-1].split(' ')[-1]}（{n} 个区间） | {n} | "
-                         f"{_n(row.med_cost, 4)} / {_n(1 - row.best, 4) if np.isfinite(row.best) else '–'} | "
-                         f"{_n(nrow.med_cost, 4) if nrow is not None else '–'} / {_n(n - 1 - nrow.best, 4) if nrow is not None and np.isfinite(nrow.best) else '–'}（{n - 1}） | "
-                         f"{row.valid_s / 3600:.2f} |")
+        for age, name in ((max_age, f"≤ {max_age:g} s"), (np.inf, "不限年龄")):
+            if age not in r["scans"]:
+                continue
+            sm = r["scans"][age][0]
+            if not len(sm):
+                continue
+            for ev, g in sm[sm["kind"].isin(["range_sum_yes", "range_sum_no"])].groupby("event", sort=False):
+                y = g[g["kind"] == "range_sum_yes"].iloc[0]
+                no = g[g["kind"] == "range_sum_no"]
+                no = no.iloc[0] if len(no) else None
+                n = int(y["n"])
+                L.append(f"| {ev}（{_t(y['candle'], '%m-%d %H:%M')}） | {n} | {name} | {_n(y['med_cost'], 4)} / {_n(1 - y['best'], 4)} | "
+                         + (f"{_n(no['med_cost'], 4)} / {_n(n - 1 - no['best'], 4)}（{n - 1}）" if no is not None else "–")
+                         + f" | {y['valid_s'] / 3600:.2f} |")
     L += _reward_section(results, hours)
     wins = sorted({w for r in results for w in r["windows"]}, key=lambda x: (x[1], x[0]))
     L += ["", "## 近似和注意事项", "",
@@ -1045,7 +1093,7 @@ def report(results, names, notes=(), note=None, max_age=MAX_AGE):
           "- 份数只看买一/卖一那一档（built 表只有第一档），吃更多要走更深的价位，所以 $/天 是上限；同一个错价会出现在很多篮子里，看去重那一行。",
           "- 手续费按文档的 fee = C·feeRate·p·(1−p)（crypto 0.07）以 USDC 计；实际按 5 位小数取整，买单的费可能以份额扣除，两腿份数会差一点点。",
           "- 两条以上的腿不是原子成交：0.5 秒后仍在的比例是腿风险的粗略指标。资金要锁到结算（above/range/updown 正午，hit 当天结束；全买 No 可以马上 convert）。",
-          "- 交易所时间戳；两个交易所之间的时钟偏差没测。本报告来自 CI 在 5.5 小时录制上的运行（ladder-<run id> 产物），冒烟运行的数字没有意义。"]
+          "- 交易所时间戳；两个交易所之间的时钟偏差没测。正式结果来自 CI（polymarket-ladder-arb）在 polymarket-ladder 每段 5.5 小时录制（ladder-<run id> 产物）上的运行；$/天 是按录制时长线性外推的。"]
     if notes:
         L += ["", "备注：", ""] + [f"- {n}" for n in notes]
     return "\n".join(L) + "\n"
@@ -1065,36 +1113,49 @@ def _reward_section(results, hours):
     samples = [r.get("samples") for r in results if r.get("samples") is not None and len(r.get("samples"))]
     fills = [r.get("fills") for r in results if r.get("fills") is not None and len(r.get("fills"))]
     depth = sorted({r.get("depth") for r in results if r.get("depth")})
+    mk, pools = {}, {}
+    for r in results:
+        for m in r["markets"]:
+            p = (r.get("prm") or {}).get(m["condition_id"]) or {}
+            mk[m["condition_id"]] = m
+            if p.get("rate", 0) > 0:
+                pools[m["condition_id"]] = (m, p)
     if not samples:
         return L + ["没有可用的奖励参数或采样（离线且缓存里没有，或没有市场）。"]
     s = pd.concat(samples, ignore_index=True)
-    f = pd.concat(fills, ignore_index=True) if fills else pd.DataFrame(columns=["type", "how", "qty", "m30", "m120", "msettle", "rebate", "cid"])
-    pools = s.groupby("cid")["rate"].max()
+    f = pd.concat(fills, ignore_index=True) if fills else \
+        pd.DataFrame(columns=["type", "how", "qty", "m30", "m120", "msettle", "rebate", "cid"])
     L += [f"盘口深度来源：{' / '.join({'full': '原始消息的完整盘口', 'L1': 'built 表的第一档（缺深层挂单，份额偏高）'}[d] for d in depth)}；"
-          f"采样 {len(s):,} 个（市场 × 分钟）；有奖励池的市场 {int((pools > 0).sum())} 个，池合计 ${pools.sum():,.2f}/天。", "",
-          "| 类型 | 报价 | 市场（有池） | 池 $/天 | 平均份额 | 奖励 $/天 | 成交笔 / 份 | 30 s 标记 $/天 | 120 s 标记 $/天 | 结算标记 $/天（已结算的） | 返佣 $/天 |",
+          f"采样 {len(s):,} 个（市场 × 分钟）；有奖励池的市场 {len(pools)} 个，池合计 ${sum(p['rate'] for _, p in pools.values()):,.2f}/天。", "",
+          "| 类型 | 报价 | 市场（有池） | 池 $/天 | 平均份额（全部 / 有池） | 奖励 $/天 | 成交笔 / 份 | 30 s 标记 $/天 | 120 s 标记 $/天 | 结算标记 $/天（已结算的） | 返佣 $/天 |",
           "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for typ in ld.TYPES:
         st = s[s["type"] == typ]
-        if not len(st):
+        n_m = sum(m["type"] == typ for m in mk.values())
+        pt_ = [p["rate"] for m, p in pools.values() if m["type"] == typ]
+        if not n_m:
             continue
-        pt_ = st.groupby("cid")["rate"].max()
         for how in QUOTES:
             ft = f[(f["type"] == typ) & (f["how"] == how)] if len(f) else f
             usd = lambda c: (ft[c] * ft["qty"]).sum() * per_day if len(ft) and ft[c].notna().any() else np.nan
-            share = st.loc[st["rate"] > 0, f"share_{how}"].mean() if (st["rate"] > 0).any() else np.nan
-            L.append(f"| {typ} | {how} | {st['cid'].nunique()}（{int((pt_ > 0).sum())}） | {pt_.sum():,.2f} | "
-                     f"{_pct(share)} | {st[f'usd_{how}'].sum() * per_day:,.2f} | {len(ft)} / {_n(ft['qty'].sum() if len(ft) else 0)} | "
-                     f"{_n(usd('m30'), 2)} | {_n(usd('m120'), 2)} | {_n(usd('msettle'), 2)} | {_n((ft['rebate'] * ft['qty']).sum() * per_day if len(ft) else 0, 2)} |")
-    pooled = s[s["rate"] > 0]
-    if len(pooled):
-        L += ["", "有奖励池的市场：", "", "| 市场 | 池 $/天 | 采样 | 中价中位 | 份额 边缘 / 半价差 / 贴盘口 | 奖励 $/天（边缘 / 半价差 / 贴盘口） |",
-              "|---|---:|---:|---:|---:|---:|"]
-        names = {m["condition_id"]: m.get("slug") or m["condition_id"] for r in results for m in r["markets"]}
-        for cid, g in pooled.groupby("cid"):
-            L.append(f"| {names.get(cid, cid)} | {g['rate'].max():,.2f} | {len(g)} | {g['mid'].median():.3f} | "
-                     + " / ".join(_pct(g[f"share_{h}"].mean()) for h in QUOTES) + " | "
-                     + " / ".join(f"{g[f'usd_{h}'].sum() * per_day:,.2f}" for h in QUOTES) + " |")
+            pooled = st[st["rate"] > 0] if len(st) else st
+            L.append(f"| {typ} | {how} | {n_m}（{len(pt_)}） | {sum(pt_):,.2f} | "
+                     f"{_pct(st[f'share_{how}'].mean() if len(st) else np.nan)} / {_pct(pooled[f'share_{how}'].mean() if len(pooled) else np.nan)} | "
+                     f"{st[f'usd_{how}'].sum() * per_day if len(st) else 0:,.2f} | {len(ft)} / {_n(ft['qty'].sum() if len(ft) else 0)} | "
+                     f"{_n(usd('m30'), 2)} | {_n(usd('m120'), 2)} | {_n(usd('msettle'), 2)} | "
+                     f"{_n((ft['rebate'] * ft['qty']).sum() * per_day if len(ft) else 0, 2)} |")
+    if pools:
+        L += ["", "有奖励池的市场（池来自 /rewards/markets/current 快照，含赞助）：", "",
+              "| 市场 | 池 $/天（其中赞助） | 最小份数 / 最大价差 ¢ | 采样 | 中价中位 | 份额 边缘 / 半价差 / 贴盘口 | 奖励 $/天 边缘 / 半价差 / 贴盘口 |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
+        for cid, (m, p) in sorted(pools.items(), key=lambda x: -x[1][1]["rate"]):
+            g = s[s["cid"] == cid]
+            L.append(f"| {m.get('slug') or cid} | {p['rate']:,.2f}（{_n(p.get('sponsored'), 2)}） | {_n(p['min_size'])} / {_n(p['max_spread'], 1)} | {len(g)} | "
+                     + (f"{g['mid'].median():.3f} | " + " / ".join(_pct(g[f"share_{h}"].mean()) for h in QUOTES) + " | "
+                        + " / ".join(f"{g[f'usd_{h}'].sum() * per_day:,.2f}" for h in QUOTES) + " |" if len(g) else
+                        "– | 没有可计分的采样（单边盘口：中价无定义，双边报价放不下） | 0 |"))
+    else:
+        L += ["", "录到的市场里没有一个有奖励池（/rewards/markets/current 快照和 Gamma clobRewards 都没有日奖励额）。"]
     return L
 
 
@@ -1148,17 +1209,16 @@ def main(argv=None):
     for d, books, markets, spot, trades, closes in loaded:
         try:
             ms = prep_markets(markets, spot)
-            fills_cids = {m["condition_id"] for m in ms}
-            settle = settlements(ms, sorted(fills_cids), fetcher, notes)
             src = d.parent if d.name == "built" else d
-            res = analyze(books, markets, spot, closes, trades, src=src, prm=prm, settle=settle,
+            res = analyze(books, markets, spot, closes, trades, src=src, prm=prm,
+                          settle_fn=lambda cids, ms=ms: settlements(ms, cids, fetcher, notes),
                           max_ages=tuple(dict.fromkeys((a.max_age, np.inf))))
         except Exception as e:  # one bad recording must not stop the report
             notes.append(f"{_name(d)}: 跳过（{type(e).__name__}: {e}）")
             continue
         results.append(res)
         names.append(_name(d))
-    notes.append(f"网络请求 {fetcher.requests} 次（其余来自缓存 {a.cache}）")
+    notes.append(f"Gamma / CLOB 网络请求 {fetcher.requests} 次（其余来自缓存）")
     text = report(results, names, notes, a.note, a.max_age)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(text, encoding="utf-8")

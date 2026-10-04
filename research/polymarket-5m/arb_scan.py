@@ -12,7 +12,7 @@ Paper research on recorded market data only: nothing here places or signs an ord
 Three sources, one core (`scan`):
 
     python arb_scan.py kacho --kacho DIR --out real/arb-scan-kacho.md       # kacho.io 1 s rows (local)
-    python arb_scan.py hf --workdir DIR [--days N] [--jobs 2] --out real/arb-scan-hf.md  # whodisidk 100 ms
+    python arb_scan.py hf --workdir DIR [--days N] --out real/arb-scan-hf.md  # whodisidk 100 ms, 5m/15m/1h
     python arb_scan.py forward ROOT --out real/arb-scan-forward.md          # GitHub forward recordings
 
 Definitions (fixed in ROUNDTRIP.md, or the conservative choice where it is silent):
@@ -46,7 +46,9 @@ Definitions (fixed in ROUNDTRIP.md, or the conservative choice where it is silen
 - hf: only rows whose lifecycle_state is active (or missing) and not halted, within the market's
   window [start, end), one row per market and timestamp (as cross.boxes). The feature lists are
   best-first (checked on 2026-08-29: the first element equals the best price on every row), so
-  cross.read_day's first-level sizes are the sizes at the touch.
+  first-level sizes are the sizes at the touch. Archives are read by read_day_lean (same columns
+  and sizes as cross.read_day, tested against it) because cross.read_day peaked at ~11 GB on a May
+  archive; windows come from cross.market_table, downloads from cross.fetch / cross.archives.
 - forward: the latency/ files written by recording.LatencyFiles hold the Up token's book only; Down
   quotes there can only be written as 1 - Up bid / 1 - Up ask, which makes merge cost = 1 + spread
   and split proceeds = 1 - spread identically. That is detected and reported instead of a number.
@@ -522,59 +524,118 @@ def hf_report(ep, stats, ndays, out, ndays_total, extra=None):
     print("\n".join(L))
 
 
+HF_PRICES = ("up_best_bid", "up_best_ask", "down_best_bid", "down_best_ask")
+HF_SIZES = ("up_bid_sizes", "up_ask_sizes", "down_bid_sizes", "down_ask_sizes")
+
+
+def _first(col):
+    """First element of each list in a pyarrow list column as float64 (NaN for null or empty lists)."""
+    out = []
+    for ch in (col.chunks if hasattr(col, "chunks") else [col]):
+        off = ch.offsets.to_numpy()
+        vals = ch.values.to_numpy(zero_copy_only=False).astype(float) if len(ch.values) else np.array([np.nan])
+        n = np.diff(off)
+        v = np.where(n > 0, vals[np.clip(off[:-1], 0, len(vals) - 1)], np.nan)
+        valid = ch.is_valid().to_numpy(zero_copy_only=False)
+        out.append(np.where(valid, v, np.nan))
+    return np.concatenate(out) if out else np.array([])
+
+
+def read_day_lean(path):
+    """What hf_frame needs from one daily archive, as (features, markets): the same columns and the
+    same first-level sizes cross.read_day gives (size lists are best-first; see the module notes),
+    but only rows that are trading and only one market row per market and file. cross.read_day keeps
+    every column of every 100 ms market row and peaked at ~11 GB on a May archive."""
+    import io
+    import re
+    import tarfile
+
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+    feats, mkts = [], []
+    with tarfile.open(path, "r|gz") as tar:
+        for m in tar:
+            if not (m.isfile() and m.name.endswith(".parquet")):
+                continue
+            table = (re.search(r"dataset=([^/]+)", m.name) or [None, ""])[1]
+            if table == "polymarket_features_100ms":
+                pf = pq.ParquetFile(io.BytesIO(tar.extractfile(m).read()))
+                names = set(pf.schema_arrow.names)
+                cols = [c for c in ("timestamp_ms", "market_id", "lifecycle_state", "observed_halt_flag") + HF_PRICES
+                        + HF_SIZES if c in names]
+                t = pf.read(columns=cols)
+                keep = pc.is_in(t["lifecycle_state"].cast("string"), pa_strings(["active", "open", "trading"])) \
+                    if "lifecycle_state" in names else None
+                if keep is not None:
+                    keep = pc.or_kleene(keep, pc.is_null(t["lifecycle_state"])).fill_null(True)
+                if "observed_halt_flag" in names:
+                    calm = pc.invert(t["observed_halt_flag"].fill_null(False))
+                    keep = calm if keep is None else pc.and_(keep, calm)
+                if keep is not None:
+                    t = t.filter(keep)
+                d = {"timestamp_ms": t["timestamp_ms"].to_numpy(), "market_id": t["market_id"].cast("string").to_numpy(
+                    zero_copy_only=False)}
+                for c in HF_PRICES:
+                    d[c] = t[c].to_numpy(zero_copy_only=False).astype(float) if c in names else np.nan
+                for c in HF_SIZES:
+                    d[c.replace("_sizes", "_size")] = _first(t[c]) if c in names else np.nan
+                feats.append(pd.DataFrame(d))
+            elif table == "polymarket_market_100ms":
+                pf = pq.ParquetFile(io.BytesIO(tar.extractfile(m).read()))
+                cols = [c for c in ("market_id", "slug", "session_start_ts", "session_end_ts", "chainlink_open_price")
+                        if c in pf.schema_arrow.names]
+                mk = pf.read(columns=cols).to_pandas()
+                mk["market_id"] = mk["market_id"].astype(str)
+                mkts.append(mk.drop_duplicates("market_id", keep="last"))
+    feat = pd.concat(feats, ignore_index=True) if feats else pd.DataFrame()
+    if len(feat):
+        feat["market_id"] = feat["market_id"].astype("category")
+    mk = pd.concat(mkts, ignore_index=True) if mkts else pd.DataFrame()
+    return feat, mk
+
+
+def pa_strings(values):
+    import pyarrow as pa
+    return pa.array(values, pa.string())
+
+
 def hf_day(path, day):
     """(episodes, row stats by horizon, rows, markets) of one daily archive already on disk."""
-    feat, mk, rs = cross.read_day(path)
-    fr = hf_frame(feat, cross.market_table(mk, rs))
-    del feat, mk, rs
+    feat, mk = read_day_lean(path)
+    fr = hf_frame(feat, cross.market_table(mk, pd.DataFrame()) if len(mk) else pd.DataFrame())
+    del feat, mk
     stats = {h: row_stats(g) for h, g in fr.groupby("horizon")}
     ep = scan(fr, HF_LAG_MS, gap_ms=150, step_ms=100)
     ep["day"] = day
     return ep, stats, len(fr), fr["market"].nunique()
 
 
-def _hf_job(args):
-    name, workdir = args
-    try:
-        local = cross.fetch(name, Path(workdir) / name)
-        try:
-            return (name,) + hf_day(local, name[15:25]) + (None,)
-        finally:
-            Path(local).unlink(missing_ok=True)
-    except Exception:
-        import traceback
-        return name, None, None, 0, 0, traceback.format_exc()
-
-
-def run_hf(workdir, out, days=None, jobs=1):
-    """Every daily archive (or the last `days`), `jobs` at a time (each needs ~6 GB at its peak)."""
+def run_hf(workdir, out, days=None):
+    """Every daily archive (or the last `days`), one at a time: download, scan, delete."""
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     arcs = cross.archives(cross.fetch("MANIFEST.txt").decode())
     if days:
         arcs = arcs[-int(days):]
-    todo = [(name, str(workdir)) for name, _ in arcs]
     parts, stats, done, fails = [], {}, 0, []
-    if jobs > 1:
-        import multiprocessing as mp
-        pool = mp.get_context("fork").Pool(jobs, maxtasksperchild=1)
-        results = pool.imap(_hf_job, todo)
-    else:
-        pool, results = None, map(_hf_job, todo)
-    for name, ep, st, nrows, nmk, err in results:
-        if err:
+    for name, _ in arcs:
+        local = workdir / name
+        try:
+            cross.fetch(name, local)
+            ep, st, nrows, nmk = hf_day(local, name[15:25])
+        except Exception:
+            import traceback
             fails.append(name)
-            print(f"{name}: failed\n{err}", flush=True)
+            print(f"{name}: failed\n{traceback.format_exc()}", flush=True)
             continue
+        finally:
+            local.unlink(missing_ok=True)
         for h, x in st.items():
             stats[h] = _merge_stats(stats.get(h, {}), x)
         parts.append(ep)
         done += 1
-        n_tr = int((ep["level"] == "tradable").sum())
-        print(f"{name}: {nrows:,} rows, {nmk:,} markets, tradable episodes {n_tr}", flush=True)
-    if pool is not None:
-        pool.close()
-        pool.join()
+        print(f"{name}: {nrows:,} rows, {nmk:,} markets, tradable episodes {int((ep['level'] == 'tradable').sum())}",
+              flush=True)
     ep = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=EP_COLS + ["day"])
     if len(ep):
         ep.to_csv(Path(out).with_suffix(".csv.gz"), index=False)
@@ -599,8 +660,8 @@ def run_forward(root, out, coins=("btc",)):
             if loaded is None:
                 continue
             fr = forward_frame(*loaded)
-            fr = fr[~fr.set_index(["market", "ts_ms"]).index.isin(seen)]
-            seen |= set(zip(fr["market"], fr["ts_ms"]))
+            fr = fr[~fr["market"].isin(seen)]  # a market recorded by two overlapping runs: the first one only
+            seen |= set(fr["market"])
             parts.append(fr)
     n_one = sum(1 for _, x in deg if x.get("one_token"))
     L += ["## latency/ 文件（latency.load_books）", "",
@@ -652,7 +713,6 @@ def main(argv=None):
     h = sub.add_parser("hf")
     h.add_argument("--workdir", required=True)
     h.add_argument("--days", type=int, default=None, help="只跑最后 N 个日档")
-    h.add_argument("--jobs", type=int, default=1, help="同时处理几个日档（每个峰值约 6 GB 内存）")
     h.add_argument("--out", default="real/arb-scan-hf.md")
     f = sub.add_parser("forward")
     f.add_argument("root")
@@ -662,7 +722,7 @@ def main(argv=None):
         ticks, markets = load_kacho(a.kacho)
         kacho_report(kacho_frame(ticks, markets), a.out)
     elif a.mode == "hf":
-        run_hf(a.workdir, a.out, a.days, a.jobs)
+        run_hf(a.workdir, a.out, a.days)
     else:
         run_forward(a.root, a.out)
 

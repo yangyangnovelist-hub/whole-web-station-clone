@@ -222,6 +222,7 @@ def _hf_archive(path):
     f = feat.copy()
     for c in ("up_ask", "down_ask", "up_bid", "down_bid"):
         f[f"{c}_sizes"] = [[float(v), 1.0] for v in f.pop(f"{c}_size")]
+    f.at[7, "up_bid_sizes"] = []  # an empty side: no size
     mk = pd.DataFrame({"market_id": mkts["market_id"], "slug": ["btc-updown-5m-x", "btc-updown-15m-x"],
                        "session_start_ts": mkts["start"], "session_end_ts": mkts["end"],
                        "chainlink_open_price": 1.0, "up_won": np.nan, "outcome_direction": None,
@@ -260,3 +261,17 @@ def test_run_hf_end_to_end(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     assert "15 分钟市场" in text and "5 分钟市场" in text
     assert not (tmp_path / "work" / name).exists()  # the archive is deleted after use
+
+
+def test_lean_reader_matches_cross_read_day(tmp_path):
+    import cross
+    path = tmp_path / "a.tar.gz"
+    _hf_archive(path)
+    feat, mk, rs = cross.read_day(path)
+    ref = ar.hf_frame(feat, cross.market_table(mk, rs))
+    lf, lm = ar.read_day_lean(path)
+    got = ar.hf_frame(lf, cross.market_table(lm, pd.DataFrame()))
+    key = ["market", "ts_ms"]
+    pd.testing.assert_frame_equal(ref.sort_values(key).reset_index(drop=True),
+                                  got.sort_values(key).reset_index(drop=True), check_dtype=False)
+    assert np.isnan(got.loc[(got["market"] == "m5") & (got["ts_ms"] == S * 1000 + 10_700), "bu_sz"]).all()
