@@ -214,6 +214,25 @@
       "priority": 10,
       "passes": false,
       "notes": "No pass means no deployment."
+    },
+    {
+      "id": "US-014",
+      "title": "Forward-test the frozen MIX jump-z control",
+      "description": "As the account owner, I want the strongest simple MIX control replayed on untouched receipt-clock books so that its historical edge is either confirmed as executable or rejected without depending on unavailable model factors.",
+      "acceptanceCriteria": [
+        "Bind the A-fitted MIX estimators to the existing frozen-rule SHA, A fingerprint, feature order, rule cuts and exact runtime versions",
+        "Use the same Binance aggregate-trade receipt tape as the historical study, the frozen jump_z threshold, raw-jump spacing and no outcome before a fill",
+        "At 300, 400 and 500 milliseconds use only direct dual-token books received by the decision clock, require all five shares at the single best ask, enforce the 0.98 limit and charge the frozen real taker fee",
+        "Freeze the holdout start before observations, append each observation once, and immutably stop the primary 500 millisecond sample at the first 1000 resolved fills spanning at least seven UTC days",
+        "Pass only with positive net EV per share, a positive one-sided 99 percent day-cluster lower bound and a Poisson-binomial p value below 0.01 after correction for 100 searched strategies",
+        "Treat the missing explicit lifecycle and halt field as a paper-execution limitation and require separately authorised live FAK calibration before any production claim",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Protocol fingerprint 2c420a2ecfdc0b86a2a9e4c99db81493b39d396eb84eeeb42c3c4a197cab5b7f freezes the untouched cutoff at 2026-10-05T13:00:00Z and binds runner SHA cb43ae9aad92d4c54689cd73dad3aae67e64e0d8e4c2b70a91682d2a40ab5be1. All observations before that cutoff are audit-only. Historical B/C evidence is candidate discovery, not a pristine final holdout; the 21-feature R1/R2/R3 models cannot be replayed on current artifacts because forward factor predictions and hourly DVOL are absent. The jump_z control is independently executable and runs first."
     }
   ]
 }

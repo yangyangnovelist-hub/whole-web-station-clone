@@ -185,6 +185,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import platform
 import re
 import time
 import zlib
@@ -961,6 +963,139 @@ def make_model(name):
     return HistGradientBoostingRegressor(**HGB_PARAMS)
 
 
+MODEL_BUNDLE_FORMAT = "polymarket-mix-models-v1"
+
+
+def model_bundle_paths(frozen_path):
+    """Trusted fitted-model sidecars paired with an immutable ``*-frozen.json`` file."""
+    frozen_path = Path(frozen_path)
+    suffix = "frozen.json"
+    prefix = frozen_path.name[:-len(suffix)] if frozen_path.name.endswith(suffix) else frozen_path.stem + "-"
+    return frozen_path.with_name(prefix + "models.joblib"), frozen_path.with_name(prefix + "models.json")
+
+
+def _atomic_json(path, value):
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _bundle_a_hashes(models, rules, train, X):
+    prediction_sha, selected_keys_sha = {}, {}
+    for rule in rules:
+        rule_id = str(rule["id"])
+        prediction = _canonical_float64(models[rule_id].predict(X))
+        prediction_sha[rule_id] = hashlib.sha256(prediction.tobytes()).hexdigest()
+        selected = np.isfinite(prediction) & (prediction >= float(rule["cut"]))
+        selected_keys_sha[rule_id] = hashlib.sha256(_row_key_bytes(train.loc[selected])).hexdigest()
+    return prediction_sha, selected_keys_sha
+
+
+def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=None):
+    """Fit the frozen rules on A only and write an immutable, hash-verified inference bundle."""
+    import joblib
+    import sklearn
+
+    frozen_path = Path(frozen_path)
+    default_model, default_manifest = model_bundle_paths(frozen_path)
+    model_path = Path(model_path or default_model)
+    manifest_path = Path(manifest_path or default_manifest)
+    segments = set(segment_of(A["start"].to_numpy(float))) if len(A) else set()
+    if segments - {"A"}:
+        raise ValueError("model export accepts only A rows")
+    if fingerprint(A) != spec.get("a_fingerprint"):
+        raise ValueError("A fingerprint differs from the frozen study")
+    frozen_sha = _sha256(frozen_path)
+    train, training_matrix = _canonical_training_data(A)
+    X = training_matrix[:, :len(FEATURES)]
+    training_matrix_sha = hashlib.sha256(training_matrix.tobytes()).hexdigest()
+    frozen_rules = [{key: rule[key] for key in ("id", "policy", "model", "q", "cut")}
+                    for rule in spec.get("rules", [])]
+
+    if model_path.exists() or manifest_path.exists():
+        if not (model_path.exists() and manifest_path.exists()):
+            raise ValueError("partial MIX model bundle")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = {
+            "format": MODEL_BUNDLE_FORMAT,
+            "frozen_sha256": frozen_sha,
+            "a_fingerprint": spec.get("a_fingerprint"),
+            "features": list(FEATURES),
+            "model_file": model_path.name,
+            "rules": frozen_rules,
+            "training_rows": int(len(train)),
+            "training_matrix_sha256": training_matrix_sha,
+        }
+        bad = [key for key, value in expected.items() if manifest.get(key) != value]
+        if bad or manifest.get("model_sha256") != _sha256(model_path):
+            raise ValueError("existing MIX model bundle does not match the frozen study: " + ", ".join(bad or ["sha256"]))
+        payload = joblib.load(model_path)
+        try:
+            prediction_sha, selected_keys_sha = _bundle_a_hashes(payload["models"], frozen_rules, train, X)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("existing MIX model bundle cannot validate its A predictions") from error
+        audit = {"a_prediction_sha256": prediction_sha, "selected_row_keys_sha256": selected_keys_sha}
+        payload_expected = {
+            "format": MODEL_BUNDLE_FORMAT,
+            "frozen_sha256": frozen_sha,
+            "a_fingerprint": spec.get("a_fingerprint"),
+            "features": list(FEATURES),
+            "rules": frozen_rules,
+            "training_matrix_sha256": training_matrix_sha,
+            **audit,
+        }
+        bad = [key for key, value in audit.items() if manifest.get(key) != value]
+        bad += [key for key, value in payload_expected.items() if payload.get(key) != value]
+        if bad:
+            raise ValueError("existing MIX model bundle does not match canonical A: " + ", ".join(bad))
+        return manifest
+
+    label_index = {policy: len(FEATURES) + i for i, policy in enumerate(POLICIES)}
+    models = {}
+    for rule in spec.get("rules", []):
+        policy = str(rule["policy"])
+        model_name = str(rule["model"])
+        models[str(rule["id"])] = make_model(model_name).fit(X, training_matrix[:, label_index[policy]])
+    prediction_sha, selected_keys_sha = _bundle_a_hashes(models, frozen_rules, train, X)
+    versions = {"python": platform.python_version(), "numpy": np.__version__, "sklearn": sklearn.__version__,
+                "joblib": joblib.__version__}
+    payload = {
+        "format": MODEL_BUNDLE_FORMAT,
+        "frozen_sha256": frozen_sha,
+        "a_fingerprint": spec.get("a_fingerprint"),
+        "features": list(FEATURES),
+        "rules": frozen_rules,
+        "versions": versions,
+        "training_matrix_sha256": training_matrix_sha,
+        "a_prediction_sha256": prediction_sha,
+        "selected_row_keys_sha256": selected_keys_sha,
+        "models": models,
+    }
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_model = model_path.with_name(model_path.name + ".tmp")
+    joblib.dump(payload, temporary_model, compress=3)
+    os.replace(temporary_model, model_path)
+    manifest = {
+        "format": MODEL_BUNDLE_FORMAT,
+        "made": pd.Timestamp.now(tz="UTC").isoformat(),
+        "model_file": model_path.name,
+        "model_sha256": _sha256(model_path),
+        "frozen_file": frozen_path.name,
+        "frozen_sha256": frozen_sha,
+        "a_fingerprint": spec.get("a_fingerprint"),
+        "features": list(FEATURES),
+        "rules": frozen_rules,
+        "training_rows": int(len(train)),
+        "training_matrix_sha256": training_matrix_sha,
+        "a_prediction_sha256": prediction_sha,
+        "selected_row_keys_sha256": selected_keys_sha,
+        "versions": versions,
+    }
+    _atomic_json(manifest_path, manifest)
+    return manifest
+
+
 def a_blocks():
     """7-day blocks of A from its first day: (start, end, out-of-sample?)."""
     a0, a1 = ts(SEGMENTS[0][1]), ts(SEGMENTS[0][2])
@@ -1076,38 +1211,92 @@ def n_days(rows):
 
 
 # --------------------------------------------------------------------------- selection, freeze, evaluation
+A_ROW_KEY = ("market", "start", "t", "side", "kind")
+CANONICAL_FLOAT_DTYPE = np.dtype("<f8")
+CANONICAL_NAN_BITS = np.uint64(0x7FF8000000000000)
+
+
+def _canonical_float64(values):
+    """C-contiguous little-endian float64 with every NaN using one quiet-NaN payload."""
+    out = np.array(values, dtype=CANONICAL_FLOAT_DTYPE, order="C", copy=True)
+    out.view(np.dtype("<u8"))[np.isnan(out)] = CANONICAL_NAN_BITS
+    return out
+
+
 def a_oos_mask(start):
     """Rows of A's out-of-sample blocks (by market start)."""
     s = np.asarray(start, float)
     return (s >= min(b0 for b0, _, oos in a_blocks() if oos)) & (s < ts(SEGMENTS[0][2]))
 
 
-def fingerprint(rowsA):
-    """sha256 of the A rows that the freeze depends on (keys, features, labels)."""
-    if not len(rowsA):
-        return "empty"
-    r = rowsA.sort_values(["market", "t", "side", "kind"], kind="stable")
-    h = hashlib.sha256()
-    h.update("\n".join(r["market"].astype(str) + "|" + r["kind"].astype(str)).encode())
-    h.update(np.round(r[["start", "t", "side"]].to_numpy(float), 3).tobytes())
-    h.update(np.round(r[FEATURES + [f"pnl_{p}" for p in POLICIES]].to_numpy(float), 5).tobytes())
-    return h.hexdigest()
-
-
 def model_rows(rows):
     return rows[rows["kind"].astype(str) != "random"]
 
 
+def canonical_a_rows(rowsA):
+    """Model rows in a deterministic order defined only by the fixed row key."""
+    r = model_rows(rowsA).reset_index(drop=True)
+    if not len(r):
+        return r
+    if r[["market", "start", "t", "side", "kind"]].isna().any().any():
+        raise ValueError("A row key contains a missing value")
+    start = pd.to_numeric(r["start"]).to_numpy(float)
+    t = pd.to_numeric(r["t"]).to_numpy(float)
+    side = pd.to_numeric(r["side"]).to_numpy(float)
+    if not (np.isfinite(start).all() and np.isfinite(t).all() and np.isfinite(side).all()):
+        raise ValueError("A row key contains a non-finite number")
+    if not (np.equal(start, np.floor(start)).all() and np.equal(side, np.floor(side)).all()):
+        raise ValueError("A row key contains a non-integral start or side")
+    keys = pd.DataFrame({
+        "market": r["market"].astype(str),
+        "start": start.astype(np.int64),
+        "t": t,
+        "side": side.astype(np.int64),
+        "kind": r["kind"].astype(str),
+    })
+    if keys.duplicated(list(A_ROW_KEY)).any():
+        raise ValueError("duplicate A row key")
+    order = keys.sort_values(list(A_ROW_KEY), kind="stable").index.to_numpy()
+    return r.iloc[order].reset_index(drop=True)
+
+
+def _canonical_training_data(rowsA):
+    rows = canonical_a_rows(rowsA)
+    columns = FEATURES + [f"pnl_{p}" for p in POLICIES]
+    return rows, _canonical_float64(rows[columns].to_numpy())
+
+
+def _row_key_bytes(rows):
+    return b"".join(
+        (json.dumps([str(row.market), int(row.start), float(row.t).hex(), int(row.side), str(row.kind)],
+                    ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        for row in rows.itertuples(index=False)
+    )
+
+
+def fingerprint(rowsA):
+    """sha256 of the A rows that the freeze depends on (keys, features, labels)."""
+    r, matrix = _canonical_training_data(rowsA)
+    if not len(r):
+        return "empty"
+    h = hashlib.sha256()
+    h.update(_row_key_bytes(r))
+    h.update(matrix.tobytes())
+    return h.hexdigest()
+
+
 def candidates(A, log=print):
     """Every (policy, model, q) on A out of sample: cut, n, mean, se; plus the A oos scores."""
-    X = A[FEATURES].to_numpy(float)
+    A, training_matrix = _canonical_training_data(A)
+    X = training_matrix[:, :len(FEATURES)]
+    label_index = {policy: len(FEATURES) + i for i, policy in enumerate(POLICIES)}
     st = A["start"].to_numpy(float)
     oos = a_oos_mask(st)
     mk = A["market"].astype(str).to_numpy()
     cand, scores = [], {}
     t0 = time.time()
     for pol in POLICIES:
-        y = A[f"pnl_{pol}"].to_numpy(float)
+        y = training_matrix[:, label_index[pol]]
         for model in MODELS:
             sc = walk_forward(X, y, st, model)
             scores[(pol, model)] = sc
@@ -1153,7 +1342,7 @@ def freeze(A, path, log=print, full=True):
         spec = json.loads(path.read_text())
         log(f"{path} exists (made {spec.get('made')}); not re-frozen")
         return spec, False, None
-    A = model_rows(A)
+    A = canonical_a_rows(A)
     cand, scores = candidates(A, log)
     ok = cand[cand["n"] >= MIN_A_TRADES].sort_values(["mean", "policy", "model", "q"], ascending=[False, True, True, False],
                                                      kind="stable")
@@ -1200,14 +1389,15 @@ def evaluate(rows, spec, open_c=True, log=print):
     of sample beside them. Returns (per rule dict, traded rows, meta)."""
     M = model_rows(rows)
     mseg = segment_of(M["start"].to_numpy(float))
-    A = M[mseg == "A"]
-    Xa = A[FEATURES].to_numpy(float)
+    A, training_matrix = _canonical_training_data(M[mseg == "A"])
+    Xa = training_matrix[:, :len(FEATURES)]
+    label_index = {policy: len(FEATURES) + i for i, policy in enumerate(POLICIES)}
     oos = a_oos_mask(A["start"].to_numpy(float))
     days = {"A": n_days(A[oos]), "B": n_days(M[mseg == "B"]), "C": n_days(M[mseg == "C"])}
     res, traded = [], []
     for r in spec.get("rules", []):
         pol, model, cut = r["policy"], r["model"], r["cut"]
-        y = A[f"pnl_{pol}"].to_numpy(float)
+        y = training_matrix[:, label_index[pol]]
         sc_a = walk_forward(Xa, y, A["start"].to_numpy(float), model)
         final = make_model(model).fit(Xa, y)
         out = dict(rule=r, stats={}, units={}, ctl_stats={}, ctl_units={}, strict={}, eff={}, extra={}, by_w={},
@@ -1482,6 +1672,7 @@ def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds
     A = rows[seg == "A"]
     spec, fresh, _ = freeze(A, frozen_path, log, full=not trial)  # A only: nothing of B or C reaches the freeze
     problems = [] if trial else spec_problems(spec, A)
+    model_manifest = export_model_bundle(A, spec, frozen_path) if not trial and not problems else None
     a_now = int(len(model_rows(A)))
     del A
     digest = hashlib.sha256(Path(frozen_path).read_bytes()).hexdigest()
@@ -1494,7 +1685,8 @@ def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds
     open_c = complete_c and not problems and lock_ok
     res, traded, meta = evaluate(rows, spec, open_c, log=log)
     meta.update(frozen_sha256=digest, problems=problems, trial=trial, complete_c=complete_c, lock=lock,
-                lock_ok=lock_ok, a_rows_now=a_now, coverage=coverage, lock_path=lock_path, lock_written=False)
+                lock_ok=lock_ok, a_rows_now=a_now, coverage=coverage, lock_path=lock_path, lock_written=False,
+                model_manifest=model_manifest)
     if lock is None and not trial and any(o["c_open"] for o in res):
         rec = dict(opened=pd.Timestamp.now(tz="UTC").isoformat(), frozen_sha256=digest, c_fingerprint=c_fp,
                    c_days=meta["days"]["C"], results=[dict(rule=o["rule"]["id"], policy=o["rule"]["policy"],

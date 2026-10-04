@@ -138,6 +138,13 @@ jobs:
           else
             echo "Strict artifact validated, but its collector region is not production-equivalent; audit only."
           fi
+          EXPECTED_PROTOCOL_SHA256=2c420a2ecfdc0b86a2a9e4c99db81493b39d396eb84eeeb42c3c4a197cab5b7f \
+          python mix_forward.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --freeze forward/mix-control-freeze.json \
+            --rows-out "$RUNNER_TEMP/mix-control-rows.jsonl" \
+            --append forward/mix-control-observations.jsonl \
+            --verdict-out forward/mix-control-verdict.json \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/mix-control-audit.json"
           test "$(du -sm "$RUNNER_TEMP/paper/bundle-btc/strict" | awk '{print $1}')" -lt 1500
 
       - name: Persist pooled stopping state before nonessential artifact work

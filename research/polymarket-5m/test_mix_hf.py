@@ -439,6 +439,8 @@ def test_freeze_is_written_from_A_alone_before_B_and_C_are_read(tmp_path, monkey
     monkeypatch.setattr(M, "evaluate", evaluate)
     _, spec, res = M.analyze(rows, tmp_path / "a" / "mix-hf.md", log=lambda s: None)
     assert seen[0] == ("freeze", {"A"}) and seen[1] == ("evaluate", ["mix-frozen.json"])
+    assert (tmp_path / "a" / "mix-models.joblib").exists()
+    assert (tmp_path / "a" / "mix-models.json").exists()
     assert len(spec["rules"]) == 3 and all(r["policy"] in ("settle", "tk5") for r in spec["rules"])
     assert res[0]["b_pass"] and res[0]["c_open"] and res[0]["c_pass"]
     # B and C pointing the other way change the B / C verdicts but not one byte of the freeze (bar its time)
@@ -601,6 +603,134 @@ def test_q_cut_comes_from_the_A_out_of_sample_scores(fast_models):
     assert c["cut"] == pytest.approx(np.sort(sc[oos])[::-1][int(np.ceil(0.2 * oos.sum())) - 1])
     assert c["n"] == (sc[oos] >= c["cut"]).sum()
     assert M.top_cut([1, 2, 3, 4, np.nan], 0.4) == 3.0
+
+
+def test_A_fingerprint_changes_below_the_old_rounding_precision():
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    A.loc[0, "jump_bp"] = np.float32(0.125)
+    changed = A.copy()
+    changed.loc[0, "jump_bp"] = np.nextafter(np.float32(0.125), np.float32(np.inf))
+
+    assert np.round(A.loc[0, "jump_bp"], 5) == np.round(changed.loc[0, "jump_bp"], 5)
+    assert M.fingerprint(A) != M.fingerprint(changed)
+
+
+def test_exported_bundle_is_identical_when_A_rows_are_reordered(tmp_path, fast_models):
+    import joblib
+
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    shuffled = A.sample(frac=1, random_state=7).reset_index(drop=True)
+
+    ordered_model = tmp_path / "ordered" / "mix-models.joblib"
+    ordered_manifest = tmp_path / "ordered" / "mix-models.json"
+    shuffled_model = tmp_path / "shuffled" / "mix-models.joblib"
+    shuffled_manifest = tmp_path / "shuffled" / "mix-models.json"
+    first = M.export_model_bundle(A, spec, frozen, ordered_model, ordered_manifest)
+    second = M.export_model_bundle(shuffled, spec, frozen, shuffled_model, shuffled_manifest)
+
+    assert M.fingerprint(A) == M.fingerprint(shuffled)
+    assert first["model_sha256"] == second["model_sha256"]
+    ordered = joblib.load(ordered_model)
+    reordered = joblib.load(shuffled_model)
+    X = M.model_rows(A)[M.FEATURES].to_numpy(float)
+    for rule in spec["rules"]:
+        np.testing.assert_array_equal(ordered["models"][rule["id"]].predict(X),
+                                      reordered["models"][rule["id"]].predict(X))
+
+
+def test_model_manifest_hashes_training_predictions_and_selected_row_keys(tmp_path, fast_models):
+    import hashlib
+    import joblib
+
+    def float64_bytes(values):
+        array = np.array(values, dtype="<f8", order="C", copy=True)
+        array.view("<u8")[np.isnan(array)] = np.uint64(0x7FF8000000000000)
+        return array.tobytes()
+
+    def row_keys_sha256(frame):
+        encoded = b"".join(
+            (json.dumps([str(row.market), int(row.start), float(row.t).hex(), int(row.side), str(row.kind)],
+                        ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            for row in frame.itertuples(index=False)
+        )
+        return hashlib.sha256(encoded).hexdigest()
+
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    manifest = M.export_model_bundle(A, spec, frozen)
+    model_path, _ = M.model_bundle_paths(frozen)
+    payload = joblib.load(model_path)
+
+    train = A[A["kind"].astype(str) != "random"].copy()
+    train = train.sort_values(["market", "start", "t", "side", "kind"], kind="stable").reset_index(drop=True)
+    columns = M.FEATURES + [f"pnl_{policy}" for policy in M.POLICIES]
+    matrix = np.frombuffer(float64_bytes(train[columns].to_numpy()), dtype="<f8").reshape(len(train), len(columns))
+    assert manifest["training_matrix_sha256"] == hashlib.sha256(matrix.tobytes()).hexdigest()
+    assert payload["training_matrix_sha256"] == manifest["training_matrix_sha256"]
+
+    for rule in spec["rules"]:
+        prediction = payload["models"][rule["id"]].predict(matrix[:, :len(M.FEATURES)])
+        expected_prediction_sha = hashlib.sha256(float64_bytes(prediction)).hexdigest()
+        selected = np.isfinite(prediction) & (prediction >= rule["cut"])
+        assert manifest["a_prediction_sha256"][rule["id"]] == expected_prediction_sha
+        assert manifest["selected_row_keys_sha256"][rule["id"]] == row_keys_sha256(train.loc[selected])
+    assert payload["a_prediction_sha256"] == manifest["a_prediction_sha256"]
+    assert payload["selected_row_keys_sha256"] == manifest["selected_row_keys_sha256"]
+
+
+def test_exported_model_bundle_is_A_only_immutable_and_matches_final_models(tmp_path, fast_models):
+    import joblib
+
+    rows = synth_rows()
+    is_a = M.segment_of(rows["start"].to_numpy(float)) == "A"
+    A = rows[is_a].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    model_path, manifest_path = M.model_bundle_paths(frozen)
+
+    manifest = M.export_model_bundle(A, spec, frozen)
+    assert model_path.exists() and manifest_path.exists()
+    assert manifest["format"] == "polymarket-mix-models-v1"
+    assert manifest["frozen_sha256"] == M._sha256(frozen)
+    assert manifest["a_fingerprint"] == spec["a_fingerprint"]
+    assert manifest["features"] == M.FEATURES
+    assert {rule["id"] for rule in manifest["rules"]} == {rule["id"] for rule in spec["rules"]}
+
+    payload = joblib.load(model_path)
+    train = M.canonical_a_rows(A)
+    columns = M.FEATURES + [f"pnl_{policy}" for policy in M.POLICIES]
+    matrix = np.array(train[columns].to_numpy(), dtype="<f8", order="C", copy=True)
+    matrix.view("<u8")[np.isnan(matrix)] = np.uint64(0x7FF8000000000000)
+    X = matrix[:, :len(M.FEATURES)]
+    label_index = {policy: len(M.FEATURES) + i for i, policy in enumerate(M.POLICIES)}
+    for rule in spec["rules"]:
+        expected = M.make_model(rule["model"]).fit(X, matrix[:, label_index[rule["policy"]]])
+        np.testing.assert_array_equal(payload["models"][rule["id"]].predict(X), expected.predict(X))
+
+    before = (model_path.read_bytes(), manifest_path.read_bytes())
+    assert M.export_model_bundle(A, spec, frozen) == manifest
+    assert (model_path.read_bytes(), manifest_path.read_bytes()) == before
+
+    with pytest.raises(ValueError, match="only A rows"):
+        M.export_model_bundle(rows, spec, frozen, model_path=tmp_path / "bad.joblib",
+                              manifest_path=tmp_path / "bad.json")
+
+
+def test_exported_model_bundle_rejects_a_fingerprint_drift(tmp_path, fast_models):
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    changed = A.copy()
+    changed.loc[0, "jump_bp"] += np.float32(0.1)
+    with pytest.raises(ValueError, match="A fingerprint"):
+        M.export_model_bundle(changed, spec, frozen)
 
 
 def test_per_day_units():
