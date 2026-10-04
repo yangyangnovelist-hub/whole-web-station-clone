@@ -1,4 +1,4 @@
 # Changing this file runs .github/workflows/polymarket-cross3.yml: "cmd:" is a standalone script
 # (roundtrip_hf.py, mix_hf.py or regime_hf.py) and its arguments; --workdir is added.
-requested: 2026-10-04 15:20 ROUNDTRIP.md independent check: the frozen kacho variants once on the May-Aug 100 ms books (0.5 s latency both legs)
-cmd: roundtrip_hf.py --frozen real/roundtrip-frozen.json --out real/roundtrip-hf.md
+requested: 2026-10-04 16:30 strict-hygiene re-run of the 22 variants that passed roundtrip-hf.md (book changed within 1 s, Binance print received within 1 s)
+cmd: roundtrip_hf.py --frozen real/roundtrip-passed-hf.json --out real/roundtrip-hf-strict.md --fill-change-ms 1000 --max-recv-delay-ms 1000

@@ -254,6 +254,9 @@ def read_bid_depth(path, market_ids, band=DEPTH_BAND):
 # Per-second grids from the 100 ms data
 
 
+MAX_RECV_DELAY_MS = None      # strict check: drop seconds whose latest print arrived > this late
+
+
 def binance_grid(prints, t_lo, t_hi, max_age_ms=PRICE_MAX_AGE_MS, ref_age_ms=REF_MAX_AGE_MS):
     """Log price known at each second boundary t_lo..t_hi (seconds; the price of the print with the
     latest trade time among those received <= the boundary), NaN when that trade is older than
@@ -277,6 +280,9 @@ def binance_grid(prints, t_lo, t_hi, max_age_ms=PRICE_MAX_AGE_MS, ref_age_ms=REF
     ii = np.maximum(i, 0)
     age = np.where(ok, q - (best[ii] if len(tt) else 0), np.inf)
     val = np.where(ok, lp[arg[ii]] if len(tt) else np.nan, np.nan)
+    if MAX_RECV_DELAY_MS is not None and len(tt):
+        dly = np.where(ok, recv[arg[ii]] - tt[arg[ii]], np.inf)   # receipt delay of the print used
+        ok = ok & (dly <= MAX_RECV_DELAY_MS)
     lpx = np.where(ok & (age <= max_age_ms), val, np.nan)
     lpr = np.where(ok & (age <= ref_age_ms), val, np.nan)
     r = np.r_[np.nan, np.diff(lpx)]
@@ -911,7 +917,16 @@ def main(argv=None):
     ap.add_argument("--preds", default=None, help="family-6 predictions (factors_study.pkl / parquet / csv)")
     ap.add_argument("--dataset", default=None)
     ap.add_argument("--local", nargs="*", default=None, help="daily archives already on disk (not downloaded or deleted)")
+    ap.add_argument("--fill-change-ms", type=int, default=None,
+                    help="strict check: the fill snapshot's top of book changed at most this long ago (default 5000)")
+    ap.add_argument("--max-recv-delay-ms", type=int, default=None,
+                    help="strict check: ignore Binance seconds whose latest print reached the recorder later than this")
     a = ap.parse_args(argv)
+    global FILL_CHANGE_MAX_MS, MAX_RECV_DELAY_MS
+    if a.fill_change_ms is not None:
+        FILL_CHANGE_MAX_MS = a.fill_change_ms
+    if a.max_recv_delay_ms is not None:
+        MAX_RECV_DELAY_MS = a.max_recv_delay_ms
     workdir = Path(a.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     if a.dataset and a.dataset != cross.DS:
