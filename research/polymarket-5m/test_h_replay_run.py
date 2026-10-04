@@ -20,6 +20,19 @@ def test_signal_freeze_loads_deployed_bookticker_parameters():
     assert config.sigma_min_observations == 300
 
 
+def test_fair_price_scales_endpoint_move_by_unknown_twap_fraction():
+    t_rel = 270.0  # 30 of the 60 closing-TWAP seconds remain unknown.
+    sigma = 0.01
+    move = 0.01
+    scale = run.twap_std_factor(t_rel) * sigma
+
+    fair = run.fair_price(0.5, move, sigma, t_rel, 1)
+
+    assert run.twap_move_factor(t_rel) == pytest.approx(0.5)
+    assert fair == pytest.approx(run._NORMAL.cdf(move * 0.5 / scale))
+    assert fair < run._NORMAL.cdf(move / scale)
+
+
 def test_bookticker_clock_is_receipt_minus_106ms_and_uses_trade_sigma():
     config = run.SignalConfig(
         book_lag_ms=106.0,

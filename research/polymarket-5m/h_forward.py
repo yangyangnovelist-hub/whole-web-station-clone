@@ -18,6 +18,7 @@ STORE = Path(__file__).with_name("forward") / "current-h-observations.jsonl"
 REPORT = Path(__file__).with_name("forward") / "current-h.md"
 PIN = Path(__file__).with_name("forward") / "current-h-verdict.json"
 _FREEZE = replay.load_freeze()
+STRATEGY_ID = str(_FREEZE["strategy_id"])
 PRIMARY_DELAY_MS = float(_FREEZE["timing"].get("primary_evaluation_ms", 500.0))
 FAMILY_TESTS = int(_FREEZE.get("statistics", {}).get("family_tests", 100))
 MIN_FILLS = 1_000
@@ -59,6 +60,10 @@ def add(new_rows: str | Path, store: str | Path = STORE) -> list[dict[str, Any]]
     chosen_run: dict[tuple[str, float], str] = {}
     pooled: dict[tuple[Any, ...], dict[str, Any]] = {}
     for row in [*_read_jsonl(destination), *_read_jsonl(new_rows)]:
+        if row.get("strategy_id") != STRATEGY_ID:
+            raise ValueError(
+                f"observation strategy_id {row.get('strategy_id')!r} does not match {STRATEGY_ID!r}"
+            )
         run_id = str(row["observation_run_id"])
         market_key = market_observation_key(row)
         if chosen_run.setdefault(market_key, run_id) != run_id:
@@ -128,13 +133,13 @@ def pin_verdict(rows: list[dict[str, Any]], path: str | Path = PIN) -> dict[str,
     destination = Path(path)
     if destination.exists():
         payload = json.loads(destination.read_text(encoding="utf-8"))
-        if payload.get("strategy_id") != replay.load_freeze()["strategy_id"]:
+        if payload.get("strategy_id") != STRATEGY_ID:
             raise ValueError("pinned current-H verdict belongs to another strategy")
         return payload
     result = verdict(rows)
     if result["status"] == "collecting":
         return result
-    payload = {"strategy_id": replay.load_freeze()["strategy_id"], "verdict": result}
+    payload = {"strategy_id": STRATEGY_ID, "verdict": result}
     destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return payload
 

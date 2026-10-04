@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import h_forward as hf
 
 
@@ -9,7 +11,7 @@ def row(market, signal, day, *, pnl=0.5, cost=0.4, evaluation=None, run="run-1")
             "direction": "Up", "signal_source": "futures_book_ticker", "filled": True,
             "winner": "Up", "won": True, "day": day, "pnl": pnl, "pnl_per_share": pnl / 5,
             "filled_shares": 5.0, "all_in_cost": cost, "sent": True, "reason": "filled",
-            "observation_run_id": run}
+            "observation_run_id": run, "strategy_id": hf.STRATEGY_ID}
 
 
 def write(path, rows):
@@ -42,6 +44,16 @@ def test_add_keeps_all_attempts_from_first_market_recording_only(tmp_path):
     assert [(value["market_id"], value["signal_ms"], value["observation_run_id"])
             for value in pooled] == [("m", 1, "run-1"), ("m", 2, "run-1"),
                                       ("n", 4, "run-2")]
+
+
+def test_add_rejects_observations_from_an_invalidated_strategy(tmp_path):
+    store, fresh = tmp_path / "store.jsonl", tmp_path / "fresh.jsonl"
+    stale = row("m", 1, "2026-10-01")
+    stale["strategy_id"] = "CURRENT-H-TIMESTAMPED-FIRST-V2"
+    write(fresh, [stale])
+
+    with pytest.raises(ValueError, match="strategy_id"):
+        hf.add(fresh, store)
 
 
 def test_verdict_waits_for_both_fill_and_day_thresholds(monkeypatch):

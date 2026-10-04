@@ -62,11 +62,17 @@ def twap_std_factor(t: float, window: int = WINDOW_S, twap: int = TWAP_S) -> flo
     return math.sqrt(variance) / twap
 
 
+def twap_move_factor(t: float, window: int = WINDOW_S, twap: int = TWAP_S) -> float:
+    """Fraction of the closing TWAP that a new endpoint price can still affect."""
+    return min(max(window - t, 0.0), float(twap)) / twap
+
+
 def fair_price(prior: float, move: float, sigma: float, t_rel: float, direction: int) -> float:
     scale = twap_std_factor(t_rel) * sigma
     if not (math.isfinite(scale) and scale > 0 and math.isfinite(prior) and math.isfinite(move)):
         return math.nan
-    up = _NORMAL.cdf(_NORMAL.inv_cdf(min(max(prior, 0.005), 0.995)) + move / scale)
+    effective_move = move * twap_move_factor(t_rel)
+    up = _NORMAL.cdf(_NORMAL.inv_cdf(min(max(prior, 0.005), 0.995)) + effective_move / scale)
     return up if direction > 0 else 1.0 - up
 
 
@@ -719,6 +725,7 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
     observation_run_id = str(dataset.get("manifest", {}).get("run_id") or archive_dir.name)
     for row in rows:
         row["observation_run_id"] = observation_run_id
+        row["strategy_id"] = str(frozen["strategy_id"])
     if rows_out is not None:
         destination = Path(rows_out)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -732,8 +739,10 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
         dataset["paper_gate_eligible"] = bool(dataset["paper_gate_eligible"] and not pending_outcomes)
     result["dataset"] = dataset
     result["protocol"] = {
+        "strategy_id": frozen["strategy_id"],
         "scope": frozen["semantics"]["scope"],
         "fill_qualification": frozen["semantics"]["fill_qualification"],
+        "endpoint_move_sensitivity": frozen["semantics"]["endpoint_move_sensitivity"],
         "candidate_sources": frozen["semantics"]["candidate_sources"],
         "active_trigger_sources": sorted(DEFAULT_TRIGGER_SOURCES if trigger_sources is None
                                           else trigger_sources),

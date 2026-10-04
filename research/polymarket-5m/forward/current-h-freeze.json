@@ -1,5 +1,5 @@
 {
-  "strategy_id": "CURRENT-H-TIMESTAMPED-FIRST-V2",
+  "strategy_id": "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3",
   "paper_only": true,
   "semantics": {
     "event_order": "receive_ms_stable",
@@ -16,6 +16,7 @@
     "scope": "current_timestamped_first_live_path_with_rate_limit_and_no_reentry_after_fill",
     "disconnect": "clear_book_and_require_fresh_full_snapshot",
     "future_health_check": false,
+    "endpoint_move_sensitivity": "unknown_closing_twap_samples/60",
     "emit_no_fill": true
   },
   "timing": {
