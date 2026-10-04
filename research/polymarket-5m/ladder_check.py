@@ -344,6 +344,7 @@ def analyze(books, markets, spot, closes=None, trades=None):
 def reaction_stats(r):
     """Pairs, share that moved a tick within HORIZON, first-move median / 90% (s), response share at
     each h in HS (sum of the move by h over the sum of the 5 s move)."""
+    r = r[np.isfinite(r["mid0"])] if len(r) else r  # a token with both sides quoted at the jump
     out = {"n": len(r)}
     if not len(r):
         return out
@@ -408,14 +409,13 @@ def barrier_table(b, last=20):
     cols = " | ".join(f"{o:+g}" for o in BARRIER_OFFS)
     L = [f"| 市场 | 触及（UTC） | 币安价 | Yes 卖一 @ {cols} s | 卖一 < {CAP:.2f} 持续 | < {CAP:.2f} 挂单（份） | 全吃可得 $ | 5 s 内 < {CAP:.2f} 成交（笔 / 份） |",
          "|---|---|---:|---|---:|---:|---:|---:|"]
-    for r in b.sort_values("t").tail(last).itertuples(index=False):
-        d = r._asdict()
+    for d in b.sort_values("t").tail(last).to_dict("records"):
         path = " / ".join(f"{d[f'ask{o:+g}']:.3f}" if np.isfinite(d[f"ask{o:+g}"]) else "–" for o in BARRIER_OFFS)
-        arrow = "↑" if r.type == "hit_up" else "↓"
-        when = pd.Timestamp(r.t, unit="s", tz="UTC").strftime("%m-%d %H:%M:%S.%f")[:-3]
-        L.append(f"| {arrow} {r.level:,.0f} | {when} | {r.price:,.2f} | {path} | {_secs(r.below)} | "
-                 + (f"{r.depth:,.0f}" if np.isfinite(r.depth) else "–") + " | "
-                 + (f"{r.edge:,.0f}" if np.isfinite(r.edge) else "–") + f" | {r.trades} / {r.traded:,.0f} |")
+        arrow = "↑" if d["type"] == "hit_up" else "↓"
+        when = pd.Timestamp(d["t"], unit="s", tz="UTC").strftime("%m-%d %H:%M:%S.%f")[:-3]
+        L.append(f"| {arrow} {d['level']:,.0f} | {when} | {d['price']:,.2f} | {path} | {_secs(d['below'])} | "
+                 + (f"{d['depth']:,.0f}" if np.isfinite(d["depth"]) else "–") + " | "
+                 + (f"{d['edge']:,.0f}" if np.isfinite(d["edge"]) else "–") + f" | {d['trades']} / {d['traded']:,.0f} |")
     return L
 
 
@@ -438,6 +438,8 @@ def report(results, names, notes=()):
     when = (f"{pd.Timestamp(min(s[0] for s in spans), unit='s', tz='UTC'):%Y-%m-%d %H:%M} → "
             f"{pd.Timestamp(max(s[1] for s in spans), unit='s', tz='UTC'):%Y-%m-%d %H:%M} UTC") if spans else "–"
     nj = sum(len(r["jumps"]) for r in results)
+    sig = pd.concat([r["jumps"]["sigma"] for r in results], ignore_index=True).dropna() if nj else pd.Series(dtype=float)
+    vol = f"{100 * sig.median() * np.sqrt(365 * 86400):.0f}%" if len(sig) else "–"
     nc = sum(r["clean"] for r in results)
     by_type = markets["type"].value_counts() if len(markets) else pd.Series(dtype=int)
     mk = "，".join(f"{t} {by_type.get(t, 0)}" for t in ld.TYPES if by_type.get(t, 0))
@@ -445,13 +447,13 @@ def report(results, names, notes=()):
          "只用市场数据，不下单。市场：每日 above / 价格区间 / 触及价 / 日涨跌（按币安 BTC/USDT 1 分钟 K 线结算）和 4 小时涨跌，"
          "都没有 150 ms 吃单延迟（/clob-markets 没有 itode）。", "",
          f"**样本**：录制段 {len(results)} 个，共 {hours:.1f} 小时（{when}）；市场 {len(markets)} 个（{mk or '–'}）；"
-         f"币安 2σ 急动 {nj:,} 个（数据干净的 {nc:,} 个）；急动 × 市场对（|Δ公允| ≥ {100 * REACT_MIN:.1f}¢）{len(pairs):,} 个，"
+         f"币安 2σ 急动 {nj:,} 个（数据干净的 {nc:,} 个；急动时模型 σ 年化中位 {vol}）；急动 × 市场对（|Δ公允| ≥ {100 * REACT_MIN:.1f}¢）{len(pairs):,} 个，"
          f"另有 {sum(small.values()):,} 对 < {100 * REACT_MIN:.1f}¢ 只计数；触及事件 {len(barriers)} 个。"
          "样本小的格子只作参考。", ""]
     L += ["## (a) 反应：被看好代币的中间价多快朝模型方向动", "",
           f"首次变动 = 中间价第一次朝模型方向动 ≥ 1 跳（tick）的时间（{HORIZON:.0f} 秒内动了的那些，中位 / 90%）；"
           f"+h = 到 h 时已走完的 {HORIZON:.0f} 秒总变动的比例（对所有对求和后相除）。时间都是交易所时间戳。", "",
-          "| 类型（|Δ公允| ≥ 1¢） | 对数 | 5 s 内动 1 跳 | 首次变动 ms | " + " | ".join(f"+{1000 * h:.0f} ms" for h in HS) + " |",
+          "| 类型（\\|Δ公允\\| ≥ 1¢） | 对数 | 5 s 内动 1 跳 | 首次变动 ms | " + " | ".join(f"+{1000 * h:.0f} ms" for h in HS) + " |",
           "|---|---:|---:|---:|" + "---:|" * len(HS)]
     big = pairs[pairs["change"] >= 0.01] if len(pairs) else pairs
     for t in ld.TYPES:
@@ -460,7 +462,9 @@ def report(results, names, notes=()):
             L.append(_reaction_line(TYPE_NAMES[t], reaction_stats(q)))
     if len(big):
         L.append(_reaction_line("合计", reaction_stats(big)))
-    L += ["", "| |Δ公允| | 对数 | 5 s 内动 1 跳 | 首次变动 ms | " + " | ".join(f"+{1000 * h:.0f} ms" for h in HS) + " |",
+    else:
+        L.append("| （还没有） | 0 |" + " – |" * (2 + len(HS)))
+    L += ["", "| \\|Δ公允\\| | 对数 | 5 s 内动 1 跳 | 首次变动 ms | " + " | ".join(f"+{1000 * h:.0f} ms" for h in HS) + " |",
           "|---|---:|---:|---:|" + "---:|" * len(HS)]
     L.append(f"| < {100 * REACT_MIN:.1f}¢ | {sum(small.values()):,} | 不追踪 |" + " |" * (1 + len(HS)))
     for lo, hi in BUCKETS:

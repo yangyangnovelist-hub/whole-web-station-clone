@@ -1,0 +1,170 @@
+name: polymarket-ladder
+
+# Records the Polymarket BTC markets that have no taker delay and settle on Binance BTC/USDT 1m
+# candles (daily above / price-range / hit / up-or-down ladders, plus the 4-hour up/down), with
+# Binance BTCUSDT aggregated trades, for `hours` from ci/ladder.json on a GitHub runner
+# (ladder.py record: market data only, never places orders, uses no key), keeps the recording as
+# artifacts, dispatches the next run while today <= `until`, then rebuilds every ladder recording
+# so far and commits research/polymarket-5m/real/ladder-check.md (ladder_check.py). Set
+# "enabled": false in ci/ladder.json to stop the chain sooner; changing ci/ladder.request starts a
+# run by hand.
+#
+# Two jobs, so recordings follow each other without waiting for the report: `record` holds its
+# own concurrency group and dispatches the next run as soon as its artifacts are up; `report`
+# runs alongside the next recording. Artifacts per run: ladder-<run id> (the built tables and the
+# small raw files: markets, errors, Binance trades) and ladder-raw-<run id> (the raw CLOB
+# messages, read only if a run's own build failed).
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/ladder.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    concurrency:
+      group: polymarket-ladder-record
+      cancel-in-progress: false
+    outputs:
+      enabled: ${{ steps.cfg.outputs.enabled }}
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Read ci/ladder.json
+        id: cfg
+        run: |
+          python - >> "$GITHUB_OUTPUT" <<'PY'
+          import datetime, json
+          c = json.load(open("ci/ladder.json"))
+          on = c.get("enabled", True) and datetime.date.today().isoformat() <= c.get("until", "2000-01-01")
+          print(f"enabled={'true' if on else 'false'}")
+          print(f"hours={float(c.get('hours', 5.5))}")
+          PY
+
+      - name: Discover the undelayed markets
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        run: python ladder.py discover --out "$RUNNER_TEMP/ladder/markets-start.json"
+
+      - name: Record (market data only, no orders)
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          secs=$(python -c "print(int(float('${{ steps.cfg.outputs.hours }}') * 3600) + 900)")
+          timeout "$secs" python ladder.py record --out "$RUNNER_TEMP/ladder" --hours ${{ steps.cfg.outputs.hours }} || true
+          ls -la "$RUNNER_TEMP"/ladder/raw/*/ && du -sh "$RUNNER_TEMP/ladder/raw" && df -h "$RUNNER_TEMP" | tail -1
+          zcat "$RUNNER_TEMP"/ladder/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
+
+      - name: Build the tables
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        run: python ladder.py build --src "$RUNNER_TEMP/ladder" --out "$RUNNER_TEMP/ladder/built"
+
+      - name: Pack the recording
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          cd "$RUNNER_TEMP/ladder"
+          tar czf "$RUNNER_TEMP/ladder.tgz" built markets*.json raw/*/markets.jsonl* raw/*/errors.jsonl* \
+            raw/*/binance.jsonl* 2>/dev/null || true
+          tar czf "$RUNNER_TEMP/ladder-raw.tgz" raw/*/clob-*.jsonl* 2>/dev/null || true
+          ls -la "$RUNNER_TEMP"/ladder*.tgz
+      - uses: actions/upload-artifact@v4
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          name: ladder-${{ github.run_id }}
+          path: ${{ runner.temp }}/ladder.tgz
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        with:
+          name: ladder-raw-${{ github.run_id }}
+          path: ${{ runner.temp }}/ladder-raw.tgz
+          retention-days: 30
+
+      - name: Start the next run
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # a run started after this one (by hand) and not finished continues the chain instead
+          me=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}" --jq .created_at || true)
+          later=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-ladder.yml/runs?per_page=30" \
+                  --jq "[.workflow_runs[] | select(.status != \"completed\" and .created_at > \"$me\")] | length" || echo 0)
+          if [ -n "$me" ] && [ "${later:-0}" -gt 0 ]; then echo "a later run is already queued"; exit 0; fi
+          gh workflow run polymarket-ladder.yml --ref "${{ github.ref_name }}"
+
+  report:
+    needs: record
+    if: always() && needs.record.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: polymarket-ladder-report
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Build and check every ladder recording so far
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-ladder.yml/runs?per_page=100" \
+                --jq '.workflow_runs[].id')
+          for id in $ids; do
+            gh run download "$id" -n "ladder-$id" -D "$rec/$id" 2>/dev/null || continue
+            tar xzf "$rec/$id/ladder.tgz" -C "$rec/$id" 2>/dev/null || true
+            rm -f "$rec/$id/ladder.tgz"
+            if [ ! -s "$rec/$id/built/books.csv.gz" ]; then
+              # the run's own build failed: rebuild from its raw CLOB messages
+              gh run download "$id" -n "ladder-raw-$id" -D "$rec/$id" 2>/dev/null \
+                && tar xzf "$rec/$id/ladder-raw.tgz" -C "$rec/$id" 2>/dev/null || true
+              rm -f "$rec/$id/ladder-raw.tgz"
+              python ladder.py build --src "$rec/$id" --out "$rec/$id/built" || true
+            fi
+            rm -rf "$rec/$id/raw"
+          done
+          ls -d "$rec"/*/built 2>/dev/null | wc -l
+          python ladder_check.py "$rec" --out real/ladder-check.md
+
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -e real/ladder-check.md ] && git add real/ladder-check.md
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: ladder check after run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
