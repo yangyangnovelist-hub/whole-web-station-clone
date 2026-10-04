@@ -24,8 +24,9 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
 3. Features at t, only data received at or before t (side-relative: "s" is the row's side):
    jump_bp = s x d (bp), jump_abs_bp = |d|, jump_z = s x d / sigma, dir = sign(s x d), is_jump,
    where d = log move of the last Binance print received by t against its 1-5 s reference (for a
-   jump row the trigger itself) and sigma the per-second vol of the 600 s before (jump2s.Seconds,
-   gaps up to 20 s forward filled, as jump2s_hf); h_edge = H fair value - the side's ask at t, where
+   jump row the trigger itself) and sigma the per-second vol of the 600 s before (jump2s.Seconds
+   on the recorder's receipt clock, so only prints received before t; gaps up to 20 s forward
+   filled, as jump2s_hf); h_edge = H fair value - the side's ask at t, where
    H fair (fill_rate.sends) = Phi(Phi^-1(Up mid 2 s earlier, clipped 0.005..0.995) + Binance log
    move over those 2 s / (sigma x f)) for Up, 1 - that for Down, f = sqrt(seconds left) for
    point-price markets, binary.twap_std_factor for the TWAP ones (rule window by
@@ -34,12 +35,13 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
    side's best; spread = ask - bid; price = the side's ask; fee = 0.07 p (1 - p); tau = seconds
    left; trend_agree = sign(d) x sign(ret4h) (is the move with the 4 h trend), trend_side =
    sign(s x ret4h); vr60 (jump2s.trend_features on Binance 1 m klines from data.binance.vision,
-   minutes closed by the exchange time of the last print received by t); f_ridge5, f_hgb5,
+   minutes closed at least 1 s before the exchange time of the last print received by t: prints
+   can arrive out of trade order by up to 0.64 s, 06-02); f_ridge5, f_hgb5,
    f_ridge15, f_hgb15 = s x (P(up) - 0.5) of the factor study's walk-forward out-of-sample
    predictions for the window starting at the market's open (FACTORS.md; known at the open);
    dvol_rv = DVOL / 100 (last hourly candle closed by t, known at its hour's end) - rv30
-   (annualised std of the 1 s log returns of the 1,800 s before the second before the last print,
-   at least 900 present), as factors.dvol_minus_rv30.
+   (annualised std of the 1 s log returns of the 1,800 s ending with the second before t on the
+   receipt-clock grid, at least 900 present), as factors.dvol_minus_rv30.
 4. Execution labels, per share, for every row:
    - Entry: decided at t, filled at te = t + 0.5 s at the side's best ask in the last snapshot at
      or before te (<= 1 s old), which must be active, not halted, not crossed on that token
@@ -51,9 +53,9 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
      no such bid, held to settlement.
    - "mk{x}_{h}" (x = 1, 2, 3, 5 c; h as above): a resting sell at L = min(entry price + x, 0.99),
      no fee. It counts as filled at the first moment in (tl, min(te + h, end)] when a Polymarket
-     print on that token is a taker BUY at a price >= L, or a snapshot (active, not crossed) shows
-     the token's best bid >= L; tl = te + 0.5 s is when the order is live (see below). Not filled
-     by te + h: cancelled, and sold as in tk{h} (else settlement).
+     print on that token is a taker BUY at a price >= L, or a snapshot (active, not crossed, fresh)
+     shows the token's best bid >= L; tl = te + 0.5 s is when the order is live (see below). Not
+     filled by te + h: cancelled, and sold as in tk{h} (else settlement).
    - "settle": held to the official result.
    pnl = proceeds - entry price - every taker fee. Each row also keeps, per policy, the holding time
    (entry fill to exit fill, or to the market's end when held) and the 20-share size (see units).
@@ -78,8 +80,13 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
 Where MIX.md and the task are silent, the conservative choice made here:
 - Resting sell latency: MIX.md says the sell is posted immediately after the buy fills; it is
   counted live 0.5 s after the entry fill (the same decision-to-match latency as every order
-  here), not at the fill itself. If the book at that moment already shows the token's best bid >=
-  L, the order would cross: it is filled at that bid as a taker (fee paid), not as a maker.
+  here), not at the fill itself (prints and bids in (te, tl] do not count). If the book at tl
+  already shows the token's best bid >= L (active, not crossed, fresh, >= 5 shares, tl before the
+  end), the order would cross: it is sold at that bid as a taker (fee paid, min(20, bid size)
+  shares), not as a maker. A bid >= L that is stale or thinner at tl does not cross; the order rests
+  and the next qualifying event fills it at L.
+- A bid fills a resting sell only in a fresh snapshot (the market's top of book changed <= 1 s
+  before): a bid first reaching L is a change, so this only drops repeats of an old state.
 - A print counts for a maker fill only when its taker side is "buy" on the bought token (a sell of
   the other token, a merge, is not counted), price >= L, receipt time after the order is live.
 - Crossed snapshots (bid >= ask on the token) are never used for an entry, an exit or a maker
@@ -101,11 +108,17 @@ Where MIX.md and the task are silent, the conservative choice made here:
 - A frozen file that already exists is not overwritten: it is used as is, and C is evaluated only
   when the A rows have the same fingerprint as when it was written (delete it to re-freeze, and say
   so). A run cut short by the time budget (BUDGET_S) analyses what it read, but evaluates C only
-  if every archive of C was read.
+  if every archive of C was read (none skipped, none failed after FETCH_TRIES downloads).
+- Capital: per day, the time-weighted mean of the entry cost held, and the median and the maximum
+  over the segment's days of the day's peak of concurrent entry cost (a day without a trade = 0).
 - Factor predictions: the factor study's own walk-forward out-of-sample predictions (A + B of
   FACTORS.md, up to 08-15); from 08-16 the same walk-forward continued (each 7-day block of the
   factor study's C fit on rows whose target ended before the block, its ridge alpha and HGB
-  settings), as factors.lockbox does for its frozen model. Missing -> NaN.
+  settings), as factors.lockbox does for its frozen model. Missing -> NaN. The factor study chose
+  its ridge alpha inside its own A (03-24 .. 06-30), which overlaps this A; B and C are after it.
+- Binance prints arrive slightly out of trade order (06-02: 0.25% of prints after a print traded
+  later, by at most 0.64 s): sigma and rv30 use a receipt-clock grid and the klines a 1 s guard (see
+  3); the jump's own reference is >= 1 s older by trade time (as cross.stale_trades / jump2s).
 """
 from __future__ import annotations
 
@@ -143,6 +156,7 @@ BOOK_MAX_AGE_S = 1.0
 PRICE_MAX_AGE_S = 5.0
 H_ANCHOR_S = 2.0
 RV_N, RV_MIN = 1800, 900
+KLINE_GUARD_S = 1.0         # a 1 m kline counts once it closed >= 1 s before the last print received (exchange time)
 GAP_FILL_S = hf.GAP_FILL_S
 CARRY_S = 1800
 SEC_YEAR = 365 * 86400
@@ -284,7 +298,10 @@ class Spot:
         self.d = np.where(ok, self.lp - self.lp[jj], np.nan) if len(self.ts) else np.zeros(0)
         self.order = np.argsort(self.rv, kind="stable")  # receipt order -> trade-sorted index
         self.rv_o = self.rv[self.order]
-        self.sp = j2.Seconds(self.ts, px, ffill=GAP_FILL_S)
+        # per-second grid on the RECEIPT clock: second s holds the last print received in [s, s + 1), so
+        # sigma / rv30 at floor(t) - 1 only use prints received before t (0.25% of the 06-02 prints
+        # arrived after a print traded up to 0.64 s later; a trade-time grid could use one of them)
+        self.sp = j2.Seconds(self.rv, px, ffill=GAP_FILL_S)
         if len(self.sp.lp):
             r = pd.Series(self.sp.lp).diff()
             self.rv30 = (r.rolling(RV_N, min_periods=RV_MIN).std() * math.sqrt(SEC_YEAR)).to_numpy(float)
@@ -470,15 +487,13 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
     t = p["t"].to_numpy(float)
     d = spot.at(spot.d, i)
     t_known = spot.at(spot.ts, spot.last(t))  # exchange time of the last print received by t
-    known = np.isfinite(t_known)
-    tk_safe = np.where(known, t_known, 0.0)
-    sigma = np.where(known, spot.sp.sigma(tk_safe), np.nan)
-    sec = np.floor(tk_safe).astype(np.int64) - 1
-    rv30 = np.where(known, spot.sp._at(spot.rv30, sec), np.nan) if len(spot.rv30) else np.full(len(p), np.nan)
+    sigma = spot.sp.sigma(t)  # receipt-clock grid: the seconds before floor(t)
+    sec = np.floor(t).astype(np.int64) - 1
+    rv30 = spot.sp._at(spot.rv30, sec) if len(spot.rv30) else np.full(len(p), np.nan)
     lp_now = spot.at(spot.lp, spot.last(t, PRICE_MAX_AGE_S))
     lp_ago = spot.at(spot.lp, spot.last(t - H_ANCHOR_S, PRICE_MAX_AGE_S))
     if closes is not None and len(closes):
-        ret4h, vr60 = j2.trend_features(closes, t_known)
+        ret4h, vr60 = j2.trend_features(closes, t_known - KLINE_GUARD_S)
     else:
         ret4h, vr60 = np.full(len(p), np.nan), np.full(len(p), np.nan)
     dv = dvol_at(dvol, t) / 100.0

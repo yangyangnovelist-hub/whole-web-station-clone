@@ -256,6 +256,23 @@ def test_resting_sell_that_would_cross_on_arrival_is_a_taker_sale():
         assert u[f"hold_mk{x}_5"] == pytest.approx(0.5)
 
 
+def test_thin_bid_on_arrival_does_not_cross_and_nothing_counts_after_the_end():
+    # the bid reaches 0.56 at +101.0 s with 3 shares: below the 5 a taker sale needs -> no crossing sale;
+    # it is gone at +101.2 s, so the resting sells are never hit and fall back to the taker exit
+    bid = lambda rel: np.where((rel >= 101.0 - 1e-9) & (rel < 101.2 - 1e-9), 0.56, 0.40)  # noqa: E731
+    f = book(up_bid=bid)
+    f.loc[(f["timestamp_ms"] >= MS + 101_000) & (f["timestamp_ms"] < MS + 101_200), "up_bid_size"] = 3.0
+    u = one(day(f=f)[0], "jump", 1, T0)
+    for x in M.MAKER_X:
+        for h in M.HOLDS:
+            assert u[f"how_mk{x}_{h}"] == u[f"how_tk{h}"] and u[f"pnl_mk{x}_{h}"] == pytest.approx(u[f"pnl_tk{h}"])
+    # the fixed point 60 s before the end (te = end - 59.5 s): a print above +1c after the end does not
+    # fill the 60 s order, which is then held (the taker exit would be after the end)
+    rows, _ = day(pr=[(300.2, "up", 0.99, "buy")])
+    g = one(rows, "fixed", 1, END - 60)
+    assert g["how_mk1_60"] == 0 and g["pnl_mk1_60"] == pytest.approx(g["pnl_settle"])
+
+
 def test_fee_per_leg():
     assert M.fee(0.5) == pytest.approx(0.0175) and M.fee(0.9) == pytest.approx(0.0063)
     rows, _ = day(won=1.0)
@@ -355,6 +372,16 @@ def test_freeze_is_written_from_A_alone_before_B_and_C_are_read(tmp_path, monkey
     assert set(tr["segment"]) == {"A", "B"} and list(tr.columns) == M.TRADED_COLS
 
 
+def test_lockbox_stays_closed_when_an_archive_of_C_was_not_read(tmp_path, fast_models):
+    rows = synth_rows()
+    _, _, res = M.analyze(rows, tmp_path / "f" / "mix-hf.md", failed=["2026-08-20"], log=lambda s: None)
+    assert res[0]["b_pass"] and not any(o["c_open"] for o in res)
+    # a failed A or B archive does not keep C closed
+    _, _, res2 = M.analyze(rows, tmp_path / "g" / "mix-hf.md", failed=["2026-06-20"], skipped=["2026-08-30"],
+                           log=lambda s: None)
+    assert res2[0]["c_open"]
+
+
 def test_q_cut_comes_from_the_A_out_of_sample_scores(fast_models):
     rows = synth_rows()
     A = M.model_rows(rows[M.segment_of(rows["start"].to_numpy(float)) == "A"])
@@ -381,6 +408,10 @@ def test_per_day_units():
     assert u["cap5"] == pytest.approx(5 * (c[0] * 10 + c[1] * 30 + c[2] * 5.5) / (2 * 86400))
     # day 1: the two positions overlap (5 s apart, held 10 and 30 s) -> peak = both; day 2: one
     assert u["peak5"] == pytest.approx(np.median([5 * (c[0] + c[1]), 5 * c[2]]))
+    assert u["pmax5"] == pytest.approx(5 * (c[0] + c[1])) and u["pmax20"] == pytest.approx(20 * c[0] + 8 * c[1])
+    # over 5 days (3 without a trade) the median day ties up nothing
+    u5 = M.units(tr, "tk5", 5)
+    assert u5["peak5"] == 0 and u5["pmax5"] == pytest.approx(5 * (c[0] + c[1])) and u5["trades"] == pytest.approx(0.6)
     assert M.units(tr.iloc[:0], "tk5", 3)["profit5"] == 0 and np.isnan(M.units(tr, "tk5", 0)["trades"])
 
 
