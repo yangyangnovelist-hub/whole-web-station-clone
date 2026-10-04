@@ -129,6 +129,7 @@ _Q_ALIAS = {"pnl": ("pnl", "pnl5", "pnl_usd", "profit", "pnl_5"),
 COLMAP = {
     "start": ("start", "start_s", "window_start", "open_s", "t0", "ts", "start_ts", "start_time", "open_time",
               "window_open", "t_open", "market_start"),
+    "end": ("end", "end_s", "window_end", "end_ts", "end_time", "market_end"),
     "market": ("market", "market_id", "slug", "condition_id"),
     "rv5m": ("rv5m", "rv5", "rv300", "rv_5m_ann"),
     "rv30m": ("rv30m", "rv30", "rv1800", "rv_30m_ann"),
@@ -214,14 +215,66 @@ def map_columns(columns):
     return mapping
 
 
+LONG_KEYS = ("strategy", "strat", "policy", "base", "base_strategy")
+
+
+def _strategy_of(value):
+    v = _norm(value)
+    for s in STRATS:
+        if v in {_norm(a) for a in (s,) + _S_ALIAS[s]}:
+            return s
+    return None
+
+
+def widen(raw, log=print):
+    """A long table (one row per window x strategy: a strategy column, bare pnl / trades / shares /
+    cost / caph columns, the environment repeated) -> one row per window with pnl_s etc.; None when
+    `raw` is not such a table."""
+    norm = {}
+    for c in raw.columns:
+        norm.setdefault(_norm(c), c)
+    key = next((norm[_norm(k)] for k in LONG_KEYS if _norm(k) in norm), None)
+    tcol = next((norm[_norm(a)] for a in COLMAP["start"] + COLMAP["end"] if _norm(a) in norm), None)
+    if key is None or tcol is None:
+        return None
+    qcol = {q: next((norm[_norm(a)] for a in _Q_ALIAS[q] if _norm(a) in norm), None) for q in QTYS}
+    if qcol["pnl"] is None:
+        return None
+    r = raw.copy()
+    r["_s"] = [_strategy_of(v) for v in r[key]]
+    unknown = sorted({str(v) for v, s in zip(r[key], r["_s"]) if s is None})
+    if unknown:
+        log(f"long table: strategies not in REGIME.md ignored: {unknown[:10]}")
+    r = r[r["_s"].notna()]
+    env = raw.drop(columns=[key] + [c for c in qcol.values() if c]).groupby(tcol, sort=False).first()
+    out = [env]
+    for q, c in qcol.items():
+        if c is None:
+            continue
+        w = r.pivot_table(index=tcol, columns="_s", values=c, aggfunc="first", dropna=False)
+        out.append(w.rename(columns={s: f"{q}_{s}" for s in w.columns}))
+    return pd.concat(out, axis=1).reset_index()
+
+
 def load_windows(src, log=print):
     """(windows frame with canonical columns sorted by start, mapping {canonical: source column},
-    strategies present, missing environment columns). src: a path or a DataFrame."""
+    strategies present, missing environment columns). src: a path or a DataFrame (one row per
+    window; a long table, one row per window x strategy, is widened first)."""
     raw = src.copy() if isinstance(src, pd.DataFrame) else pd.read_csv(src)
     mapping = map_columns(raw.columns)
-    if "start" not in mapping:
+    if not any(f"pnl_{s}" in mapping for s in STRATS):
+        wide = widen(raw, log)
+        if wide is not None:
+            log("long table (one row per window x strategy) widened")
+            raw, mapping = wide, map_columns(wide.columns)
+    if "start" in mapping:
+        start = _to_seconds(raw[mapping["start"]])
+    elif "end" in mapping:
+        start = _to_seconds(raw[mapping["end"]]) - SLOT
+        log(f"no start column: start = {mapping['end']} - {SLOT} s")
+    else:
         raise ValueError(f"no window-start column (tried {COLMAP['start']}); columns: {list(raw.columns)[:40]}")
-    W = pd.DataFrame({"start": _to_seconds(raw[mapping["start"]])})
+    W = pd.DataFrame({"start": start})
     W["market"] = raw[mapping["market"]].astype(str).to_numpy() if "market" in mapping else \
         W["start"].round().astype("Int64").astype(str).to_numpy()
     strats = [s for s in STRATS if f"pnl_{s}" in mapping]

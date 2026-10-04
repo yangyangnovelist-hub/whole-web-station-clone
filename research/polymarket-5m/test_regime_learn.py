@@ -99,6 +99,20 @@ def test_loader_maps_producer_names_and_derives_hour_and_weekend():
     assert list(W["segment"]) == ["A", "A"]
 
 
+def test_loader_widens_a_long_table_and_takes_start_from_end():
+    e = [ts("2026-06-01 00:05"), ts("2026-06-01 00:10")]
+    raw = pd.DataFrame({"window_end": [e[0], e[0], e[0], e[1], e[1]],
+                        "strategy": ["H", "follow", "made_up", "H", "fade"],
+                        "pnl": [0.1, 0.2, 9.0, -0.3, 0.4], "shares": [5, 5, 9, 5, 0],
+                        "vr60": [1.1, 1.1, 1.1, 0.9, 0.9]})
+    W, mapping, strats, _ = R.load_windows(raw, log=quiet)
+    assert strats == ["H", "follow", "revert"] and list(W["start"]) == [e[0] - 300, e[1] - 300]
+    assert W["pnl_H"].tolist() == [0.1, -0.3] and W["shares_H"].tolist() == [5, 5]
+    assert W["pnl_follow"].iloc[0] == 0.2 and np.isnan(W["pnl_follow"].iloc[1])
+    assert np.isnan(W["pnl_revert"].iloc[0]) and W["pnl_revert"].iloc[1] == 0.4
+    assert W["vr60"].tolist() == [1.1, 0.9] and np.isnan(W["trades_H"]).all()
+
+
 def test_segments():
     s = [ts("2026-05-24 23:55"), ts("2026-05-25"), ts("2026-07-15 23:55"), ts("2026-07-16"), ts("2026-08-15 23:55"),
          ts("2026-08-16"), ts("2026-08-29 23:55"), ts("2026-08-30")]

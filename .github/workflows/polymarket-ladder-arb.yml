@@ -108,16 +108,36 @@ jobs:
 
       # NEARCERT.md test 2 (forward): the 95-99% near-certain side on the same unpacked recordings
       # (markets ending after 2026-10-05 00:00 UTC; judged once on the first 300 markets with an
-      # entry, pinned in real/nearcert-forward.verdict.md and never recomputed). Its Gamma results and
-      # Binance 1m kline files are cached beside ladder_arb.py's, under the same actions/cache path.
+      # entry over >= 7 UTC days, pinned in real/nearcert-forward.verdict.md and never recomputed).
+      # Each recording's checkpoint rows are committed in real/nearcert-forward.ledger/ (the artifacts
+      # expire after 30 days); the list of ladder-<id> artifacts still downloadable (--expect) lets it
+      # refuse to judge while one of them was not read. Its Gamma results and Binance 1m kline files are
+      # cached beside ladder_arb.py's, under the same actions/cache path. continue-on-error: a failure
+      # here must not fail the job, which would skip the actions/cache save of ladder_arb.py's
+      # reward-pool snapshots (saved only on success).
       - name: Near-certain side, forward check (nearcert_fwd.py; market data only, no orders)
         if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail   # a failed listing must not pass as an empty one
+          expect=()
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+               --jq '.artifacts[] | select(.expired | not) | "\(.name) \(.workflow_run.head_branch)"' \
+             | awk -v b="$GITHUB_REF_NAME" '$2 == b && $1 ~ /^ladder-[0-9]+$/ { sub(/^ladder-/, "", $1); print $1 }' \
+             > "$RUNNER_TEMP/nearcert-expect.txt"; then
+            echo "downloadable ladder recordings: $(wc -l < "$RUNNER_TEMP/nearcert-expect.txt")"
+            expect=(--expect "$RUNNER_TEMP/nearcert-expect.txt")
+          else
+            echo "::warning::could not list the ladder artifacts; nearcert_fwd.py will not judge in this run"
+          fi
           python nearcert_fwd.py "$RUNNER_TEMP/rec" --cache "$RUNNER_TEMP/ladder-arb-cache/nearcert" \
-            --out real/nearcert-forward.md
+            --out real/nearcert-forward.md "${expect[@]}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for f in real/nearcert-forward.md real/nearcert-forward.verdict.md real/nearcert-forward.trades.csv; do
+          for f in real/nearcert-forward.md real/nearcert-forward.verdict.md real/nearcert-forward.trades.csv \
+                   real/nearcert-forward.ledger; do
             if [ -e "$f" ]; then git add "$f"; fi
           done
           git diff --cached --quiet && exit 0

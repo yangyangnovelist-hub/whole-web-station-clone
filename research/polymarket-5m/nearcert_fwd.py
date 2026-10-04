@@ -1142,6 +1142,9 @@ def run(roots, out, cache=CACHE, since=SINCE, now=None, checks=CHECKS, sigma_s=S
     expired = 0
     if led is not None:
         exp = None if expect is None else {str(x) for x in expect}
+        if exp is not None and loaded - exp:  # a recording read now is missing from the list: list unreliable
+            notes.append(f"--expect 清单缺了这次读到的录制（{', '.join(sorted(loaded - exp)[:5])}），本次当作没有清单")
+            exp = None
         for name, m in list(led.meta.items()):
             if name in loaded or m["frozen"]:
                 continue

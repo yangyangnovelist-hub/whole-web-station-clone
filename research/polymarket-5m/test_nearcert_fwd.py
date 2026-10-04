@@ -20,6 +20,27 @@ S0, DELTA = 85000.0, 1e-4
 T10 = END - 600                     # the 10-minute checkpoint
 TE = T10 + nf.ENTRY_LAG
 COLS = ["market_id", "ts", "recv", "bid", "ask", "bid_size", "ask_size", "tick", "depth99", "edge99"]
+# Gamma descriptions, as written on 2026-10-04 (above / range: the old noon wording; daily up/down since
+# 10-02: the candle CLOSING at 12:00)
+ABOVE_DESC = ('This market will resolve to "Yes" if the Binance 1 minute candle for BTC/USDT 12:00 in the ET timezone '
+              '(noon) on the date specified in the title has a final "Close" price higher than the price specified in '
+              'the title. Otherwise, this market will resolve to "No".')
+RANGE_DESC = ('This market will resolve according to the final "Close" price of the Binance 1 minute candle for BTC/USDT '
+              '12:00 in the ET timezone (noon) on the date specified in the title.')
+UPDOWN_NEW = ('This market will resolve to "Up" if the "Close" price for the Binance 1 minute candle for BTC/USDT closing '
+              'at 12:00 in the ET timezone (noon) on Oct 5 \'26 is lower than the final "Close" price for the candle '
+              'closing at 12:00 ET on Oct 6 \'26. If the final "Close" price for both of these candles is exactly equal '
+              'on Binance, this market will resolve 50-50.')
+UPDOWN_OLD = ('This market will resolve to "Up" if the "Close" price for the Binance 1 minute candle for BTC/USDT '
+              'Oct 5 \'26 12:00 in the ET timezone (noon) is lower than the final "Close" price for the Oct 6 \'26 12:00 '
+              'in the ET timezone (noon) candle. this market will resolve 50-50.')
+HIT_DAILY = ('This market will immediately resolve to "Yes" if any Binance 1-minute candle for Bitcoin (BTC/USDT) on the '
+             'date specified in the title, between 12:00 AM ET and 11:59 PM ET has a final "High" price equal to or '
+             'greater than the price specified in the title.')
+HIT_CREATION = ('This market will resolve to "Yes" if any Binance 1 minute candle for BTC/USDT on the date specified in '
+                'the title, from the creation of this market through 11:59 PM ET, has a final High price equal to or '
+                'greater than the price specified in the title.')
+DESC = {"above": ABOVE_DESC, "range": RANGE_DESC, "updown_day": UPDOWN_NEW, "hit_up": HIT_DAILY, "hit_down": HIT_DAILY}
 
 
 # ------------------------------------------------------------------ synthetic built tables
@@ -53,7 +74,8 @@ def filler(t0, t1, step=1.0):
 
 
 def mkt(cid, typ, lo=None, hi=None, end=END, day=D.isoformat(), **kw):
-    m = {"slug": cid, "event_slug": kw.pop("event_slug", f"slug-{typ}"), "type": typ, "title": "", "question": "",
+    m = {"slug": cid, "event_slug": kw.pop("event_slug", f"slug-{typ}"), "type": typ, "title": "",
+         "question": kw.pop("question", ""),
          "lo": lo, "hi": hi, "end_ts": end, "start_ts": None, "ref_ts": None, "ref_price": None,
          "condition_id": cid, "yes_token": cid + "Y", "no_token": cid + "N", "day": day}
     m.update(kw)
@@ -82,10 +104,16 @@ SPOT = spot_rows(END - 3 * 3600, END + 120)
 TAU10 = END + 60 - T10              # open12: the noon candle closes 60 s after the end
 
 
-def rows_of(tmp_path, markets, books, spot=SPOT, name="r1", gamma=None, ref_close=None, closes=(), checks=nf.CHECKS):
-    rec = nf.Rec.load(write_built(tmp_path / name / "built", books + filler(END - 3 * 3600, END + 120), markets,
+def rows_of(tmp_path, markets, books, spot=SPOT, name="r1", gamma=None, ref_close=None, closes=(), checks=nf.CHECKS,
+            around=END, extremes=None):
+    """Rows of one synthetic recording; gamma=None gives every market its type's description (DESC)."""
+    if gamma is None:
+        gamma = {m["condition_id"]: {"description": DESC.get(m["type"], ""), "createdAt": "2026-09-01T00:00:00Z"}
+                 for m in markets}
+    rec = nf.Rec.load(write_built(tmp_path / name / "built", books + filler(around - 3 * 3600, around + 120), markets,
                                   spot, closes))
-    rows = pd.DataFrame(nf.rec_rows(rec, {m["condition_id"] for m in markets}, checks, nf.SIGMA_S, ref_close, gamma))
+    rows = pd.DataFrame(nf.rec_rows(rec, {m["condition_id"] for m in markets}, checks, nf.SIGMA_S, ref_close, gamma,
+                                    extremes))
     return rec, rows
 
 
@@ -127,73 +155,145 @@ def test_model_probability_above_range_and_updown_day(tmp_path):
         calls.append(o)
         return ref
 
-    ms = [mkt("A", "above", lo=K), mkt("R", "range", lo=a, hi=b), mkt("U", "updown_day")]
-    _, rows = rows_of(tmp_path, ms, [], ref_close=ref_close)
+    ms = [mkt("A", "above", lo=K), mkt("R", "range", lo=a, hi=b), mkt("U", "updown_day"), mkt("V", "updown_day")]
+    gamma = {"A": {"description": ABOVE_DESC}, "R": {"description": RANGE_DESC}, "U": {"description": UPDOWN_NEW},
+             "V": {"description": UPDOWN_OLD}}
+    _, rows = rows_of(tmp_path, ms, [], ref_close=ref_close, gamma=gamma)
     sd = sigma_np(SPOT, T10) * math.sqrt(TAU10)
     S = s_before(T10)
     r = at10(rows, "A")
-    assert r["tau"] == TAU10 and r["S"] == pytest.approx(S)
+    assert r["tau"] == TAU10 and r["S"] == pytest.approx(S) and r["conv"] == "open12"
     assert r["p_yes"] == pytest.approx(norm.cdf(math.log(S / K) / sd), abs=1e-12)
     assert r["p_yes"] == pytest.approx(0.97, abs=1e-9)
     assert at10(rows, "R")["p_yes"] == pytest.approx(norm.cdf(math.log(S / a) / sd) - norm.cdf(math.log(S / b) / sd),
                                                      abs=1e-12)
-    assert at10(rows, "U")["p_yes"] == pytest.approx(norm.cdf(math.log(S / ref) / sd), abs=1e-12)
-    # the reference is the previous ET day's open12 candle (opens at noon ET), not the recorder's close12
-    assert set(calls) == {rs.noon_open(D - timedelta(days=1), "open12")} == {ld.noon_et(D - timedelta(days=1))}
+    # the 10-05 wording settles on the candle CLOSING at noon (opens 11:59 ET): tau = noon - t, and the
+    # reference is the previous day's candle closing at noon (the recorder's ref_price)
+    u = at10(rows, "U")
+    assert (u["conv"], u["tau"]) == ("close12", END - T10)
+    assert u["p_yes"] == pytest.approx(norm.cdf(math.log(S / ref) / (sigma_np(SPOT, T10) * math.sqrt(END - T10))),
+                                       abs=1e-12)
+    # the old wording ('Oct 5 '26 12:00 in the ET timezone (noon)') stays resolved.py's open12
+    v = at10(rows, "V")
+    assert (v["conv"], v["tau"]) == ("open12", TAU10)
+    assert v["p_yes"] == pytest.approx(norm.cdf(math.log(S / ref) / sd), abs=1e-12)
+    assert set(calls) == {ld.noon_et(D - timedelta(days=1)) - 60, ld.noon_et(D - timedelta(days=1))}
 
 
-def test_updown_day_reference_pending_and_end_mismatch(tmp_path):
-    ms = [mkt("U", "updown_day"), mkt("X", "above", lo=80000.0, end=END + 3600)]
-    _, rows = rows_of(tmp_path, ms, [], ref_close=lambda o: None)
+def test_noon_rule_from_the_description():
+    assert nf.noon_rule("above", ABOVE_DESC, D) == ("open12", "")
+    assert nf.noon_rule("range", RANGE_DESC, D) == ("open12", "")
+    assert nf.noon_rule("updown_day", UPDOWN_NEW, D) == ("close12", "")
+    assert nf.noon_rule("updown_day", UPDOWN_OLD, D) == ("open12", "")
+    # the live 10-05 market, verbatim (curly quotes, "Oct 4 '26")
+    live = ("This market will resolve to \u201cUp\u201d if the \u201cClose\u201d price for the Binance 1 minute candle "
+            "for BTC/USDT closing at 12:00 in the ET timezone (noon) on Oct 4 \u201926 is lower than the final "
+            "\u201cClose\u201d price for the candle closing at 12:00 ET on Oct 5 \u201926.")
+    assert nf.noon_rule("updown_day", live, date(2026, 10, 5)) == ("close12", "")
+    assert nf.noon_rule("updown_day", UPDOWN_NEW, D + timedelta(days=1))[0] is None          # other dates
+    mixed = UPDOWN_NEW.replace("for the candle closing at 12:00 ET", "for the Oct 6 '26 12:00 in the ET timezone (noon)")
+    assert nf.noon_rule("updown_day", mixed, D) == (None, "candle")
+    assert nf.noon_rule("above", ABOVE_DESC.replace("Binance", "Coinbase"), D) == (None, "source")
+    assert nf.noon_rule("above", ABOVE_DESC.replace("1 minute candle", "1 hour candle"), D) == (None, "source")
+    assert nf.noon_rule("above", "", D) == (None, "no description")
+    assert nf.noon_rule("above", ABOVE_DESC.replace("12:00 in the ET timezone (noon)", "4:00 PM ET"), D)[0] is None
+
+
+def test_updown_day_reference_pending_end_mismatch_and_rule(tmp_path):
+    ms = [mkt("U", "updown_day"), mkt("X", "above", lo=80000.0, end=END + 3600), mkt("G", "above", lo=80000.0),
+          mkt("O", "range", lo=80000.0, hi=90000.0)]
+    gamma = {"U": {"description": UPDOWN_NEW}, "X": {"description": ABOVE_DESC},
+             "O": {"description": RANGE_DESC.replace("12:00 in the ET timezone (noon)", "closing at 12:00 ET")
+                   .replace("1 minute candle", "1 hour candle")}}
+    _, rows = rows_of(tmp_path, ms, [], ref_close=lambda o: None, gamma=gamma)
     assert at10(rows, "U")["status"] == "ref_pending"
     assert set(rows.loc[rows["cid"] == "X", "status"]) == {"end_mismatch"}
+    assert at10(rows, "G")["status"] == "gamma_na"        # no description yet: undetermined, retried
+    assert at10(rows, "O")["status"] == "rule_other"
 
 
-def test_hit_reflection_and_high_so_far(tmp_path):
-    tau = END - T10
-    sd = sigma_np(SPOT, T10) * math.sqrt(tau)
-    S = s_before(T10)
+HSTART = ld.et_to_utc(D, 0)                          # the daily hit window of D: 04:00 UTC ..
+HEND = ld.et_to_utc(D + timedelta(days=1), 0)       # .. 04:00 UTC the next day (its endDate)
+HSPOT = spot_rows(HEND - 3 * 3600, HEND + 120)
+HT10 = HEND - 600
+
+
+def test_hit_reflection_window_and_high_so_far(tmp_path):
+    tau = HEND - HT10
+    sd = sigma_np(HSPOT, HT10) * math.sqrt(tau)
+    S = s_before(HT10)
     K = S * math.exp(-norm.ppf(0.015) * sd)   # 2 Phi(ln(S/K)/sd) = 0.03 -> No favoured at 0.97
-    first = float(SPOT["trade_ts"].iloc[0])
-    start = END - 12 * 3600                   # the window began before the recording
-    pre = dict(start_ts=start, pre_at=first - 2, event_slug="what-price-will-bitcoin-hit-on-october-6-2026")
+    first = float(HSPOT["trade_ts"].iloc[0])
+    q = "Will Bitcoin reach $X on October 6?"
+    pre = dict(start_ts=HSTART, pre_at=first - 2, question=q)
     Kd = S * math.exp(norm.ppf(0.015) * sd)
+    late = lambda k: dict(pre, start_ts=HSTART + 600 * k)   # Gamma's startDate k x 10 min after the window start
     ms = [mkt("H", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **pre),
           mkt("H2", "hit_up", lo=K, pre_high=K + 1, pre_low=80000.0, **pre),                 # reached before
-          mkt("H3", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **{**pre, "pre_at": T10 + 5}),  # look-ahead
-          mkt("H4", "hit_up", lo=K, start_ts=start),                                          # no pre_*
+          mkt("H3", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **{**pre, "pre_at": HT10 + 5}),  # look-ahead
+          mkt("H4", "hit_up", lo=K, start_ts=HSTART, question=q),                             # no pre_*
           mkt("H5", "hit_up", lo=S0 * math.exp(DELTA / 2), pre_high=S0, pre_low=S0, **pre),   # a trade reached it
-          mkt("H6", "hit_up", lo=K, start_ts=T10 - 1800),                                     # window inside rec
+          mkt("H6", "hit_up", lo=K, start_ts=HSTART, question=q),                             # created inside rec
           mkt("H7", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **{**pre, "pre_at": first - 60}),  # hole
+          mkt("H8", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **late(1)),   # the gap candles reached it
+          mkt("H9", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **late(2)),   # ... did not
+          mkt("H10", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **late(3)),  # ... not published yet
           mkt("C1", "hit_up", lo=K, pre_high=K + 1, pre_low=80000.0, **pre),                 # from creation
           mkt("C2", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **pre),
           mkt("L", "hit_down", hi=Kd, pre_high=90000.0, pre_low=Kd + 50, **pre),
-          mkt("G", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **pre)]
+          mkt("G", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **pre),                 # no Gamma record
+          mkt("W", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **pre),                 # weekly wording
+          mkt("E", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **{**pre, "question": "Will Bitcoin reach $X on "
+                                                                         "October 7?"}),     # window ends later
+          mkt("Y", "hit_up", lo=K, pre_high=K - 50, pre_low=80000.0, **{**pre, "question": "Will Bitcoin reach $X in "
+                                                                         "2026?"})]          # a yearly window
     for m in ms:
-        m["end_ts"], m["day"] = END, None
-    plain = {"description": "between 12:00 AM ET and 11:59 PM ET", "createdAt": "2026-10-05T04:00:01Z"}
-    creation = {"description": "... from the creation of this market ...", "createdAt": "2026-10-06T06:00:30Z"}
+        m["end_ts"], m["day"] = HEND, None
+    plain = {"description": HIT_DAILY, "createdAt": "2026-10-05T04:00:01Z"}
     gamma = {m["condition_id"]: plain for m in ms if m["condition_id"] != "G"}
-    gamma["C1"] = gamma["C2"] = creation
-    books = [row(c + "N", T10 - 20, 0.96) for c in ("H", "H6", "C2", "L")]
-    _, rows = rows_of(tmp_path, ms, books, gamma=gamma)
-    r = at10(rows, "H")
+    gamma["C1"] = gamma["C2"] = {"description": HIT_CREATION, "createdAt": "2026-10-06T06:00:30Z"}
+    gamma["H6"] = {"description": HIT_CREATION, "createdAt": nf._iso(HT10 - 1800)}
+    gamma["W"] = {"description": HIT_DAILY.replace("on the date specified in the title, between 12:00 AM ET and 11:59 "
+                                                   "PM ET", "during the date range specified in the title")}
+    asked = []
+
+    def extremes(a, b):
+        asked.append((a, b))
+        return {HSTART + 600: (K + 1, 80000.0), HSTART + 1200: (K - 10, 80000.0)}.get(b)
+
+    books = [row(c + "N", HT10 - 20, 0.96) for c in ("H", "H6", "H9", "C2", "L")]
+    _, rows = rows_of(tmp_path, ms, books, spot=HSPOT, gamma=gamma, around=HEND, extremes=extremes)
+    at = lambda c: rows[(rows["cid"] == c) & (rows["check"] == 10)].iloc[0]
+    r = at("H")
     assert r["tau"] == tau
     assert r["p_yes"] == pytest.approx(2 * norm.cdf(math.log(S / K) / sd), abs=1e-12)
     assert (r["status"], r["side"], r["token"], r["ask"]) == ("trade", "No", "HN", 0.96)
     assert r["kind"] == "hit_daily"
-    assert at10(rows, "L")["p_yes"] == pytest.approx(2 * norm.cdf(math.log(Kd / S) / sd), abs=1e-12)
-    assert at10(rows, "L")["status"] == "trade"
-    st = {c: at10(rows, c)["status"] for c in ("H2", "H3", "H4", "H5", "H6", "H7", "C1", "C2", "G")}
+    assert at("L")["p_yes"] == pytest.approx(2 * norm.cdf(math.log(Kd / S) / sd), abs=1e-12)
+    assert at("L")["status"] == "trade"
+    st = {c: at(c)["status"] for c in ("H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10", "C1", "C2", "G", "W",
+                                       "E", "Y")}
     assert st == {"H2": "decided", "H3": "hit_unknown", "H4": "hit_unknown", "H5": "decided", "H6": "trade",
-                  "H7": "hit_unknown", "C1": "hit_unknown", "C2": "trade", "G": "gamma_na"}
+                  "H7": "hit_unknown", "H8": "decided", "H9": "trade", "H10": "kline_pending", "C1": "hit_unknown",
+                  "C2": "trade", "G": "gamma_na", "W": "rule_other", "E": "end_mismatch", "Y": "rule_other"}
+    assert at("Y")["kind"] == "hit_other"
+    # the gap between the window start (00:00 ET) and pre_*'s start is read from the official candles, once
+    # per checkpoint, from the window start to the candle holding startDate
+    assert {b - a for a, b in asked} == {600, 1200, 1800} and {a for a, _ in asked} == {HSTART}
 
 
-def test_hit_kinds_from_event_slug():
-    assert nf.kind_of("hit_up", "what-price-will-bitcoin-hit-on-october-6-2026") == "hit_daily"
-    assert nf.kind_of("hit_down", "what-price-will-bitcoin-hit-in-october-2026") == "hit_monthly"
-    assert nf.kind_of("hit_up", "what-price-will-bitcoin-hit-october-5-11-2026") == "hit_weekly"
+def test_hit_kinds_from_the_question():
+    end = lambda d: ld.et_to_utc(d + timedelta(days=1), 0)
+    assert nf.kind_of("hit_up", "Will Bitcoin reach $92,000 on October 6?", end(D)) == "hit_daily"
+    assert nf.kind_of("hit_down", "Will Bitcoin dip to $80,000 in October?", end(date(2026, 10, 31))) == "hit_monthly"
+    assert nf.kind_of("hit_up", "Will Bitcoin reach $98,000 September 28-October 4?", end(date(2026, 10, 4))) == \
+        "hit_weekly"
+    # the yearly event (slug what-price-will-bitcoin-hit-before-2027) and anything unreadable: excluded
+    assert nf.kind_of("hit_up", "Will Bitcoin reach $150,000 in 2026?", ld.et_to_utc(date(2027, 1, 1), 0)) == "hit_other"
+    assert nf.kind_of("hit_down", "Will Bitcoin dip to $50,000 by December 31, 2026?", end(D)) == "hit_other"
+    assert nf.kind_of("hit_up", None, end(D)) == "hit_other"
     assert nf.kind_of("range", None) == "range"
+    assert "hit_other" not in nf.BINANCE_KINDS
 
 
 # ------------------------------------------------------------------ side and entry
@@ -250,6 +350,29 @@ def test_stale_feed_and_disconnect(tmp_path):
     # a CLOB disconnect just before the entry
     _, rows = rows_of(tmp_path, ms, books, name="dc", closes=[TE - 3])
     assert at10(rows, "A")["status"] == "stale"
+
+
+def test_snapshot_rows_and_resubscription_confirm_a_quiet_book(tmp_path):
+    """A quiet token's only row is the subscription snapshot, stamped with the book's last change long
+    before the connection; after a CLOB disconnect an unchanged book writes no new row. Both are the
+    exchange's state once the feed runs: not stale (they were before, which favoured busy books)."""
+    con = T10 - 100                                         # the recorder connects
+    snap = lambda tok, ts, recv=con + 0.3: [tok, ts, recv, 0.95, 0.96, 50.0, 100.0, 0.01, np.nan, np.nan]
+    books = [snap("AY", T10 - 2000), snap("OLD1", T10 - 1900), snap("OLD2", T10 - 1500),
+             row("CY", T10 - 300, 0.96),                     # an ordinary row, then a disconnect at T10 - 199
+             snap("DY", T10 - 40, recv=TE + 3.0)]            # stamped before te, received after it
+    feed = [r for r in filler(con, END + 120) if not (T10 - 200 <= r[1] < T10 - 190)]
+    rec = nf.Rec.load(write_built(tmp_path / "s" / "built", books + feed + filler(T10 - 400, T10 - 200),
+                                  [], SPOT, closes=[T10 - 199]))
+    assert rec.entry("AY", TE)[:2] == ("trade", 0.96)
+    assert rec.entry("CY", TE)[0] == "trade"                 # reconfirmed by the resubscription
+    assert rec.entry("DY", TE)[0] == "stale"                 # its state reached the recorder only after te
+    # the same quiet stretch without a disconnect: nothing reconfirms the book -> stale, as before
+    rec2 = nf.Rec.load(write_built(tmp_path / "s2" / "built", books + feed + filler(T10 - 400, T10 - 200), [], SPOT))
+    assert rec2.entry("CY", TE)[0] == "stale"
+    # a disconnect inside [te - 10, te + 1] still makes every entry stale
+    rec3 = nf.Rec.load(write_built(tmp_path / "s3" / "built", books + feed, [], SPOT, closes=[TE - 3]))
+    assert rec3.entry("AY", TE)[0] == "stale"
 
 
 def test_spot_gap_and_short_history(tmp_path):
@@ -344,25 +467,31 @@ def test_pinned_verdict_once(tmp_path):
     cp = pd.DataFrame(base)
     e = pd.DataFrame(base)
     covered = float(e["end"].max() + 1)
-    now = covered + 86400
     # too few Binance-settled markets (the 4-hour control does not count)
     assert "不到 4 个" in nf.judge(out, e, cp, covered, n=4, min_days=3) and not pinned.exists()
     # the first 3 are not all resolved yet
     late = e.copy()
     late.loc[late["cid"] == "B", "official"] = np.nan
     assert "还没结算" in nf.judge(out, late, cp, covered, n=3, min_days=3) and not pinned.exists()
-    # an earlier checkpoint still undetermined
-    cp2 = pd.concat([cp, pd.DataFrame([{"cid": "U", "kind": "updown_day", "t": T10 - 5, "end": END,
+    # an earlier checkpoint still undetermined holds the verdict whatever its age (no silent escape)
+    cp2 = pd.concat([cp, pd.DataFrame([{"cid": "U", "kind": "updown_day", "t": T10 - 5, "end": END - 30 * 86400,
                                         "status": "ref_pending"}])])
-    assert "待定" in nf.judge(out, e, cp2, covered, n=3, min_days=3, now=END + 86400) and not pinned.exists()
-    assert "待定" not in nf.judge(tmp_path / "old.md", e, cp2, covered, n=3, min_days=3,
-                                   now=END + 4 * 86400)
-    assert (tmp_path / "old.verdict.md").exists()       # an old undetermined checkpoint stays skipped
+    assert "待定" in nf.judge(out, e, cp2, covered, n=3, min_days=3) and not pinned.exists()
+    # ... and so does a later undetermined checkpoint of a chosen market (it could add an entry)
+    cp3 = pd.concat([cp, pd.DataFrame([{"cid": "C", "kind": "above", "t": T10 + 86400 * 5, "end": END + 86400 * 5,
+                                        "status": "gamma_na"}])])
+    assert "待定" in nf.judge(out, e, cp3, covered, n=3, min_days=3) and not pinned.exists()
+    # an explicit, counted exclusion (expired_pending) does not hold it
+    cp4 = cp2.assign(status=cp2["status"].replace("ref_pending", "expired_pending"))
+    assert "待定" not in nf.judge(tmp_path / "x.md", e, cp4, covered, n=3, min_days=3)
+    # this run's blockers (a recording not read, a fetch error) hold it
+    assert "清单" in nf.judge(out, e, cp, covered, n=3, min_days=3, blockers=["没有可下载录制的清单（--expect）"])
+    assert not pinned.exists()
     # recordings not yet past the markets' end
     assert "录制" in nf.judge(out, e, cp, T10, n=3, min_days=3) and not pinned.exists()
     # development runs never judge
     assert "开发运行" in nf.judge(out, e, cp, covered, n=3, min_days=3, design=False) and not pinned.exists()
-    v = nf.judge(out, e, cp, covered, n=3, min_days=3, now=now)
+    v = nf.judge(out, e, cp, covered, n=3, min_days=3)
     assert pinned.exists() and "前 3 个市场，4 笔" in v and "通过" in v
     assert "99%" in v and "精确" in v
     judged = pd.read_csv(tmp_path / "real" / "nf.trades.csv")
@@ -378,18 +507,15 @@ def test_pinned_verdict_once(tmp_path):
 def test_verdict_requires_tail_robust_daily_lower_bound_and_exact_p(tmp_path):
     lose = [entry(c, T10 + 86400 * i, ask=0.10, official=0.0) for i, c in enumerate("ABCDEFGHIJ")]
     covered = max(r["end"] for r in lose) + 1
-    v = nf.judge(tmp_path / "a.md", pd.DataFrame(lose), pd.DataFrame(lose), covered, n=10,
-                 now=covered + 86400)
+    v = nf.judge(tmp_path / "a.md", pd.DataFrame(lose), pd.DataFrame(lose), covered, n=10)
     assert "没通过" in v
     priced_fair = [entry(c, T10 + 86400 * i, ask=0.95) for i, c in enumerate("ABCDEFGHIJ")]
     covered = max(r["end"] for r in priced_fair) + 1
-    v = nf.judge(tmp_path / "b.md", pd.DataFrame(priced_fair), pd.DataFrame(priced_fair), covered, n=10,
-                 now=covered + 86400)
+    v = nf.judge(tmp_path / "b.md", pd.DataFrame(priced_fair), pd.DataFrame(priced_fair), covered, n=10)
     assert "没通过" in v and "精确" in v
     win = [entry(c, T10 + 86400 * i, ask=0.10) for i, c in enumerate("ABCDEFGHIJ")]
     covered = max(r["end"] for r in win) + 1
-    v = nf.judge(tmp_path / "c.md", pd.DataFrame(win), pd.DataFrame(win), covered, n=10,
-                 now=covered + 86400)
+    v = nf.judge(tmp_path / "c.md", pd.DataFrame(win), pd.DataFrame(win), covered, n=10)
     assert "→ 通过" in v
 
 
@@ -406,10 +532,10 @@ def test_exact_p_counts_a_market_once_even_with_multiple_checkpoints():
 # ------------------------------------------------------------------ end to end
 
 class FakeNet:
-    """Gamma answers from a table; data.binance.vision has nothing."""
+    """Gamma answers from a table (descriptions: desc, else the above wording); data.binance.vision has nothing."""
 
-    def __init__(self, resolved, open_=()):
-        self.resolved, self.open, self.urls = resolved, set(open_), []
+    def __init__(self, resolved, open_=(), desc=None):
+        self.resolved, self.open, self.urls, self.desc = resolved, set(open_), [], desc or {}
 
     def get(self, url, binary=False):
         self.urls.append(url)
@@ -418,7 +544,7 @@ class FakeNet:
         q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
         out = []
         for c in q.get("condition_ids", []):
-            base = {"conditionId": c, "outcomes": '["Yes", "No"]', "description": "12:00 AM ET to 11:59 PM ET",
+            base = {"conditionId": c, "outcomes": '["Yes", "No"]', "description": self.desc.get(c, ABOVE_DESC),
                     "createdAt": "2026-10-05T04:00:00Z"}
             if q.get("closed") == ["true"] and c in self.resolved:
                 out.append({**base, "closed": True, "outcomePrices": self.resolved[c], "umaResolutionStatus": "resolved"})
@@ -433,15 +559,15 @@ def test_run_end_to_end(tmp_path):
     ms = [mkt("A", "above", lo=K), mkt("B", "above", lo=strike(0.03, T10, TAU10, SPOT)),
           mkt("P", "above", lo=K, end=END + 86400, day=(D + timedelta(days=1)).isoformat()),
           mkt("H", "hit_up", lo=S0 * 1.5, start_ts=END - 12 * 3600, pre_at=first - 1, pre_high=S0, pre_low=S0,
-              day=None, event_slug="what-price-will-bitcoin-hit-on-october-6-2026"),
+              day=None, question="Will Bitcoin reach $X on October 6?"),
           mkt("Z", "updown_4h", end=END, day=None, ref_ts=END - 4 * 3600, ref_price=strike(0.97, T10, END - T10, SPOT))]
     books = [row("AY", T10 - 30, 0.96), row("BN", T10 - 30, 0.95), row("ZY", T10 - 30, 0.96)] + filler(END - 3 * 3600,
                                                                                                          END + 120)
     write_built(tmp_path / "rec" / "111" / "built", books, ms, SPOT)
-    net = FakeNet({"A": '["1", "0"]', "B": '["1", "0"]', "Z": '["1", "0"]'}, open_=["H"])
+    net = FakeNet({"A": '["1", "0"]', "B": '["1", "0"]', "Z": '["1", "0"]'}, open_=["H"], desc={"H": HIT_DAILY})
     out = tmp_path / "real" / "nearcert-forward.md"
     text = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 3600, net=net, n=1,
-                  min_days=1, log=lambda *a: None)
+                  min_days=1, log=lambda *a: None, expect=["111"])
     assert out.exists() and text == out.read_text(encoding="utf-8")
     assert "检验 2" in text and "| 买入 |" in text and "模拟成交率" in text
     assert "不含队列竞争" in text
@@ -462,9 +588,68 @@ def test_run_end_to_end(tmp_path):
     # second run: the verdict is read back, and resolved markets are not asked again
     net2 = FakeNet({})
     text2 = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 7200, net=net2, n=1,
-                   min_days=1, log=lambda *a: None)
+                   min_days=1, log=lambda *a: None, expect=["111"])
     assert "已判定，不再重算" in text2
     assert not any("condition_ids=A" in u for u in net2.urls)
+    # the recording's rows are in the ledger, all final: frozen
+    led = nf.Ledger(tmp_path / "real" / "nearcert-forward.ledger")
+    assert led.meta["111"]["frozen"] and {r["cid"] for r in led.rows("111") if r["status"] == "trade"} == {"A", "B", "Z"}
+
+
+def _one_recording(root, name, ms, books):
+    write_built(root / name / "built", books + filler(END - 3 * 3600, END + 120), ms, SPOT)
+
+
+def test_ledger_keeps_rows_after_the_artifact_expires(tmp_path, monkeypatch):
+    K = strike(0.97, T10, TAU10, SPOT)
+    tok = "71321045679252212594626385532706912750332728571942532289631379312455583992563"  # a real-sized token id
+    ms = [mkt("A", "above", lo=K, yes_token=tok), mkt("U", "updown_day")]
+    root = tmp_path / "rec"
+    _one_recording(root, "111", ms, [row(tok, T10 - 30, 0.96)])
+    _one_recording(root, "222", [], [])                      # a later recording, nothing in scope
+    out = tmp_path / "real" / "nearcert-forward.md"
+    net = FakeNet({"A": '["1", "0"]'}, open_=["U"], desc={"U": UPDOWN_NEW})
+    kw = dict(cache=tmp_path / "cache", net=net, n=1, min_days=1, log=lambda *a: None)
+    text = nf.run([root], out, now=END + 3600, expect=["111", "222"], **kw)
+    led = nf.Ledger(tmp_path / "real" / "nearcert-forward.ledger")
+    # U's reference file is not published (data.binance.vision has nothing): 111 stays open, and holds the verdict
+    assert not led.meta["111"]["frozen"] and led.meta["222"]["frozen"]
+    assert "待定" in text and not (tmp_path / "real" / "nearcert-forward.verdict.md").exists()
+    rows = {(r["cid"], r["check"]): r for r in led.rows("111")}
+    assert rows[("A", 10)]["token"] == tok and rows[("A", 10)]["status"] == "trade"   # ids survive the CSV
+    assert rows[("U", 10)]["status"] == "ref_pending"
+    # a recording in the --expect list that was not read holds it too
+    text = nf.run([root], out, now=END + 3600, expect=["111", "222", "333"], **kw)
+    assert "333" in text and not (tmp_path / "real" / "nearcert-forward.verdict.md").exists()
+    # a list that misses a recording read now is not trusted: nothing is marked expired, no verdict
+    text = nf.run([root], out, now=END + 3600, expect=["222"], **kw)
+    assert not nf.Ledger(tmp_path / "real" / "nearcert-forward.ledger").meta["111"]["frozen"]
+    assert "清单" in text and not (tmp_path / "real" / "nearcert-forward.verdict.md").exists()
+    # 111's artifact expires (no longer downloadable, not in --expect): its rows stay, the undetermined ones
+    # become an explicit exclusion, and the verdict can be judged from the ledger
+    import shutil
+    shutil.rmtree(root / "111")
+    text = nf.run([root], out, now=END + 7200, expect=["222"], **kw)
+    led = nf.Ledger(tmp_path / "real" / "nearcert-forward.ledger")
+    st = {(r["cid"], r["check"]): r["status"] for r in led.rows("111")}
+    assert led.meta["111"]["frozen"] and st[("U", 10)] == "expired_pending" and st[("A", 10)] == "trade"
+    assert "录制过期时仍待定" in text
+    judged = pd.read_csv(tmp_path / "real" / "nearcert-forward.trades.csv", dtype={"token": str})
+    assert set(judged["cid"]) == {"A"} and set(judged["token"]) == {tok}
+    # frozen recordings are read back from the ledger, never loaded or recomputed again
+    loads = []
+    monkeypatch.setattr(nf.Rec, "load", classmethod(lambda cls, d: loads.append(d)))
+    again = nf.run([root], out, now=END + 9000, expect=["222"], **kw)
+    assert loads == [] and "已判定，不再重算" in again
+    assert "| 全部 | 1 | 1 | 1 |" in again.split("## 每份盈亏")[1]
+
+
+def test_dev_runs_use_no_ledger(tmp_path):
+    _one_recording(tmp_path / "rec", "111", [mkt("A", "above", lo=80000.0)], [])
+    out = tmp_path / "real" / "dev.md"
+    nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", net=FakeNet({}), since="2026-10-04T00:00:00Z",
+           log=lambda *a: None)
+    assert out.exists() and not nf.ledger_dir(out).exists()
 
 
 def test_run_without_recordings_writes_nothing(tmp_path):
