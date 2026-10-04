@@ -196,9 +196,12 @@ def test_revert_buys_the_other_side_when_the_mid_moves_alone():
 
 
 def test_revert_needs_binance_quiet_and_a_real_mid():
-    # Binance moved 1.5 bp in the same 10 s: not "barely moved"
+    # Binance moved 1.5 bp in the same 10 s (received +115.1): not "barely moved" until that print is more than
+    # 10 s old; the mid is still 10c above its level 10 s earlier at +125.1, so the trigger moves there
     _, tr, _ = day(f=book(jump_up_mid), b=binance(steps=((115.0, 1.5),)), strats=("revert",))
-    assert trades_of(tr, "revert").empty
+    assert list(np.round(trades_of(tr, "revert")["t"] - S, 3)) == [125.1]
+    _, tr1, _ = day(f=book(jump_up_mid), b=binance(steps=((115.0, 1.5), (122.0, 1.5))), strats=("revert",))
+    assert trades_of(tr1, "revert").empty
     # the move is across a 10c hole in the book: no mid
     _, tr2, _ = day(f=book(lambda rel, c: jump_up_mid(rel, c, spread=0.10)), strats=("revert",))
     assert trades_of(tr2, "revert").empty
