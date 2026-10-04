@@ -16,10 +16,10 @@ Markets and times
 - (*) A (market, checkpoint) seen by several recordings is taken from the one with >= 1 h of history
   and the earliest first Binance trade, whatever happens next in either.
 
-Model at t (resolved.p_yes, as resolved.py): S = the last Binance trade before t; sigma = std (ddof 1)
-of the 1 s log returns of seconds t-3600 .. t-1 on a 1 s grid of the recording's own trades (last
-price of each second, carried forward through seconds without a trade: resolved.Spot.sigma on 1 s
-klines); sd = sigma sqrt(tau).
+Model at t (resolved.p_yes, as resolved.py): S = the last Binance trade received before t; sigma =
+std (ddof 1) of the 1 s log returns of local receipt seconds t-3600 .. t-1 (last received price of
+each second, carried forward through seconds without a trade); sd = sigma sqrt(tau). Exchange-stamped
+trades that had not reached the recorder by t are never used.
 - (*) History: skipped and counted as short_history unless the recording's Binance trades start at
   least 3601 s before t (the first return needs second t-3601); sigma_na if fewer than 1800 of those
   3600 s have a trade; spot_gap if the last trade before t is more than 5 s old (feed down).
@@ -47,7 +47,8 @@ Side and entry
   above 0.99.
 - Bought at te = t + 0.5 s (exchange time) at the best ask of the token's book row as of te (the last
   row stamped <= te; no later row is read), if the ask is in [0.02, 0.98] with >= 5 shares there;
-  taker fee 0.07 p (1 - p); one share per entry (equal weight).
+  taker fee uses that market's recorded fee rate (0.07 fallback) times p (1 - p); one share per entry
+  (equal weight).
 - (*) "Book state at most 5 s old and feed alive": the recorder writes a row only when a token's top
   of book changes, so a token's own last row may be minutes old and still the exchange's state; what
   must be fresh is the feed: from that row to te the recording never went more than 5 s without a
@@ -96,7 +97,7 @@ BAND = (0.95, 0.99)
 ENTRY_LAG = 0.5
 MIN_SIZE = 5.0
 ASK_BAND = (0.02, 0.98)
-FEE = 0.07
+FEE = 0.07                  # fallback only; each market's recorded rate takes precedence
 SIGMA_S = 3600
 SPOT_ALIVE = 5.0          # last Binance trade before t at most this old
 FEED_AGE = 5.0            # CLOB feed: no silence longer than this from the token's row to te
@@ -138,6 +139,7 @@ STATUS = {  # every (market, checkpoint) ends in exactly one; the report counts 
     "trade": "买入",
 }
 UNDETERMINED = ("ref_pending", "gamma_na")
+SIGNAL_STATUS = ("no_book", "stale", "ask_band", "ask_size", "trade")
 UNDETERMINED_S = 3 * 86400  # ...and they hold the verdict only this long after their market's end
 KIND_NAMES = {"above": "above（高于）", "range": "range（区间）", "updown_day": "updown_day（日涨跌）",
               "hit_daily": "触及·日", "hit_weekly": "触及·周", "hit_monthly": "触及·月",
@@ -158,6 +160,11 @@ def _fin(x):
     except (TypeError, ValueError):
         return NAN
     return x
+
+
+def fee_rate(x):
+    x = _fin(x)
+    return x if np.isfinite(x) and x >= 0 else FEE
 
 
 def kind_of(typ, event_slug):
@@ -332,13 +339,15 @@ class Klines:
 # ===================================================================== one recording
 
 class Rec:
-    """One built recording: Binance trades on a 1 s grid (for sigma), per-token book arrays (exchange
-    time), the CLOB feed's silences and disconnects, and its markets table."""
+    """One built recording: receipt-time Binance trades, exchange-time token books, and feed health."""
 
     def __init__(self, name, books, markets, spot, closes=None):
         self.name, self.markets = name, markets
-        spot = spot.sort_values("trade_ts", kind="stable")
-        self.st = spot["trade_ts"].to_numpy(float)
+        available = pd.to_numeric(spot.get("receive_ts", spot["trade_ts"]), errors="coerce")
+        spot = spot.assign(_available=available).dropna(subset=["_available", "price"]) \
+            .sort_values(["_available", "trade_ts"], kind="stable")
+        self.st = spot["_available"].to_numpy(float)
+        self.source_ts = spot["trade_ts"].to_numpy(float)
         self.sp = spot["price"].to_numpy(float)
         self.first, self.last = (float(self.st[0]), float(self.st[-1])) if len(self.st) else (NAN, NAN)
         if len(self.st):
@@ -373,7 +382,7 @@ class Rec:
 
     # ---- Binance
     def price_before(self, t):
-        """(price, time) of the last trade stamped before t."""
+        """(price, local receipt time) of the last Binance trade available before t."""
         i = np.searchsorted(self.st, t, "left") - 1
         return (float(self.sp[i]), float(self.st[i])) if i >= 0 else (NAN, NAN)
 
@@ -395,19 +404,23 @@ class Rec:
         """'decided' (the window's high / low reached the level before t), 'open', or 'unknown' (see
         the module notes). start = the window start; pre_ext = pre_high (up) or pre_low (down)."""
         b = np.searchsorted(self.st, t, "left")
-        if start < self.first:  # the window began before the recording's trades: pre_* needed
+        available_source = self.source_ts[:b]
+        first_source = float(self.source_ts.min()) if len(self.source_ts) else NAN
+        if start < first_source:  # the window began before the recording's trades: pre_* needed
             if not (np.isfinite(pre_at) and np.isfinite(pre_ext)) or pre_at > t:
                 return "unknown"
             if (pre_ext >= level) if up else (pre_ext <= level):
                 return "unknown" if creation_later else "decided"
-            a, s0, hole = 0, self.first, self.first - pre_at > HIT_GAP
+            s0, hole = first_source, first_source - pre_at > HIT_GAP
         else:
-            a = np.searchsorted(self.st, start, "left")
             s0, hole = start, False
-        px = self.sp[a:b]
+        use = (available_source >= start) & (available_source < t)
+        source = available_source[use]
+        px = self.sp[:b][use]
         if len(px) and ((px.max() >= level) if up else (px.min() <= level)):
             return "decided"
-        if hole or not len(px) or np.diff(np.r_[s0, self.st[a:b]]).max() > HIT_GAP:
+        source = np.sort(source)
+        if hole or not len(px) or np.diff(np.r_[s0, source]).max() > HIT_GAP:
             return "unknown"
         return "open"
 
@@ -447,7 +460,8 @@ def checkpoint(rec, m, c, t, sigma_s=SIGMA_S, ref_close=None, gamma=None):
     kind = kind_of(m.type, getattr(m, "event_slug", None))
     row = {"run": rec.name, "cid": m.condition_id, "kind": kind, "type": m.type, "check": c, "t": float(t),
            "end": float(m.end_ts), "rec_first": rec.first, "status": "", "S": NAN, "sigma": NAN, "tau": NAN,
-           "p_yes": NAN, "p_fav": NAN, "side": "", "token": "", "ask": NAN, "size": NAN, "age": NAN}
+           "p_yes": NAN, "p_fav": NAN, "side": "", "token": "", "ask": NAN, "size": NAN, "age": NAN,
+           "fee_rate": fee_rate(getattr(m, "fee_rate", NAN))}
 
     def done(status):
         row["status"] = status
@@ -571,7 +585,8 @@ def settle(cp, gamma_fetch, now):
     recs = gamma_fetch(ended) if ended else {}
     e["official"] = [official(recs.get(c)) for c in e["cid"]]
     e["won"] = np.where(e["side"] == "Yes", e["official"], 1.0 - e["official"])
-    e["fee"] = FEE * e["ask"] * (1.0 - e["ask"])
+    rates = pd.to_numeric(e["fee_rate"], errors="coerce").fillna(FEE) if "fee_rate" in e else FEE
+    e["fee"] = rates * e["ask"] * (1.0 - e["ask"])
     e["pnl"] = e["won"] - e["ask"] - e["fee"]
     return e
 
@@ -677,7 +692,12 @@ def report(cp, entries, verdict, recs_meta, since, notes=(), dev=None, checks=CH
         if a or b:
             L.append(f"| {name} | {a:,} | {b:,} |")
     pend = e_main[e_main["official"].isna()] if len(e_main) else e_main
-    L += ["", f"买入 {len(e_main):,} 笔（{e_main['cid'].nunique() if len(e_main) else 0:,} 个市场），"
+    signals = main[main["status"].isin(SIGNAL_STATUS)] if len(main) else main
+    fill_rate = len(e_main) / len(signals) if len(signals) else NAN
+    fill_text = f"{fill_rate:.1%}" if np.isfinite(fill_rate) else "–"
+    L += ["", f"模型触发 {len(signals):,} 次，模拟成交 {len(e_main):,} 次，模拟成交率 {fill_text}。"
+          "这是显示盘口在 0.5 秒时仍有至少 5 份的上限，不含队列竞争。",
+          f"买入 {len(e_main):,} 笔（{e_main['cid'].nunique() if len(e_main) else 0:,} 个市场），"
           f"其中待结算 {len(pend):,} 笔（{pend['cid'].nunique() if len(pend) else 0:,} 个市场）。", "",
           "## 每份盈亏（已结算的买入，¢/份，扣吃单费）", ""] + HEAD
     if len(e_main):
@@ -701,12 +721,13 @@ def report(cp, entries, verdict, recs_meta, since, notes=(), dev=None, checks=CH
     else:
         L.append("| （还没有） | 0 |" + " – |" * 8)
     L += ["", "## 做法（细节见 nearcert_fwd.py 开头）", "",
-          "- 模型：无漂移，σ = 时点前 1 小时录制里币安成交的 1 秒对数收益标准差（逐秒最后价，无成交的秒沿用），"
+          "- 模型：无漂移，只用时点前记录机已收到的币安成交；σ = 过去 1 小时本地接收秒的 1 秒对数收益标准差"
+          "（逐秒最后收到价，无成交的秒沿用），"
           "按到结算的剩余时间放大；above / range / 日涨跌按 12:00 ET 开盘的那根 1 分钟 K 线（open12）收盘结算，"
           "日涨跌的参考价是前一天同一根 K 线（data.binance.vision）；触及类用反射原理，录制前的当天最高/最低价用录制开始时取的"
           "1 分钟 K 线，之后用录制的逐笔成交，覆盖不全的跳过。录制里时点前不足 1 小时币安数据的跳过并计数。",
           f"- 买入：模型概率在 [{BAND[0]:.2f}, {BAND[1]:.2f}) 的一边，时点后 {ENTRY_LAG:g} 秒的卖一（只看那一刻及之前的盘口），"
-          f"≥ {MIN_SIZE:g} 份、{ASK_BAND[0]:.2f}–{ASK_BAND[1]:.2f}，吃单费 0.07·p·(1−p)，每次 1 份；"
+          f"≥ {MIN_SIZE:g} 份、{ASK_BAND[0]:.2f}–{ASK_BAND[1]:.2f}，按市场记录的吃单费率（缺失才用 {FEE:g}）付费，每次 1 份；"
           f"盘口要“新鲜”：从该代币最后一次变化到下单，录制的盘口流从没静默超过 {FEED_AGE:g} 秒，下单前后没有断线。",
           "- 结果：市场结束后从 Gamma 按 condition id 取官方结算；还没结算的算待结算。标准误按市场聚类。"]
     if notes:

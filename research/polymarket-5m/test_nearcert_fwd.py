@@ -108,6 +108,15 @@ def test_sigma_is_the_1s_grid_std_with_gaps_carried_forward(tmp_path):
     assert np.isnan(nf.Rec("y", pd.DataFrame(columns=COLS), pd.DataFrame(), thin).sigma(T10))
 
 
+def test_model_never_uses_a_trade_received_after_the_checkpoint():
+    base = spot_rows(END - 3 * 3600, END + 120)
+    late = pd.DataFrame({"trade_ts": [T10 - 0.01], "receive_ts": [T10 + 0.20], "price": [S0 * 1.20]})
+    clean = nf.Rec("clean", pd.DataFrame(columns=COLS), pd.DataFrame(), base)
+    delayed = nf.Rec("delayed", pd.DataFrame(columns=COLS), pd.DataFrame(), pd.concat([base, late]))
+    assert delayed.price_before(T10) == pytest.approx(clean.price_before(T10))
+    assert delayed.sigma(T10) == pytest.approx(clean.sigma(T10))
+
+
 def test_model_probability_above_range_and_updown_day(tmp_path):
     K = strike(0.97, T10, TAU10, SPOT)
     a, b = strike(0.99, T10, TAU10, SPOT), strike(0.02, T10, TAU10, SPOT)
@@ -190,13 +199,15 @@ def test_hit_kinds_from_event_slug():
 # ------------------------------------------------------------------ side and entry
 
 def test_side_selection(tmp_path):
-    ms = [mkt("A", "above", lo=strike(0.97, T10, TAU10, SPOT)), mkt("B", "above", lo=strike(0.03, T10, TAU10, SPOT)),
+    ms = [mkt("A", "above", lo=strike(0.97, T10, TAU10, SPOT), fee_rate=0.072),
+          mkt("B", "above", lo=strike(0.03, T10, TAU10, SPOT)),
           mkt("C", "above", lo=strike(0.995, T10, TAU10, SPOT)), mkt("E", "above", lo=strike(0.90, T10, TAU10, SPOT)),
           mkt("F", "above", lo=strike(0.95, T10, TAU10, SPOT) * (1 - 1e-9))]
     books = [row(t, T10 - 30, 0.96) for t in ("AY", "AN", "BY", "BN", "CY", "EY", "FY")]
     _, rows = rows_of(tmp_path, ms, books)
     a, b = at10(rows, "A"), at10(rows, "B")
     assert (a["status"], a["side"], a["token"]) == ("trade", "Yes", "AY")
+    assert a["fee_rate"] == pytest.approx(0.072)
     assert (b["status"], b["side"], b["token"]) == ("trade", "No", "BN")
     assert b["p_fav"] == pytest.approx(0.97, abs=1e-9)
     assert at10(rows, "C")["status"] == "above"
@@ -280,16 +291,19 @@ def test_scope_since_filter(tmp_path):
 
 # ------------------------------------------------------------------ results, pending, verdict
 
-def entry(cid, t, kind="above", side="Yes", ask=0.96, official=1.0, end=None, check=10, run="r1"):
+def entry(cid, t, kind="above", side="Yes", ask=0.96, official=1.0, end=None, check=10, run="r1",
+          fee_rate=nf.FEE):
     won = official if side == "Yes" else 1 - official
-    fee = nf.FEE * ask * (1 - ask)
+    fee = fee_rate * ask * (1 - ask)
     return {"run": run, "cid": cid, "kind": kind, "type": kind, "check": check, "t": float(t),
             "end": float(end if end is not None else t + 600), "status": "trade", "side": side, "ask": ask,
-            "p_fav": 0.97, "age": 1.0, "official": official, "won": won, "fee": fee, "pnl": won - ask - fee}
+            "p_fav": 0.97, "age": 1.0, "fee_rate": fee_rate,
+            "official": official, "won": won, "fee": fee, "pnl": won - ask - fee}
 
 
 def test_settle_marks_pending_and_values_resolved_markets():
-    cp = pd.DataFrame([{**entry("A", T10), "end": END}, {**entry("B", T10, side="No"), "end": END},
+    cp = pd.DataFrame([{**entry("A", T10, fee_rate=0.072), "end": END},
+                       {**entry("B", T10, side="No"), "end": END},
                        {**entry("C", T10), "end": END + 86400}, {**entry("N", T10), "status": "below", "end": END}])
     cp = cp.drop(columns=["official", "won", "fee", "pnl"])
     asked = []
@@ -302,7 +316,7 @@ def test_settle_marks_pending_and_values_resolved_markets():
 
     e = nf.settle(cp, fetch, now=END + 3600).set_index("cid")
     assert asked == [["A", "B"]]                      # C has not ended: not asked, pending
-    assert e.loc["A", "pnl"] == pytest.approx(1 - 0.96 - 0.07 * 0.96 * 0.04)
+    assert e.loc["A", "pnl"] == pytest.approx(1 - 0.96 - 0.072 * 0.96 * 0.04)
     assert np.isnan(e.loc["B", "official"]) and np.isnan(e.loc["C", "official"])   # open: pending
     assert "N" not in e.index
 
@@ -405,7 +419,8 @@ def test_run_end_to_end(tmp_path):
     out = tmp_path / "real" / "nearcert-forward.md"
     text = nf.run([tmp_path / "rec"], out, cache=tmp_path / "cache", now=END + 3600, net=net, n=1, log=lambda *a: None)
     assert out.exists() and text == out.read_text(encoding="utf-8")
-    assert "检验 2" in text and "| 买入 |" in text
+    assert "检验 2" in text and "| 买入 |" in text and "模拟成交率" in text
+    assert "不含队列竞争" in text
     # A won on Yes; B bought No and Yes won: a loss; the verdict pinned on the first market (n=1)
     verdict = (tmp_path / "real" / "nearcert-forward.verdict.md").read_text(encoding="utf-8")
     assert "前 1 个市场" in verdict
