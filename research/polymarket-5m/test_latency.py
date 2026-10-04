@@ -412,3 +412,25 @@ def test_forward_variants_report_the_opposite_side_rows(export, tmp_path, monkey
     assert f"| H 反向 2 倍（检验 I 的规则） | 0.4 秒 | {N} |" in text and f"| H 每次都加 | 0.4 秒 | {N} |" in text
     t = pd.read_csv(trades)
     assert set(t["variant"]) == set(fv.VARIANTS) and set(t["lag"]) == {0.3, 0.4}
+
+
+def test_fill_rate_tracks_the_stale_ask(export, tmp_path, monkeypatch):
+    """The fixture's ask stays 0.50 until 0.35 s after the jump print (start + 100.05), then 0.70:
+    an order sent at +0.11 s sees 0.50 at a 0.3 s match and 0.70 at 0.4 s; with a fair value near
+    1 both still clear theta, so both fill; at theta = 0.30 only the 0.3 s match does."""
+    import fill_rate as fr
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    monkeypatch.setattr(lt, "G_SINCE", "2026-09-01")
+    t = fr.run(tmp_path / "rec", 0.11, [0.3, 0.4])
+    main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
+    assert len(main) == N and (main["ask0.3"] == 0.50).all() and (main["ask0.4"] == 0.70).all()
+    assert main["fill0.3"].all() and main["fill0.4"].all()
+    monkeypatch.setattr(lt, "G_THETA", 0.30)
+    t = fr.run(tmp_path / "rec", 0.11, [0.3, 0.4])
+    main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
+    assert len(main) == N and main["fill0.3"].all() and not main["fill0.4"].any()
+    assert "| 0.4 秒 | " in fr.report(t, 0.11, [0.3, 0.4])
