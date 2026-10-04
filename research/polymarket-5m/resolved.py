@@ -121,6 +121,10 @@ PAGE, MAX_OFFSET = 1000, 10000
 RATE = 4.0
 H4_S = 4 * 3600
 KINDS = ("hit_daily", "hit_weekly", "hit_monthly", "above", "range", "updown_day", "updown_4h")
+CONTROL = "updown_4h"                                   # Chainlink-settled: a control, never in a verdict
+BINANCE_KINDS = tuple(k for k in KINDS if k != CONTROL)
+MIN_G = 20                                              # fewer clusters than this: no t statistic printed
+KIND_LABEL = {"all": "全部币安结算", CONTROL: f"{CONTROL}（对照）"}
 NOON_KINDS = ("above", "range", "updown_day")
 HIT_KINDS = ("hit_daily", "hit_weekly", "hit_monthly")
 CONVS = ("open12", "close12")
@@ -989,10 +993,30 @@ def pbucket(p):
     return pd.cut(p, PBUCKETS, right=False, labels=labels)
 
 
-def post_tstar(trades, mk):
-    """Trades after T* of markets with a winner, with win flag, dt, notional, profit, hours to settle."""
-    m = mk[(mk["excluded"] == "") & mk["official"].isin([0.0, 1.0])][
-        ["cid", "kind", "type", "tstar", "tsec", "official", "closed_ts", "end", "slug"]]
+def risk_flags(mk):
+    """Per market, why its result at T* was decided only under a reading the official result settled
+    later ("" if none): 'noon_conv' = a noon market whose two candle conventions give different results
+    (the convention is chosen ex post, from the official outcomes); 'pre_created' = a hit market kept
+    as touched by its written window before it was created (one such market was resolved 'from
+    creation' instead and is excluded)."""
+    out = pd.Series("", index=mk.index, dtype=object)
+    if "comp_open12" in mk and "comp_close12" in mk:
+        a, b = mk["comp_open12"], mk["comp_close12"]
+        out[mk["kind"].isin(NOON_KINDS) & a.notna() & b.notna() & (a != b)] = "noon_conv"
+    if "created" in mk and "comp" in mk:
+        pre = mk["kind"].isin(HIT_KINDS) & (mk["comp"] == 1.0) & (mk["tstar"] - 60 < mk["created"])
+        out[pre] = "pre_created"
+    return out
+
+
+def post_tstar(trades, mk, first=FIRST, last=LAST):
+    """Trades after T* of markets with a winner, with win flag, dt, notional, profit, hours to settle,
+    after_close (stamped after closedTime: already settled, not 'unsettled'), in_period (ET day in
+    first .. last) and the market's resolution-risk flag."""
+    m = mk[(mk["excluded"] == "") & mk["official"].isin([0.0, 1.0])].copy()
+    if "risk" not in m:
+        m["risk"] = ""
+    m = m[["cid", "kind", "type", "tstar", "tsec", "official", "closed_ts", "end", "slug", "risk"]]
     t = trades.merge(m, on="cid", how="inner")
     t = t[t["ts"] >= t["tstar"]].copy()
     t["win"] = t["is_yes"] == (t["official"] == 1.0)
@@ -1001,8 +1025,10 @@ def post_tstar(trades, mk):
     t["profit"] = (1 - t["price"]) * t["size"]
     t["fee"] = FEE * t["price"] * (1 - t["price"]) * t["size"]
     t["hours"] = (t["closed_ts"] - t["ts"]) / 3600
+    t["after_close"] = np.isfinite(t["closed_ts"].to_numpy(float)) & (t["ts"] > t["closed_ts"])
     t["day"] = et_day(t["ts"])
     t["month"] = t["day"].str[:7]
+    t["in_period"] = (t["day"] >= first.isoformat()) & (t["day"] <= last.isoformat())
     return t
 
 
@@ -1013,12 +1039,13 @@ def et_day(ts):
 
 
 def lag_table(w, mk, lags=LAGS, by="kind"):
-    """Winning-token trades at p < 1 after T* + L: per kind (and all) x L."""
+    """Winning-token trades at p < 1 after T* + L: per kind x L, and 'all' = the Binance-settled kinds
+    (the Chainlink-settled control is its own row only)."""
     rows = []
     tot = mk[(mk["excluded"] == "") & mk["official"].isin([0.0, 1.0])].groupby("kind").size()
     for k in list(KINDS) + ["all"]:
-        s0 = w if k == "all" else w[w[by] == k]
-        nmk = int(tot.sum()) if k == "all" else int(tot.get(k, 0))
+        s0 = w[w[by].isin(BINANCE_KINDS)] if k == "all" else w[w[by] == k]
+        nmk = int(tot.reindex(BINANCE_KINDS).fillna(0).sum()) if k == "all" else int(tot.get(k, 0))
         for L in lags:
             s = s0[s0["dt"] >= L]
             ts = s[~s["taker_buy"]]
@@ -1075,28 +1102,60 @@ def near_table(cp, trades, mk):
         mu, se, t, G = clustered_mean(s["pnl"], s["size"], s["cid"])
         mu_t, _, t_t, _ = clustered_mean(s["pnl_taker"], s["size"], s["cid"])
         ts = s[~s["taker_buy"]]
-        mu_s, _, t_s, _ = clustered_mean(ts["pnl"], ts["size"], ts["cid"])
+        mu_s, _, t_s, G_s = clustered_mean(ts["pnl"], ts["size"], ts["cid"])
+        lost = lambda x: int((x.groupby("cid")["won"].min() < 1).sum()) if len(x) else 0
         return {"group": name, "points": len(c), "markets": c["cid"].nunique(), "model": c["p_fav"].mean(),
                 "win_all": c["won"].mean(), "pts_tr": s[["cid", "check"]].drop_duplicates().shape[0], "mk_tr": G,
                 "trades": len(s), "shares": s["size"].sum(),
                 "win_tr": (s["won"] * s["size"]).sum() / s["size"].sum() if len(s) else NAN,
                 "vwap": (s["price"] * s["size"]).sum() / s["size"].sum() if len(s) else NAN,
                 "pnl": mu, "se": se, "t": t, "pnl_taker": mu_t, "t_taker": t_t, "pnl_sell": mu_s, "t_sell": t_s,
-                "losses": int((s.groupby("cid")["won"].min() < 1).sum()) if len(s) else 0,
-                "loss_pts": int((c["won"] < 1).sum())}
+                "mk_sell": G_s, "losses_sell": lost(ts),
+                "losses": lost(s), "loss_pts": int((c["won"] < 1).sum()),
+                "exp_fail": float((1 - c["p_fav"]).sum())}
 
     by_check, by_kind = [], []
     for b in (">=0.99", "0.95-0.99"):
         cb, jb = cp[cp["bucket"] == b], j[j["bucket"] == b]
-        for name in ["all"] + list(CHECKS):
-            c = cb if name == "all" else cb[cb["check"] == name]
-            s = jb if name == "all" else jb[jb["check"] == name]
-            by_check.append({"bucket": b, "check": str(name), **row(str(name), c, s)})
         for k in KINDS:
             c, s = cb[cb["kind"] == k], jb[jb["kind"] == k]
             if len(c):
                 by_kind.append({"bucket": b, "kind": k, **row(k, c, s)})
+        # the pooled rows (and the verdict) are the Binance-settled kinds; the Chainlink control is
+        # its own by-kind row
+        cb, jb = cb[cb["kind"].isin(BINANCE_KINDS)], jb[jb["kind"].isin(BINANCE_KINDS)]
+        for name in ["all"] + list(CHECKS):
+            c = cb if name == "all" else cb[cb["check"] == name]
+            s = jb if name == "all" else jb[jb["check"] == name]
+            by_check.append({"bucket": b, "check": str(name), **row(str(name), c, s)})
     return pd.DataFrame(by_check), pd.DataFrame(by_kind), j
+
+
+def t_cell(t, G, losses):
+    """A clustered t for the report: '–' with fewer than MIN_G clusters (the cluster-robust SE is
+    meaningless then); '†' when no cluster lost (the SE reflects price dispersion only, nothing about
+    the tail)."""
+    if not (np.isfinite(t) and np.isfinite(G)) or G < MIN_G:
+        return "–"
+    return f"{t:.2f}" + ("†" if losses == 0 else "")
+
+
+def calibration(cp, mk, kinds=BINANCE_KINDS, bucket=0.99):
+    """Model >= bucket checkpoints of these kinds: points, expected failures sum(1 - p_fav), observed
+    failures as checkpoints, distinct markets, events and ET days (the same market repeats across
+    checkpoints and strikes of one day share one BTC path, so the checkpoints are not independent)."""
+    c = cp[(cp["p_fav"] >= bucket) & cp["kind"].isin(kinds)]
+    if not len(c):
+        return {"points": 0, "expected": NAN, "fail_pts": 0, "fail_mk": 0, "fail_ev": 0, "fail_days": 0, "days": 0}
+    m = mk.set_index("cid")
+    off = m["official"].reindex(c["cid"]).to_numpy()
+    won = np.where(c["fav_yes"], off, 1 - off)
+    lost = c[won < 1]
+    ev = m["event_slug"].reindex(lost["cid"]) if "event_slug" in m else pd.Series(dtype=object)
+    day = lambda x: et_day(pd.Series(x["anchor"].to_numpy(np.int64) - 1, index=x.index))
+    return {"points": len(c), "expected": float((1 - c["p_fav"]).sum()), "fail_pts": len(lost),
+            "fail_mk": lost["cid"].nunique(), "fail_ev": ev.nunique(), "fail_days": day(lost).nunique() if len(lost) else 0,
+            "days": day(c).nunique()}
 
 
 # ===================================================================== spot build / check
@@ -1202,24 +1261,34 @@ def md_table(df, cols, heads=None):
     return "\n".join(out)
 
 
-def daily_dollars(w, L=5, cap=0.995, first=FIRST, last=LAST):
-    s = w[(w["dt"] >= L) & (w["price"] <= cap)]
+def daily_dollars(w, L=5, cap=0.995, first=FIRST, last=LAST, kinds=BINANCE_KINDS):
+    """Per ET day of first .. last (every day, empty ones as 0): notional and profit of the winning-token
+    trades at dt >= L, p <= cap, of these kinds, not after closedTime; and the taker-sell / taker-buy
+    parts. Trades on ET days outside the period are left out here (they are reported apart)."""
     alld = [d.isoformat() for d in days(first, last)]
-    per = s.groupby("day").agg(notional=("notional", "sum"), profit=("profit", "sum"))
-    idx = sorted(set(alld) | set(per.index))   # a settlement can spill into the day after the period
-    per = per.reindex(idx, fill_value=0.0)
-    ss = s[~s["taker_buy"]].groupby("day").agg(sell_notional=("notional", "sum"), sell_profit=("profit", "sum"))
-    return per.join(ss.reindex(idx, fill_value=0.0))
+    s = w[(w["dt"] >= L) & (w["price"] <= cap) & w["kind"].isin(kinds) & w["day"].isin(set(alld))]
+    if "after_close" in s:
+        s = s[~s["after_close"]]
+    agg = lambda x, p: x.groupby("day").agg(**{f"{p}notional": ("notional", "sum"), f"{p}profit": ("profit", "sum")}) \
+        .reindex(alld, fill_value=0.0)
+    return agg(s, "").join(agg(s[~s["taker_buy"]], "sell_")).join(agg(s[s["taker_buy"]], "buy_"))
+
+
+def day_stats(dd, col, bar=50.0):
+    """mean, median and days >= bar of one daily_dollars column."""
+    x = dd[col]
+    return {"mean": float(x.mean()) if len(x) else NAN, "median": float(x.median()) if len(x) else NAN,
+            "ge": int((x >= bar).sum()), "n": len(x)}
 
 
 def lag_md(lt, a, b, title):
     """kind x L table, cells 'a / b' (dollars)."""
     rows = []
-    for k in list(KINDS) + ["all"]:
+    for k in list(BINANCE_KINDS) + ["all", CONTROL]:
         s = lt[lt["kind"] == k]
         if not len(s):
             continue
-        r = {"kind": k, "mk": int(s["mk"].iloc[0])}
+        r = {"kind": KIND_LABEL.get(k, k), "mk": int(s["mk"].iloc[0])}
         for L in LAGS:
             x = s[s["L"] == L]
             r[f"L{L}"] = f"{_f(x[a].iloc[0])} / {_f(x[b].iloc[0])}" if len(x) else "–"
