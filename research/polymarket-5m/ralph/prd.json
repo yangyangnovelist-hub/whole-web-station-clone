@@ -154,7 +154,7 @@
         "Reuse the frozen current-H one-second move, trailing sigma, active-window and source-clock semantics for independent spot-trade, Binance perpetual raw-trade and Deribit quote candidates",
         "On later closed UTC hours report at least 30 source candidates, one-to-one same-move source-clock matches, spot-candidate coverage, signed receipt-lead quantiles, equal-exposure deterministic time-shift placebos and a direction-reversal control",
         "Treat receipt timing only as a source-quality screen; no source becomes active from confirmation or lead statistics alone",
-        "Promote a source only after a strict live-equivalent H replay compares spot-only with the combined race using first-trigger and rate-limit state, the frozen limit, direct dual-token L2, the 150 millisecond venue hold, at least five executable shares and real taker fees, and the combined race improves out-of-sample net EV or fills without worsening loss controls",
+        "Promote a source only after a strict live-equivalent H replay compares the deployed spot-trade plus futures-BBO baseline with the combined race using first-trigger and rate-limit state, the frozen limit, direct dual-token L2, the 150 millisecond venue hold, at least five executable shares and real taker fees, and the combined race improves out-of-sample net EV or fills without worsening loss controls",
         "The live engine records source and clock metadata, deduplicates duplicate transport frames and keeps Deribit 100 millisecond batched trades excluded",
         "No production deployment, wallet access or real order is part of this story",
         "Tests pass",
@@ -162,7 +162,7 @@
       ],
       "priority": 7,
       "passes": false,
-      "notes": "Both feeds remain shadow-only. The first production comparator is invalid because it paired candidates only against spot while the real baseline already races spot with futures BBO. Corrected telemetry logs every raw-futures/Deribit candidate plus the actual post-cooldown baseline winner using monotonic receive clocks, performs no online pairing, and logs winners only after the live order hook. Baseline and combined cooldown races must be replayed independently over co-recorded direct Polymarket L2; activation still requires out-of-sample net EV or fill improvement without weaker loss controls."
+      "notes": "Both feeds remain shadow-only. The first production comparator is invalid because it paired candidates only against spot while the real baseline already races spot with futures BBO. Corrected telemetry logs every raw-futures/Deribit candidate plus the actual post-cooldown baseline winner using monotonic receive clocks, performs no online pairing, and logs winners only after the live order hook. The strict comparator now replays the deployed baseline and four-source combined race independently from one immutable V3 freeze and content-hashed receipt-race-ready data, censors target times beyond the recording watermark, reports share-weighted EV, fills, source attribution and loss controls, and refuses automatic activation. Numeric scoring waits for the co-recorded Monday direct-L2 artifact."
     },
     {
       "id": "US-013",

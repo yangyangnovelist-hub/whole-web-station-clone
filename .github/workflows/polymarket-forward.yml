@@ -129,6 +129,8 @@ jobs:
           python h_replay_run.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
             --rows-out "$RUNNER_TEMP/current-h-rows.jsonl" \
             > "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json"
+          python h_source_race.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-source-race.json"
           if python - "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json" <<'PY'
           import json, sys
           raise SystemExit(0 if json.load(open(sys.argv[1]))["dataset"]["paper_gate_eligible"] else 1)

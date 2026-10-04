@@ -163,6 +163,9 @@ def test_strict_normalized_replay_generates_and_scores_one_executable_signal():
         {"kind": "clob_snapshot", "recv_ms": 106_290.0, "source_ts_ms": 106_280.0,
          "market_id": "m", "asset_id": "down", "bids": [{"price": "0.57", "size": "10"}],
          "asks": [{"price": "0.58", "size": "10"}], "seq": 6},
+        {"kind": "clob_snapshot", "recv_ms": 106_330.0, "source_ts_ms": 106_320.0,
+         "market_id": "m", "asset_id": "up", "bids": [{"price": "0.42", "size": "10"}],
+         "asks": [{"price": "0.43", "size": "10"}], "seq": 7},
     ]
     execution = replay.ReplayConfig(evaluation_ms=(300.0,), max_order_usd=10.0,
                                     signal_time_basis="exchange_source_timestamp")
@@ -192,6 +195,59 @@ def test_same_receipt_millisecond_processes_spot_before_clob():
     clob = [{"kind": "clob_connection", "recv_ms": 100.0, "seq": 0}]
 
     assert [event["kind"] for event in run._merged_events(spot, clob)] == ["spot_bbo", "clob_batch"]
+
+
+def test_summary_uses_share_weighted_net_ev_and_reports_loss_controls():
+    rows = [
+        {
+            "evaluation_ms": 500.0, "filled": True, "winner": "Up", "won": True,
+            "sent": True, "pnl_per_share": 0.60, "pnl": 3.0, "filled_shares": 5.0,
+            "day": "2026-10-05", "reason": "filled", "signal_source": "deribit_quote",
+            "all_in_cost": 0.40,
+        },
+        {
+            "evaluation_ms": 500.0, "filled": True, "winner": "Down", "won": False,
+            "sent": True, "pnl_per_share": -0.40, "pnl": -4.0, "filled_shares": 10.0,
+            "day": "2026-10-05", "reason": "filled", "signal_source": "futures_trade",
+            "all_in_cost": 0.40,
+        },
+    ]
+
+    report = run.summarize(rows, {})["latencies"]["500"]
+
+    assert report["filled_shares"] == 15.0
+    assert report["net_ev_per_share"] == pytest.approx(-1.0 / 15.0)
+    assert report["wins"] == 1
+    assert report["losses"] == 1
+    assert report["loss_rate"] == pytest.approx(0.5)
+
+
+def test_replay_normalized_censors_evaluations_past_recording_watermark(monkeypatch):
+    seen: dict[str, object] = {}
+
+    class FakeReplay:
+        def __init__(self, config):
+            self.records = []
+
+        def feed(self, event):
+            raise AssertionError("empty fixture must not feed events")
+
+        def finish(self, *, force=True):
+            seen["force"] = force
+            return []
+
+        def pending_evaluations(self):
+            return [{"market_id": "tail-a"}, {"market_id": "tail-b"}]
+
+    monkeypatch.setattr(run.replay, "HReplay", FakeReplay)
+
+    rows, counters = run.replay_normalized(
+        [], [], [], {}, replay.ReplayConfig(), run.SignalConfig(),
+    )
+
+    assert rows == []
+    assert seen["force"] is False
+    assert counters["censored_evaluations"] == 2
 
 
 def test_strict_replay_dispatches_optional_race_sources_without_enabling_them_by_default():

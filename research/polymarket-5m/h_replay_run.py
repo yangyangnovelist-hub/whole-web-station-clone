@@ -622,7 +622,8 @@ def replay_normalized(
             "trigger_reason": reason,
             "trial_edge": None,
         })
-    machine.finish()
+    machine.finish(force=False)
+    counters["censored_evaluations"] += len(machine.pending_evaluations())
     rows = machine.records
     for row in rows:
         winner = outcomes.get(str(row["market_id"]))
@@ -660,20 +661,27 @@ def summarize(rows: list[dict[str, Any]], counters: dict[str, Any]) -> dict[str,
         sample = [row for row in rows if float(row["evaluation_ms"]) == latency]
         fills = [row for row in sample if row["filled"] and row["winner"] is not None]
         sent = sum(bool(row["sent"]) for row in sample)
-        pnl_per_share = [float(row["pnl_per_share"]) for row in fills]
+        total_shares = sum(float(row["filled_shares"]) for row in fills)
+        total_pnl = sum(float(row["pnl"]) for row in fills)
         days = sorted({str(row["day"]) for row in fills})
         reasons = Counter(str(row["reason"]) for row in sample)
         sent_sources = Counter(str(row.get("signal_source") or "unknown") for row in sample if row["sent"])
         fill_sources = Counter(str(row.get("signal_source") or "unknown") for row in fills)
-        mean_ev = sum(pnl_per_share) / len(pnl_per_share) if pnl_per_share else None
+        mean_ev = total_pnl / total_shares if total_shares else None
+        wins = sum(bool(row["won"]) for row in fills)
+        losses = len(fills) - wins
         output["latencies"][str(int(latency))] = {
             "signals": len(sample),
             "sent": sent,
             "fills": len(fills),
+            "filled_shares": total_shares,
             "fill_rate_per_signal": len(fills) / len(sample) if sample else 0.0,
             "fill_rate_per_send": len(fills) / sent if sent else 0.0,
             "net_ev_per_share": mean_ev,
-            "pnl": sum(float(row["pnl"]) for row in fills),
+            "pnl": total_pnl,
+            "wins": wins,
+            "losses": losses,
+            "loss_rate": losses / len(fills) if fills else 0.0,
             "days": len(days),
             "day_cluster_lower_99": None,
             "exact_p": _exact_pvalue(fills) if mean_ev is not None and mean_ev > 0 else 1.0,
