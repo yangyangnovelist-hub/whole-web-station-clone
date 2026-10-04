@@ -130,6 +130,26 @@ def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
     }), 1_007.5)  # production consumes every futures frame, including size-only changes
     trader.record_binance_close("futures", "closed 1000", 1_007.8, conn_id=1)
     trader.record_binance_close("futures", "closed 1000", 1_008)
+
+    trader.record_binance_open("futures_trade", 1_009)
+    trader.record_binance_open("futures_trade", 1_009.1, conn_id=1)
+    future_trade = json.dumps({"e": "trade", "E": 902, "T": 901, "t": 13, "s": "BTCUSDT",
+                               "p": "80000.2", "q": "0.4", "m": False})
+    trader.on_binance_futures_trade(future_trade, 1_009.5, conn_id=0)
+    trader.on_binance_futures_trade(future_trade, 1_009.6, conn_id=1)
+    trader.record_binance_close("futures_trade", "closed 1000", 1_009.8, conn_id=1)
+    trader.record_binance_close("futures_trade", "closed 1000", 1_010)
+
+    trader.record_binance_open("deribit", 1_011)
+    quote = json.dumps({"jsonrpc": "2.0", "method": "subscription", "params": {
+        "channel": "quote.BTC-PERPETUAL", "data": {
+            "timestamp": 903, "best_bid_price": 80000.1, "best_ask_price": 80000.3,
+            "best_bid_amount": 2, "best_ask_amount": 3,
+        },
+    }})
+    trader.on_deribit_quote(quote, 1_011.5)
+    trader.on_deribit_quote(quote, 1_011.6)
+    trader.record_binance_close("deribit", "closed 1000", 1_012)
     trader.rec.close()
 
     clob = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/clob-btc.jsonl.gz")), "rt")]
@@ -153,6 +173,14 @@ def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
     assert [(row.get("T"), row.get("E")) for row in futures[1:3]] == [(899, 900), (900, 901)]
     assert all(row["connection_epoch"] == 1 and row["sequence"] == index
                for index, row in enumerate(futures))
+    futures_trades = [json.loads(line) for line in
+                      gzip.open(next(tmp_path.glob("raw/*/binance-futures-trade-strict.jsonl.gz")), "rt")]
+    assert [row["kind"] for row in futures_trades] == ["connection", "trade", "disconnect"]
+    assert futures_trades[1]["t"] == 13 and futures_trades[1]["T"] == 901
+    deribit = [json.loads(line) for line in
+               gzip.open(next(tmp_path.glob("raw/*/deribit-strict.jsonl.gz")), "rt")]
+    assert [row["kind"] for row in deribit] == ["connection", "quote", "disconnect"]
+    assert deribit[1]["timestamp"] == 903 and deribit[1]["bid"] == 80000.1
     assert pt.binance_stream_names(("btc",)) == (
         "btcusdt@aggTrade", "btcusdt@trade", "btcusdt@bookTicker",
     )

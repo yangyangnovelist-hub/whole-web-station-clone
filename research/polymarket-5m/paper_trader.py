@@ -50,6 +50,11 @@ BINANCE_FUTURES_WS = (
     "wss://fstream.binance.com/ws/btcusdt@bookTicker",
     "wss://fstream.binance.com/public/ws/btcusdt@bookTicker",
 )
+BINANCE_FUTURES_TRADE_WS = (
+    "wss://fstream.binance.com/ws/btcusdt@trade",
+    "wss://fstream.binance.com/market/stream?streams=btcusdt@trade",
+)
+DERIBIT_WS = "wss://www.deribit.com/ws/api/v2"
 SPOT_RACE_CONNECTIONS = 3
 FUTURES_RACE_CONNECTIONS = 2
 SLUG = "{coin}-updown-5m-{start}"
@@ -324,9 +329,11 @@ class LiveTrader:
         self.binance_sources = {
             "spot": {"epoch": 0, "sequence": 0, "active_connections": set(), "max_active": 0},
             "futures": {"epoch": 0, "sequence": 0, "active_connections": set(), "max_active": 0},
+            "futures_trade": {"epoch": 0, "sequence": 0, "active_connections": set(), "max_active": 0},
+            "deribit": {"epoch": 0, "sequence": 0, "active_connections": set(), "max_active": 0},
         }
-        self.binance_seen = {"spot": set(), "futures": set()}
-        self.binance_seen_order = {"spot": deque(), "futures": deque()}
+        self.binance_seen = {source: set() for source in self.binance_sources}
+        self.binance_seen_order = {source: deque() for source in self.binance_sources}
 
     def _next_clob_sequence(self):
         sequence = self.clob_sequence
@@ -360,7 +367,13 @@ class LiveTrader:
                   "active_connections": len(state["active_connections"]),
                   "max_active_connections": state["max_active"]}
         state["sequence"] += 1
-        self.rec.write("binance-strict" if source == "spot" else "binance-futures-strict", record)
+        stream = {
+            "spot": "binance-strict",
+            "futures": "binance-futures-strict",
+            "futures_trade": "binance-futures-trade-strict",
+            "deribit": "deribit-strict",
+        }[source]
+        self.rec.write(stream, record)
 
     def _first_binance_frame(self, source, key):
         seen = self.binance_seen[source]
@@ -484,6 +497,41 @@ class LiveTrader:
             "kind": "bookTicker", "recv_ms": recv_ms, "s": d.get("s"),
             "T": d.get("T") or d.get("E"), "E": d.get("E"), "u": d.get("u"),
             "b": d.get("b"), "B": d.get("B"), "a": d.get("a"), "A": d.get("A"), "conn_id": conn_id,
+        })
+
+    def on_binance_futures_trade(self, text, recv_ms, conn_id=0):
+        """Raw USD-M perpetual trades, deduplicated across the two public routes."""
+        msg = json.loads(text)
+        d = msg.get("data", msg)
+        if d.get("e") != "trade" or not d.get("s") or d.get("p") is None or d.get("t") is None:
+            return
+        key = ("trade", str(d["s"]), d["t"])
+        if not self._first_binance_frame("futures_trade", key):
+            return
+        self._binance_record("futures_trade", {
+            "kind": "trade", "recv_ms": recv_ms, "s": d.get("s"), "T": d.get("T"),
+            "E": d.get("E"), "t": d.get("t"), "p": d.get("p"), "q": d.get("q"),
+            "m": d.get("m"), "conn_id": conn_id,
+        })
+
+    def on_deribit_quote(self, text, recv_ms, conn_id=0):
+        """Live BTC perpetual quote only; the venue's batched trade channel is deliberately absent."""
+        msg = json.loads(text)
+        params = msg.get("params") or {}
+        if params.get("channel") != "quote.BTC-PERPETUAL" or not isinstance(params.get("data"), dict):
+            return
+        data = params["data"]
+        required = ("timestamp", "best_bid_price", "best_ask_price")
+        if any(data.get(key) is None for key in required):
+            return
+        key = ("quote", data["timestamp"], data["best_bid_price"], data["best_ask_price"])
+        if not self._first_binance_frame("deribit", key):
+            return
+        self._binance_record("deribit", {
+            "kind": "quote", "recv_ms": recv_ms, "timestamp": data["timestamp"],
+            "bid": data["best_bid_price"], "ask": data["best_ask_price"],
+            "bid_size": data.get("best_bid_amount"), "ask_size": data.get("best_ask_amount"),
+            "conn_id": conn_id,
         })
 
     def top(self, token):
@@ -707,6 +755,74 @@ class LiveTrader:
                     endpoint += 1
             await asyncio.sleep(2)
 
+    async def binance_futures_trade_loop(self, conn_id=0):
+        """Race the two public USD-M raw-trade routes and retain the first copy."""
+        import websockets
+        url = BINANCE_FUTURES_TRADE_WS[conn_id % len(BINANCE_FUTURES_TRADE_WS)]
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=20, max_size=None, compression=None) as ws:
+                    self.record_binance_open("futures_trade", time.time_ns() / 1_000_000, conn_id)
+                    try:
+                        async for text in ws:
+                            self.on_binance_futures_trade(text, time.time_ns() / 1_000_000, conn_id)
+                    except BaseException as error:
+                        self.record_binance_close(
+                            "futures_trade", repr(error), time.time_ns() / 1_000_000, conn_id,
+                        )
+                        raise
+                    else:
+                        self.record_binance_close(
+                            "futures_trade", f"closed {ws.close_code}",
+                            time.time_ns() / 1_000_000, conn_id,
+                        )
+            except Exception as error:
+                self.rec.write("errors", {
+                    "at": now_ms(), "where": "binance-futures-trade", "url": url,
+                    "err": repr(error),
+                })
+            await asyncio.sleep(2)
+
+    async def deribit_quote_loop(self):
+        """Record the London BTC perpetual quote as a timestamped shadow trigger."""
+        import websockets
+        while True:
+            try:
+                async with websockets.connect(
+                    DERIBIT_WS, ping_interval=20, max_size=None, compression=None,
+                ) as ws:
+                    self.record_binance_open("deribit", time.time_ns() / 1_000_000)
+                    await ws.send(json.dumps({
+                        "jsonrpc": "2.0", "id": 1, "method": "public/set_heartbeat",
+                        "params": {"interval": 20},
+                    }))
+                    await ws.send(json.dumps({
+                        "jsonrpc": "2.0", "id": 2, "method": "public/subscribe",
+                        "params": {"channels": ["quote.BTC-PERPETUAL"]},
+                    }))
+                    try:
+                        async for text in ws:
+                            message = json.loads(text)
+                            if message.get("method") == "heartbeat" and \
+                                    (message.get("params") or {}).get("type") == "test_request":
+                                await ws.send(json.dumps({
+                                    "jsonrpc": "2.0", "id": 3, "method": "public/test", "params": {},
+                                }))
+                                continue
+                            self.on_deribit_quote(text, time.time_ns() / 1_000_000)
+                    except BaseException as error:
+                        self.record_binance_close("deribit", repr(error), time.time_ns() / 1_000_000)
+                        raise
+                    else:
+                        self.record_binance_close(
+                            "deribit", f"closed {ws.close_code}", time.time_ns() / 1_000_000,
+                        )
+            except Exception as error:
+                self.rec.write("errors", {
+                    "at": now_ms(), "where": "deribit", "url": DERIBIT_WS, "err": repr(error),
+                })
+            await asyncio.sleep(2)
+
     @staticmethod
     async def _ping(ws, word, every):
         while True:
@@ -753,6 +869,9 @@ class LiveTrader:
                       self.coinbase_loop(), self.scheduler(), self.resolver(), self.reporter()]
         coroutines += [self.binance_loop(index) for index in range(SPOT_RACE_CONNECTIONS)]
         coroutines += [self.binance_futures_loop(index) for index in range(FUTURES_RACE_CONNECTIONS)]
+        coroutines += [self.binance_futures_trade_loop(index)
+                       for index in range(len(BINANCE_FUTURES_TRADE_WS))]
+        coroutines.append(self.deribit_quote_loop())
         tasks = [asyncio.create_task(c) for c in coroutines]
         completed = False
         try:

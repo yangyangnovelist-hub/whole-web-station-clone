@@ -147,6 +147,24 @@
       "notes": "Closed without training: only 65 target jumps exist in the two-hour causal freeze, while both transparent rules and six maintained tree/logistic models were far below break-even on later validation (best 1/35). The preregistered prerequisite of sufficient complete L2 sequences plus non-zero validated signal is therefore absent; fitting TLOB/LOBFrame now would only add model capacity to a tiny failed sample. Reopen only after multiple fresh UTC days provide enough target events and a simpler baseline shows positive validation signal."
     },
     {
+      "id": "US-012",
+      "title": "Validate and integrate receipt-race execution sources",
+      "description": "As the account owner, I want Binance perpetual raw trades and Deribit live quotes evaluated as causal execution clocks so that a genuine local-receipt lead can shorten H without turning ordinary cross-venue noise into orders.",
+      "acceptanceCriteria": [
+        "Reuse the frozen current-H one-second move, trailing sigma, active-window and source-clock semantics for independent spot-trade, Binance perpetual raw-trade and Deribit quote candidates",
+        "On later closed UTC hours report at least 30 source candidates, one-to-one same-move source-clock matches, spot-candidate coverage, signed receipt-lead quantiles, equal-exposure deterministic time-shift placebos and a direction-reversal control",
+        "Treat receipt timing only as a source-quality screen; no source becomes active from confirmation or lead statistics alone",
+        "Promote a source only after a strict live-equivalent H replay compares spot-only with the combined race using first-trigger and rate-limit state, the frozen limit, direct dual-token L2, the 150 millisecond venue hold, at least five executable shares and real taker fees, and the combined race improves out-of-sample net EV or fills without worsening loss controls",
+        "The live engine records source and clock metadata, deduplicates duplicate transport frames and keeps Deribit 100 millisecond batched trades excluded",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "The robust source-time audit keeps both feeds shadow-only. Deribit had a positive candidate-level median receipt lead in development and the later audit; Binance perpetual raw trades did not. The combined race now requires a full H execution replay over newly co-recorded Polymarket L2 before any activation decision."
+    },
+    {
       "id": "US-010",
       "title": "Run one untouched multi-day blind jump-prediction test",
       "description": "As the account owner, I want the chosen predictor tested once on data recorded after every feature, model and threshold is frozen so that the reported precision is genuinely forward evidence.",
@@ -159,7 +177,7 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 7,
+      "priority": 8,
       "passes": false,
       "notes": "The active research recorder is data-only; no credentials or order path may be introduced."
     },
@@ -175,7 +193,7 @@
         "Tests pass",
         "Typecheck passes"
       ],
-      "priority": 8,
+      "priority": 9,
       "passes": false,
       "notes": "No pass means no deployment."
     }

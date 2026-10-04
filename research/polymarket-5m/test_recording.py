@@ -328,6 +328,24 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     }), S0 * 1000 + 9.25)
     trader.record_binance_close("futures", "closed 1000", S0 * 1000 + 9.9, conn_id=1)
     trader.record_binance_close("futures", "closed 1000", S0 * 1000 + 10)
+    trader.record_binance_open("futures_trade", S0 * 1000 + 10.5)
+    trader.record_binance_open("futures_trade", S0 * 1000 + 10.6, conn_id=1)
+    trader.on_binance_futures_trade(json.dumps({
+        "e": "trade", "E": S0 * 1000 + 8, "T": S0 * 1000 + 7, "t": 11,
+        "s": "BTCUSDT", "p": "80000.5", "q": "0.02", "m": False,
+    }), S0 * 1000 + 11.25)
+    trader.record_binance_close("futures_trade", "closed 1000", S0 * 1000 + 11.9, conn_id=1)
+    trader.record_binance_close("futures_trade", "closed 1000", S0 * 1000 + 12)
+    trader.record_binance_open("deribit", S0 * 1000 + 12.5)
+    trader.on_deribit_quote(json.dumps({
+        "jsonrpc": "2.0", "method": "subscription", "params": {
+            "channel": "quote.BTC-PERPETUAL", "data": {
+                "timestamp": S0 * 1000 + 9, "best_bid_price": 80000.4,
+                "best_ask_price": 80000.6, "best_bid_amount": 4, "best_ask_amount": 5,
+            },
+        },
+    }), S0 * 1000 + 13.25)
+    trader.record_binance_close("deribit", "closed 1000", S0 * 1000 + 14)
     trader.rec.close()
 
     assert rc.build(tmp_path, tmp_path / "bundle")["strict_ready"] is False
@@ -339,8 +357,12 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     manifest = json.loads((strict / "manifest.json").read_text())
     assert manifest["schema"] == "polymarket-5m-strict-replay-v2"
     assert manifest["complete"] is True
+    assert manifest["receipt_race_ready"] is True
+    assert counts["receipt_race_ready"] is True
     assert manifest["counts"]["spot_bbo"] == 1
     assert manifest["counts"]["futures_bbo"] == 1
+    assert manifest["counts"]["futures_trade"] == 1
+    assert manifest["counts"]["deribit_quote"] == 1
     assert manifest["counts"]["clob_snapshot"] == 2
     assert manifest["counts"]["clob_price_change"] == 2
     assert archive.validate_standard_artifact(strict)["counts"] == manifest["counts"]
@@ -349,9 +371,13 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     assert [row["kind"] for row in source] == [
         "spot_connection", "spot_trade", "spot_bbo", "spot_disconnect",
         "futures_connection", "futures_bbo", "futures_disconnect",
+        "futures_trade_connection", "futures_trade", "futures_trade_disconnect",
+        "deribit_connection", "deribit_quote", "deribit_disconnect",
     ]
     assert source[2]["source_ts_ms"] is None and source[2]["bid"] == 80000.4
     assert source[5]["source_ts_ms"] == S0 * 1000 + 5
+    assert source[8]["source_ts_ms"] == S0 * 1000 + 7
+    assert source[11]["source_ts_ms"] == S0 * 1000 + 9
 
     clob = list(archive.iter_normalized_events(strict / "clob_events.jsonl.gz", family="clob"))
     assert [row["kind"] for row in clob] == [

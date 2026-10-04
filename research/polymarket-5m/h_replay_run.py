@@ -21,6 +21,7 @@ import h_replay_archive as archive
 WINDOW_S = 300
 TWAP_S = 60
 _NORMAL = NormalDist()
+DEFAULT_TRIGGER_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
 
 
 @dataclass(frozen=True)
@@ -203,10 +204,12 @@ class TimestampedFirstTrigger:
     def __init__(self, config: SignalConfig) -> None:
         self.config = config
         self.grid = SigmaGrid(config.sigma_window_s, config.sigma_min_observations, config.forward_fill_s)
-        self.trade_timestamps: list[float] = []
-        self.trade_log_prices: list[float] = []
-        self.futures_timestamps: list[float] = []
-        self.futures_log_prices: list[float] = []
+        self.source_timestamps: dict[str, list[float]] = {}
+        self.source_log_prices: dict[str, list[float]] = {}
+        self.trade_timestamps = self.source_timestamps.setdefault("spot_trade", [])
+        self.trade_log_prices = self.source_log_prices.setdefault("spot_trade", [])
+        self.futures_timestamps = self.source_timestamps.setdefault("futures_book_ticker", [])
+        self.futures_log_prices = self.source_log_prices.setdefault("futures_book_ticker", [])
 
     def _candidate(self, timestamps: list[float], log_prices: list[float], timestamp_ms: float,
                    price: float) -> Optional[Candidate]:
@@ -214,7 +217,7 @@ class TimestampedFirstTrigger:
             return None
         timestamp_s = timestamp_ms / 1_000.0
         if timestamps and timestamp_s < timestamps[-1]:
-            timestamp_s = timestamps[-1]
+            return None
         log_price = math.log(price)
         timestamps.append(timestamp_s)
         log_prices.append(log_price)
@@ -240,11 +243,25 @@ class TimestampedFirstTrigger:
     def update_trade(self, source_timestamp_ms: float, price: float) -> Optional[Candidate]:
         if price > 0:
             self.grid.update(source_timestamp_ms / 1_000.0, math.log(price))
-        return self._candidate(self.trade_timestamps, self.trade_log_prices, source_timestamp_ms, price)
+        return self.update_source("spot_trade", source_timestamp_ms, price)
 
     def update_futures(self, source_timestamp_ms: float, bid: float, ask: float) -> Optional[Candidate]:
-        return self._candidate(self.futures_timestamps, self.futures_log_prices, source_timestamp_ms,
-                               (bid + ask) / 2.0)
+        return self.update_source("futures_book_ticker", source_timestamp_ms, (bid + ask) / 2.0)
+
+    def update_source(self, source: str, source_timestamp_ms: float, price: float) -> Optional[Candidate]:
+        timestamps = self.source_timestamps.setdefault(source, [])
+        log_prices = self.source_log_prices.setdefault(source, [])
+        return self._candidate(timestamps, log_prices, source_timestamp_ms, price)
+
+    def reset_source(self, source: str) -> None:
+        self.source_timestamps[source] = []
+        self.source_log_prices[source] = []
+        if source == "spot_trade":
+            self.trade_timestamps = self.source_timestamps[source]
+            self.trade_log_prices = self.source_log_prices[source]
+        elif source == "futures_book_ticker":
+            self.futures_timestamps = self.source_timestamps[source]
+            self.futures_log_prices = self.source_log_prices[source]
 
 
 @dataclass
@@ -520,11 +537,17 @@ def replay_normalized(
     outcomes: dict[str, str],
     execution_config: replay.ReplayConfig,
     signal_config: SignalConfig,
+    trigger_sources: frozenset[str] | set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     markets, tokens = _mapping_dict(mappings)
     rings: dict[int, SourceRing] = {}
     trigger = TimestampedFirstTrigger(signal_config)
     machine = replay.HReplay(execution_config)
+    enabled_sources = DEFAULT_TRIGGER_SOURCES if trigger_sources is None else frozenset(trigger_sources)
+    known_sources = {"spot_trade", "futures_book_ticker", "futures_trade", "deribit_quote"}
+    unknown_sources = enabled_sources - known_sources
+    if unknown_sources:
+        raise ValueError(f"unknown trigger sources: {sorted(unknown_sources)}")
     connected = False
     counters: Counter[str] = Counter()
     for event in _merged_events(source_events, clob_events):
@@ -535,6 +558,17 @@ def replay_normalized(
             continue
         candidate = None
         source = None
+        source_reset = {
+            "spot_connection": "spot_trade", "spot_disconnect": "spot_trade",
+            "futures_connection": "futures_book_ticker", "futures_disconnect": "futures_book_ticker",
+            "futures_trade_connection": "futures_trade",
+            "futures_trade_disconnect": "futures_trade",
+            "deribit_connection": "deribit_quote", "deribit_disconnect": "deribit_quote",
+        }.get(kind)
+        if source_reset is not None:
+            trigger.reset_source(source_reset)
+            counters[kind] += 1
+            continue
         if kind == "spot_trade":
             candidate = trigger.update_trade(float(event["source_ts_ms"]), float(event["price"]))
             counters["spot_trades"] += 1
@@ -544,8 +578,21 @@ def replay_normalized(
                                                float(event["bid"]), float(event["ask"]))
             counters["futures_bbo"] += 1
             source = "futures_book_ticker"
+        elif kind == "futures_trade":
+            candidate = trigger.update_source("futures_trade", float(event["source_ts_ms"]),
+                                              float(event["price"]))
+            counters["futures_trades"] += 1
+            source = "futures_trade"
+        elif kind == "deribit_quote":
+            candidate = trigger.update_source("deribit_quote", float(event["source_ts_ms"]),
+                                              (float(event["bid"]) + float(event["ask"])) / 2.0)
+            counters["deribit_quotes"] += 1
+            source = "deribit_quote"
         else:
             counters[kind] += 1
+            continue
+        if source not in enabled_sources:
+            counters[f"candidate_source_disabled_{source}"] += int(candidate is not None)
             continue
         if candidate is None or not connected:
             continue
@@ -632,7 +679,8 @@ def summarize(rows: list[dict[str, Any]], counters: dict[str, Any]) -> dict[str,
 
 
 def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FREEZE_PATH,
-                   rows_out: str | Path | None = None) -> dict[str, Any]:
+                   rows_out: str | Path | None = None,
+                   trigger_sources: frozenset[str] | set[str] | None = None) -> dict[str, Any]:
     archive_dir = Path(archive_dir)
     frozen = replay.load_freeze(freeze_path)
     execution = replay.config_from_freeze(frozen)
@@ -661,7 +709,13 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
         dataset = {"archive": archive_dir.name, "mapped_markets": len(mappings),
                    "raw_clob_files": len(clob_paths), "sample_scope": "single_utc_day_audit",
                    "paper_gate_eligible": False}
-    rows, counters = replay_normalized(spot, clob, mappings, outcomes, execution, signal)
+    if trigger_sources is None:
+        rows, counters = replay_normalized(spot, clob, mappings, outcomes, execution, signal)
+    else:
+        rows, counters = replay_normalized(
+            spot, clob, mappings, outcomes, execution, signal,
+            trigger_sources=trigger_sources,
+        )
     observation_run_id = str(dataset.get("manifest", {}).get("run_id") or archive_dir.name)
     for row in rows:
         row["observation_run_id"] = observation_run_id
@@ -681,6 +735,8 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
         "scope": frozen["semantics"]["scope"],
         "fill_qualification": frozen["semantics"]["fill_qualification"],
         "candidate_sources": frozen["semantics"]["candidate_sources"],
+        "active_trigger_sources": sorted(DEFAULT_TRIGGER_SOURCES if trigger_sources is None
+                                          else trigger_sources),
     }
     return result
 
@@ -692,8 +748,14 @@ def main() -> None:
     parser.add_argument("--require-paper-gate", action="store_true",
                         help="exit nonzero unless every signal-bearing market has an outcome")
     parser.add_argument("--rows-out", help="write replay observations as JSONL for idempotent accumulation")
+    parser.add_argument(
+        "--trigger-sources",
+        default=",".join(sorted(DEFAULT_TRIGGER_SOURCES)),
+        help="comma-separated trigger race; choices: spot_trade,futures_book_ticker,futures_trade,deribit_quote",
+    )
     args = parser.parse_args()
-    result = replay_archive(args.archive, args.freeze, args.rows_out)
+    trigger_sources = frozenset(source.strip() for source in args.trigger_sources.split(",") if source.strip())
+    result = replay_archive(args.archive, args.freeze, args.rows_out, trigger_sources)
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
     if args.require_paper_gate and not result["dataset"].get("paper_gate_eligible", False):
         raise SystemExit("strict replay is not paper-gate eligible")

@@ -101,7 +101,9 @@ def iter_normalized_events(path, *, family):
     kinds = {
         "spot": {"spot_trade", "spot_bbo"},
         "source": {"spot_connection", "spot_trade", "spot_bbo", "spot_disconnect",
-                   "futures_connection", "futures_bbo", "futures_disconnect"},
+                   "futures_connection", "futures_bbo", "futures_disconnect",
+                   "futures_trade_connection", "futures_trade", "futures_trade_disconnect",
+                   "deribit_connection", "deribit_quote", "deribit_disconnect"},
         "clob": {"clob_connection", "clob_snapshot", "clob_price_change", "clob_error"},
     }
     if family not in kinds:
@@ -110,9 +112,10 @@ def iter_normalized_events(path, *, family):
     previous_recv_ms = -float("inf")
     active_epoch = None
     last_epoch = 0
-    source_active = {"spot": None, "futures": None}
-    source_last_epoch = {"spot": 0, "futures": 0}
-    source_previous_sequence = {"spot": -1, "futures": -1}
+    source_names = ("spot", "futures", "futures_trade", "deribit")
+    source_active = {source: None for source in source_names}
+    source_last_epoch = {source: 0 for source in source_names}
+    source_previous_sequence = {source: -1 for source in source_names}
     previous_clob_source_ms = -float("inf")
     for line_number, row in _iter_json_objects(path):
         try:
@@ -127,22 +130,26 @@ def iter_normalized_events(path, *, family):
                 raise ValueError(f"recv_ms moved backwards from {previous_recv_ms} to {receive_ms}")
             if "source_ts_ms" not in row:
                 raise ValueError("missing source_ts_ms")
-            if family in ("spot", "source") and kind in ("spot_trade", "spot_bbo", "futures_bbo"):
-                required = ("price", "size") if kind == "spot_trade" else ("bid", "ask")
+            price_kinds = ("spot_trade", "futures_trade")
+            quote_kinds = ("spot_bbo", "futures_bbo", "deribit_quote")
+            if family in ("spot", "source") and kind in price_kinds + quote_kinds:
+                required = ("price", "size") if kind in price_kinds else ("bid", "ask")
                 if any(key not in row for key in required):
                     raise ValueError(f"missing {required}")
                 values = [float(row[key]) for key in required]
                 if not all(math.isfinite(value) for value in values) or values[0] <= 0 or values[1] < 0:
                     raise ValueError(f"invalid numeric {kind}")
-                if kind in ("spot_bbo", "futures_bbo") and values[0] >= values[1]:
+                if kind in quote_kinds and values[0] >= values[1]:
                     raise ValueError(f"crossed {kind}")
-                if kind in ("spot_trade", "futures_bbo"):
+                if kind in ("spot_trade", "futures_bbo", "futures_trade", "deribit_quote"):
                     source_timestamp = float(row["source_ts_ms"])
                     if not math.isfinite(source_timestamp):
                         raise ValueError(f"invalid source_ts_ms for {kind}")
             if family == "source":
                 stream = str(row["stream"])
-                if stream not in source_active or not kind.startswith(stream + "_"):
+                belongs_to_stream = kind.startswith(stream + "_") or \
+                    (stream == "futures_trade" and kind == "futures_trade")
+                if stream not in source_active or not belongs_to_stream:
                     raise ValueError(f"invalid source stream {stream!r} for {kind}")
                 stream_sequence = int(row["stream_sequence"])
                 if stream_sequence != source_previous_sequence[stream] + 1:
@@ -207,7 +214,7 @@ def iter_normalized_events(path, *, family):
     if family == "clob" and active_epoch is not None:
         raise ArchiveFormatError(f"{Path(path).name}: EOF with connection_epoch {active_epoch} still open")
     if family == "source" and any(epoch is not None for epoch in source_active.values()):
-        raise ArchiveFormatError(f"{Path(path).name}: EOF with Binance connection still open")
+        raise ArchiveFormatError(f"{Path(path).name}: EOF with price-source connection still open")
 
 
 def _iter_clob_file(path, file_index):

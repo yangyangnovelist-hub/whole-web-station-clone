@@ -393,7 +393,7 @@ def _source_stats():
 
 
 def _strict_binance_stream(records, source, symbol, stats):
-    """Normalize one independently ordered Binance socket without loading it into memory."""
+    """Normalize one independently ordered price-source socket without loading it into memory."""
     active_epoch = None
     last_epoch = 0
     previous_sequence = -1
@@ -452,20 +452,44 @@ def _strict_binance_stream(records, source, symbol, stats):
                                  event_ts_ms=float(row["E"]), bid=bid, ask=ask)
                 except (KeyError, TypeError, ValueError) as exc:
                     raise ValueError("malformed strict futures bookTicker") from exc
+            elif source == "futures_trade" and kind == "trade":
+                try:
+                    event.update(kind="futures_trade", source_ts_ms=float(row["T"]),
+                                 event_ts_ms=float(row["E"]), price=float(row["p"]),
+                                 size=float(row.get("q") or 0))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("malformed strict futures trade") from exc
+            elif source == "deribit" and kind == "quote":
+                try:
+                    bid, ask = float(row["bid"]), float(row["ask"])
+                    event.update(kind="deribit_quote", source_ts_ms=float(row["timestamp"]),
+                                 bid=bid, ask=ask,
+                                 bid_size=float(row.get("bid_size") or 0),
+                                 ask_size=float(row.get("ask_size") or 0))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("malformed strict Deribit quote") from exc
+                if not 0 < bid < ask:
+                    raise ValueError("crossed strict Deribit quote")
             else:
                 raise ValueError(f"unknown {source} strict source row")
-        yield (receive_ms, 0 if source == "spot" else 1, sequence), event
+        source_rank = {"spot": 0, "futures": 1, "futures_trade": 2, "deribit": 3}[source]
+        yield (receive_ms, source_rank, sequence), event
     stats["open_epoch_at_eof"] = active_epoch
 
 
 def _strict_source_events(src, symbol):
-    """Merge spot trades and timestamped futures BBO by actual local receipt time."""
-    stats = {"spot": _source_stats(), "futures": _source_stats()}
+    """Merge all timestamped trigger feeds by actual local receipt time."""
+    inputs = (
+        ("spot", "binance-strict"),
+        ("futures", "binance-futures-strict"),
+        ("futures_trade", "binance-futures-trade-strict"),
+        ("deribit", "deribit-strict"),
+    )
+    stats = {source: _source_stats() for source, _ in inputs}
     streams = [
-        _strict_binance_stream(iter_jsonl_strict(raw_files(src, "binance-strict")),
-                                "spot", symbol, stats["spot"]),
-        _strict_binance_stream(iter_jsonl_strict(raw_files(src, "binance-futures-strict")),
-                                "futures", symbol, stats["futures"]),
+        _strict_binance_stream(iter_jsonl_strict(raw_files(src, raw_name)),
+                               source, symbol, stats[source])
+        for source, raw_name in inputs
     ]
     for sequence, (_, event) in enumerate(heapq.merge(*streams, key=lambda item: item[0])):
         event["seq"] = sequence
@@ -640,9 +664,12 @@ def write_strict_bundle(src, out, coin, markets):
     counts = {"markets": len(registry), "outcomes": len(outcomes),
               "spot_connection": 0, "spot_trade": 0, "spot_bbo": 0, "spot_disconnect": 0,
               "futures_connection": 0, "futures_bbo": 0, "futures_disconnect": 0,
+              "futures_trade_connection": 0, "futures_trade": 0, "futures_trade_disconnect": 0,
+              "deribit_connection": 0, "deribit_quote": 0, "deribit_disconnect": 0,
               "clob_connection": 0, "clob_snapshot": 0, "clob_price_change": 0, "clob_error": 0}
     times = []
-    source_stats = {"spot": _source_stats(), "futures": _source_stats()}
+    source_stats = {source: _source_stats()
+                    for source in ("spot", "futures", "futures_trade", "deribit")}
     with gzip.open(strict / "source_events.jsonl.gz", "wt", compresslevel=3) as stream:
         for event, source_stats in _strict_source_events(src, f"{coin.upper()}USDT"):
             stream.write(json.dumps(event, separators=(",", ":")) + "\n")
@@ -685,16 +712,25 @@ def write_strict_bundle(src, out, coin, markets):
                     clob_stats["missing_source_ts"] == 0 and clob_stats["dropped_pre_epoch"] == 0 and
                     clob_stats["dropped_epoch_mismatch"] == 0 and
                     clob_stats["receive_time_regressions"] == 0 and clob_stats["open_epoch_at_eof"] is None)
+    receipt_race_ready = bool(
+        complete and counts["futures_trade_connection"] and counts["futures_trade"] and
+        counts["futures_trade_disconnect"] and counts["deribit_connection"] and
+        counts["deribit_quote"] and counts["deribit_disconnect"] and
+        source_stats["futures_trade"]["max_active_connections"] >= len(pt.BINANCE_FUTURES_TRADE_WS) and
+        source_stats["deribit"]["max_active_connections"] >= 1
+    )
     manifest = {"schema": STRICT_SCHEMA, "coin": coin, "run_id": os.environ.get("GITHUB_RUN_ID"),
                 "collector_region": os.environ.get("POLYMARKET_COLLECTOR_REGION", "unknown"),
-                "complete": complete, "started_ms": min(times) if times else None,
+                "complete": complete, "receipt_race_ready": receipt_race_ready,
+                "started_ms": min(times) if times else None,
                 "ended_ms": max(times) if times else None, "counts": counts,
                 "recorder_complete": recorder_complete, "source_integrity": source_stats,
                 "markets_with_both_token_snapshots": len(paired_market_ids),
                 "missing_resolved_market_ids": missing_resolved_books,
                 "unresolved_market_ids": unresolved_market_ids, "clob_integrity": clob_stats}
     (strict / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return {"strict_ready": complete, **{f"strict_{key}": value for key, value in counts.items()}}
+    return {"strict_ready": complete, "receipt_race_ready": receipt_race_ready,
+            **{f"strict_{key}": value for key, value in counts.items()}}
 
 
 class LatencyFiles:

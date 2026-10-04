@@ -68,6 +68,16 @@ def test_timestamped_first_futures_uses_exchange_clock_and_spot_trade_sigma():
     assert math.isfinite(candidate.sigma)
 
 
+def test_timestamped_first_rejects_a_regressed_source_clock():
+    trigger = run.TimestampedFirstTrigger(run.SignalConfig(
+        tau_hi_s=300.0, tau_lo_s=0.0, sigma_window_s=3, sigma_min_observations=2,
+    ))
+
+    assert trigger.update_source("deribit_quote", 2_000, 100.0) is None
+    assert trigger.update_source("deribit_quote", 1_999, 101.0) is None
+    assert trigger.source_timestamps["deribit_quote"] == [2.0]
+
+
 def test_direct_token_book_quarantines_an_unreproducible_venue_bba():
     token = run.TokenBook()
     token.replace(
@@ -169,6 +179,34 @@ def test_same_receipt_millisecond_processes_spot_before_clob():
     clob = [{"kind": "clob_connection", "recv_ms": 100.0, "seq": 0}]
 
     assert [event["kind"] for event in run._merged_events(spot, clob)] == ["spot_bbo", "clob_batch"]
+
+
+def test_strict_replay_dispatches_optional_race_sources_without_enabling_them_by_default():
+    source = [
+        {"kind": "futures_trade_connection", "recv_ms": 1.0, "source_ts_ms": None, "seq": 0,
+         "stream": "futures_trade", "stream_sequence": 0, "connection_epoch": 1},
+        {"kind": "futures_trade", "recv_ms": 2.0, "source_ts_ms": 1.0, "seq": 1,
+         "stream": "futures_trade", "stream_sequence": 1, "connection_epoch": 1,
+         "price": 100.0, "size": 1.0},
+        {"kind": "futures_trade_disconnect", "recv_ms": 3.0, "source_ts_ms": None, "seq": 2,
+         "stream": "futures_trade", "stream_sequence": 2, "connection_epoch": 1},
+        {"kind": "deribit_connection", "recv_ms": 4.0, "source_ts_ms": None, "seq": 3,
+         "stream": "deribit", "stream_sequence": 0, "connection_epoch": 1},
+        {"kind": "deribit_quote", "recv_ms": 5.0, "source_ts_ms": 4.0, "seq": 4,
+         "stream": "deribit", "stream_sequence": 1, "connection_epoch": 1,
+         "bid": 99.0, "ask": 101.0},
+        {"kind": "deribit_disconnect", "recv_ms": 6.0, "source_ts_ms": None, "seq": 5,
+         "stream": "deribit", "stream_sequence": 2, "connection_epoch": 1},
+    ]
+
+    rows, counters = run.replay_normalized(
+        source, [], [], {}, replay.ReplayConfig(), run.SignalConfig(),
+        trigger_sources={"spot_trade", "futures_book_ticker"},
+    )
+
+    assert rows == []
+    assert counters["futures_trades"] == 1
+    assert counters["deribit_quotes"] == 1
 
 
 def test_effective_book_uses_mirrored_opposite_bid_without_double_counting():
