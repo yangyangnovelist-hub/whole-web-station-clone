@@ -5,7 +5,7 @@
 Frozen at: `2026-10-03T13:44:25Z`
 Strategy fingerprint: `d63dea81dd8b5e43dc833cc754632d28a19fe9dd675bbedbcf66c55a27ef198e`
 
-- Post-freeze markets: 162
+- Post-freeze markets: 215
 - Orders / persistent-depth fills: 11 / 8 (72.7%)
 - Judged fills / days: 8 / 2
 - Net EV: -6.65 cents/share
