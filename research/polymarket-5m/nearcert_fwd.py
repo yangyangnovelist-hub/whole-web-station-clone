@@ -62,7 +62,8 @@ Verdict (as latency._judge): once 300 Binance-settled markets have an entry, ord
 entry's checkpoint time, judged once on every entry of the first 300: pass iff the per-share mean is
 > 0 and t >= 2. (*) Only when all 300 are resolved, a loaded recording reaches past the last of their
 ends (the chained recordings before it are then all in) and no checkpoint up to the 300th market's
-first entry is still undetermined (ref_pending, gamma_na). Written to <out>.verdict.md (with the
+first entry is still undetermined (ref_pending, gamma_na; one whose market ended more than 3 days ago
+stays skipped instead, so a record Gamma never returns cannot hold the verdict forever). Written to <out>.verdict.md (with the
 judged entries in <out>.trades.csv) and afterwards only read back. Runs with parameters other than
 the design's (--since, --checks, --sigma-window: for development) never write a verdict.
 
@@ -111,7 +112,7 @@ HIT_TYPES = ("hit_up", "hit_down")
 BINANCE_KINDS = ("above", "range", "updown_day", "hit_daily", "hit_weekly", "hit_monthly")
 CONTROL = "updown_4h"
 TYPES = ("above", "range", "updown_day", "hit_up", "hit_down", "updown_4h")
-CACHE = Path("/tmp/claude-0/-home-user-whole-web-station-clone/d12980d9-5808-53a6-9da0-aeb3bb8bdfb4/scratchpad/nearcert")
+CACHE = Path("/tmp/claude-0/-home-user-whole-web-station-clone/d12980d9-5808-53a6-9da0-aeb3bb8bdfb4/scratchpad/nearcert/fwd")
 GAMMA_MARKETS = "https://gamma-api.polymarket.com/markets?"
 VISION_1M = "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1m/BTCUSDT-1m-{d}.zip"
 NAN = float("nan")
@@ -137,6 +138,7 @@ STATUS = {  # every (market, checkpoint) ends in exactly one; the report counts 
     "trade": "买入",
 }
 UNDETERMINED = ("ref_pending", "gamma_na")
+UNDETERMINED_S = 3 * 86400  # ...and they hold the verdict only this long after their market's end
 KIND_NAMES = {"above": "above（高于）", "range": "range（区间）", "updown_day": "updown_day（日涨跌）",
               "hit_daily": "触及·日", "hit_weekly": "触及·周", "hit_monthly": "触及·月",
               CONTROL: "updown_4h（4 小时，Chainlink）"}
@@ -591,7 +593,7 @@ def clustered(pnl, groups):
     return mu, se, (mu / se if se > 0 else NAN), G
 
 
-def judge(out, entries, cp, data_end, n=N_VERDICT, design=True):
+def judge(out, entries, cp, data_end, n=N_VERDICT, design=True, now=None):
     """The once-only verdict (latency._judge): pinned in <out>.verdict.md with the judged entries in
     <out>.trades.csv, then only read back. See the module notes for when it is written."""
     pinned = Path(out).with_suffix(".verdict.md")
@@ -612,7 +614,9 @@ def judge(out, entries, cp, data_end, n=N_VERDICT, design=True):
         wait.append(f"{k} 个还没结算")
     if not (np.isfinite(data_end) and data_end >= first["end"].max()):
         wait.append("录制还没覆盖到它们全部结束")
-    u = int((cp["status"].isin(UNDETERMINED) & (cp["t"] <= cut)).sum()) if len(cp) else 0
+    now = time.time() if now is None else now
+    u = int((cp["status"].isin(UNDETERMINED) & (cp["t"] <= cut) & (now - cp["end"] < UNDETERMINED_S)).sum()) \
+        if len(cp) else 0
     if u:
         wait.append(f"{u} 个更早的时点还待定")
     if wait:
@@ -767,7 +771,7 @@ def run(roots, out, cache=CACHE, since=SINCE, now=None, checks=CHECKS, sigma_s=S
     data_end = max((b for _, _, b in meta if np.isfinite(b)), default=NAN)
     cp = combine(rows, scope, checks, data_end)
     entries = settle(cp, lambda c: gamma.fetch(c), now)
-    verdict = judge(out, entries, cp, data_end, n=n, design=design)
+    verdict = judge(out, entries, cp, data_end, n=n, design=design, now=now)
     text = report(cp, entries, verdict, meta, since, notes, dev, checks)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(text, encoding="utf-8")

@@ -105,3 +105,25 @@ jobs:
             -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
           for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
           exit 1
+
+      # NEARCERT.md test 2 (forward): the 95-99% near-certain side on the same unpacked recordings
+      # (markets ending after 2026-10-05 00:00 UTC; judged once on the first 300 markets with an
+      # entry, pinned in real/nearcert-forward.verdict.md and never recomputed). Its Gamma results and
+      # Binance 1m kline files are cached beside ladder_arb.py's, under the same actions/cache path.
+      - name: Near-certain side, forward check (nearcert_fwd.py; market data only, no orders)
+        if: ${{ !cancelled() }}
+        run: |
+          python nearcert_fwd.py "$RUNNER_TEMP/rec" --cache "$RUNNER_TEMP/ladder-arb-cache/nearcert" \
+            --out real/nearcert-forward.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in real/nearcert-forward.md real/nearcert-forward.verdict.md real/nearcert-forward.trades.csv; do
+            if [ -e "$f" ]; then git add "$f"; fi
+          done
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: near-certain side forward check, run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1

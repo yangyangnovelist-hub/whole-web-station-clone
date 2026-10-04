@@ -254,7 +254,8 @@ def test_month_table_matches_pooled_rows():
     m2, _, _ = N.decide_checked(mk, spot)
     cp, near, near_kind, j, mon = N.measure(m2, spot, trades)
     cols = ["points", "markets", "model", "win_all", "pts_tr", "mk_tr", "trades", "shares", "win_tr", "vwap", "pnl",
-            "se", "t", "pnl_taker", "t_taker", "pnl_sell", "t_sell", "losses", "loss_pts"]
+            "se", "t", "pnl_taker", "t_taker", "pnl_sell", "t_sell", "losses", "loss_pts", "exp_fail", "mk_sell",
+            "losses_sell"]
     for b in (N.TEST, N.REF):
         a = near[(near["bucket"] == b) & (near["group"] == "all")][cols].reset_index(drop=True)
         m = mon[(mon["bucket"] == b) & (mon["month"] == "all")][cols].reset_index(drop=True)
@@ -310,3 +311,23 @@ def test_h4_et_slugs_cover_est_windows():
     assert len(s) == 6 and all(int(x.rsplit("-", 1)[1]) % 3600 == 0 for x in s)
     s = N.h4_slugs_et(date(2025, 10, 10), date(2025, 10, 10))
     assert s[0] in R.h4_slugs(date(2025, 10, 10), date(2025, 10, 10))   # EDT: same as resolved.py's
+
+
+def test_report_smoke(tmp_path):
+    mk, spot, trades = fixture()
+    mk = N.rule_check(mk)
+    mk["month"] = mk["day"].str[:7]
+    rule_tab = N.rule_table(mk)
+    m2, conv, mism = N.decide_checked(mk, spot)
+    tabs = N.tables(m2, spot, trades, first=D, last=D)
+    cov, missing = R.coverage(m2, first=D, last=D)
+    ctx = dict(tabs, mk=m2, cov=cov, missing=missing, notes={"search_pages": 1, "search_hit_slugs": 0},
+               ref_rules=pd.DataFrame({"kind": ["above"], "month": ["2026-06"], "event_slug": ["e"], "slug": ["s"],
+                                       "sig": ["x"], "rule": [""]}),
+               rule_tab=rule_tab, excluded_kinds={}, quotes={"above": ("m0", ABOVE[:80])}, conv=conv, mism=mism,
+               mall=None, spot_info={"days": 2, "units": {"us": 2}, "missing": []},
+               trade_info=pd.DataFrame({"cid": ["c0"], "pages": [1], "windows": [1], "truncated": [False]}),
+               timing=None, timing_spot=None, runtime=1.0)
+    text = N.report(ctx, tmp_path / "r.md")
+    assert "判定" in text and "0.95-0.99" in text and "source=binance+coinbase" in text
+    assert (tmp_path / "r.md").read_text() == text + "\n"

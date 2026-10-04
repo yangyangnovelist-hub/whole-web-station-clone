@@ -11,6 +11,11 @@ trade fetch (rs.fetch_all_trades), the checkpoints and model (rs.checkpoints, rs
 near-certain table (rs.near_table, rs.clustered_mean) and the decided-but-unsettled tables
 (rs.post_tstar, rs.lag_table, rs.daily_dollars). What is new here:
 
+0. discovery extras: rs.h4_slugs asks for 4-hour windows on UTC boundaries, but in EST (2025-11-02 ..
+   2026-03-08) the series started at 01:00 / 05:00 / ... UTC (ET midnight + 4 h k), so those slugs are
+   asked too (control only); and hit events whose window rs.hit_window cannot read (the yearly "What
+   price will Bitcoin hit in 2025?", which the monthly series ran instead of a December-2025 event) are
+   kept as kind 'hit_other' only so that the rule check can name and exclude them.
 1. rules: every market's description (Gamma, fetched with the events) is parsed into a resolution
    signature: source (Binance / Chainlink / ...), pair (BTC/USDT, BTC/USD), candle (1m, 1h, ...), price
    field (Close / High / Low), time (noon = "12:00 in the ET timezone"), comparison / tie rule, the hit
@@ -419,6 +424,16 @@ def measure(mk, spot, trades):
     return cp, near, near_kind, j, mon
 
 
+def tables(mk, spot, trades, first=FIRST, last=LAST):
+    """Every table of the report that depends on trades: near-certain (by checkpoint / kind / month)
+    and decided-but-unsettled (lag table, per-day dollars, per-month profit)."""
+    cp, near, near_kind, j, mon = measure(mk, spot, trades)
+    pt = _call(rs.post_tstar, trades, mk, first=first, last=last)
+    w = pt[pt["win"] & (pt["price"] < 1)].copy()
+    return {"cp": cp, "near": near, "near_kind": near_kind, "j": j, "mon": mon, "lag": rs.lag_table(w, mk),
+            "dd": _call(rs.daily_dollars, w, first=first, last=last), "ymon": yield_month(w)}
+
+
 # ===================================================================== near-certain (resolved.py's tables)
 
 def bucket_points(cp, mk):
@@ -446,7 +461,8 @@ def stat_row(c, s):
             "win_tr": (s["won"] * s["size"]).sum() / W if W > 0 else NAN,
             "vwap": (s["price"] * s["size"]).sum() / W if W > 0 else NAN,
             "pnl": mu, "se": se, "t": t, "pnl_taker": mu_t, "t_taker": t_t, "pnl_sell": mu_s, "t_sell": t_s,
-            "mk_sell": G_s, "losses_sell": lost(ts), "losses": lost(s), "loss_pts": int((c["won"] < 1).sum())}
+            "mk_sell": G_s, "losses_sell": lost(ts), "losses": lost(s), "loss_pts": int((c["won"] < 1).sum()),
+            "exp_fail": float((1 - c["p_fav"]).sum())}
 
 
 def month_table(cp, j, mk, kinds=BINANCE_KINDS):
@@ -508,10 +524,11 @@ def _t(t, G, losses):
     return _f(t, 2)
 
 
-NEAR_COLS = ["bucket", "group", "points", "model", "win_all", "loss_pts", "pts_tr", "mk_tr", "trades", "shares",
-             "vwap", "win_tr", "losses", "pnl", "t_s", "pnl_taker", "tt_s", "pnl_sell", "ts_s", "mk_sell"]
-NEAR_HEADS = ["模型", "分钟前/类型/月", "时点", "模型均值", "实际胜率", "输的时点", "有成交时点", "有成交市场", "笔数", "份数",
-              "均价", "成交加权胜率", "有成交且输的市场", "每份盈亏", "t", "吃单每份", "t", "卖方主动每份", "t", "卖方主动市场"]
+NEAR_COLS = ["bucket", "group", "points", "model", "win_all", "loss_pts", "exp_fail", "pts_tr", "mk_tr", "trades",
+             "shares", "vwap", "win_tr", "losses", "pnl", "t_s", "pnl_taker", "tt_s", "mk_sell", "pnl_sell", "ts_s"]
+NEAR_HEADS = ["模型", "分钟前/类型/月", "时点", "模型均值", "实际胜率", "输的时点", "模型预期输的时点", "有成交时点", "有成交市场",
+              "笔数", "份数", "均价", "成交加权胜率", "有成交且输的市场", "每份盈亏", "t", "吃单每份", "t", "卖方主动市场",
+              "卖方主动每份", "t"]
 
 
 def near_md(tab, group_col):
@@ -525,6 +542,7 @@ def near_md(tab, group_col):
     for c in ("pnl", "pnl_taker", "pnl_sell"):
         n2[c] = n2[c].map(lambda x: _f(x, 5))
     n2["shares"] = n2["shares"].map(lambda x: _f(x))
+    n2["exp_fail"] = n2["exp_fail"].map(lambda x: _f(x, 1)) if "exp_fail" in n2 else "–"
     return rs.md_table(n2, NEAR_COLS, NEAR_HEADS)
 
 
@@ -569,8 +587,8 @@ def report(ctx, out_md):
     if len(mon):
         L.append("\n按月（检查时点所在 ET 月份，币安结算类型、各时点合并）：\n")
         L.append(near_md(mon, "month"))
-    L.append(f"\n对照 resolved.md（2026-03-14–09-30，旧版合并含 4 小时）：[0.95, 0.99) 每份 +0.01715，t 6.24，637 个市场；"
-             f"≥ 0.99 每份 −0.00370，t −0.48。")
+    L.append("\n对照 resolved.md（2026-03-14–09-30，同一代码，币安结算合并）：[0.95, 0.99) 每份 +0.01611，t 7.18，"
+             "244 个有成交市场（吃单 +0.01497；卖方主动 +0.06211，t 5.14，97 个市场）；≥ 0.99 每份 −0.00548，t −0.59，1438 个市场。")
     # ---------------------------------------------------------------- coverage
     L.append("\n## 覆盖\n")
     c2 = cov.copy()
@@ -649,9 +667,11 @@ def report(ctx, out_md):
         L.append(rs.lag_md(lt, "sell_notional", "sell_profit", "其中卖方主动（挂单买入能接到的）：名义$ / 收益$"))
         dd = ctx["dd"]
         L.append(f"\n每天（{len(dd)} 天，T*+5 秒、p ≤ 0.995、币安结算类型、结算之前）：名义$ 平均 {dd['notional'].mean():,.1f}、"
-                 f"中位数 {dd['notional'].median():,.1f}，≥ $50 的天 {int((dd['notional'] >= 50).sum())}；收益$ 平均 {dd['profit'].mean():,.2f}。"
+                 f"中位数 {dd['notional'].median():,.1f}，≥ $50 的天 {int((dd['notional'] >= 50).sum())}；收益$ 平均 {dd['profit'].mean():,.2f}、"
+                 f"中位数 {dd['profit'].median():,.2f}。"
                  f"卖方主动：名义$ 平均 {dd['sell_notional'].mean():,.1f}、中位数 {dd['sell_notional'].median():,.1f}。"
-                 f"resolved.md（2026-03-14–09-30）：名义 $1,422.5 / 中位 $127.3 / 卖方主动 $785.9。")
+                 f"resolved.md（2026-03-14–09-30，201 天，同一口径）：名义平均 $1,315.6、中位数 $23.6，≥ $50 的天 91；"
+                 f"收益平均 $38.66；卖方主动平均 $759.7、中位数 $8.8。")
         ym = ctx["ymon"]
         if len(ym):
             y2 = ym.copy()
@@ -748,18 +768,14 @@ def run(args, log=print):
     if args.step == "trades":
         return
     # ------------------------------------------------ measure
-    cp, near, near_kind, j, mon = measure(mk, spot, trades)
-    cp.to_parquet(cache / "checkpoints.parquet")
-    pt = _call(rs.post_tstar, trades, mk, first=FIRST, last=LAST)
-    w = pt[pt["win"] & (pt["price"] < 1)].copy()
-    lt = rs.lag_table(w, mk)
-    dd = _call(rs.daily_dollars, w, first=FIRST, last=LAST)
+    tabs = tables(mk, spot, trades)
+    tabs["cp"].to_parquet(cache / "checkpoints.parquet")
+    ctx.update(tabs)
     ctx.update(mk=mk, cov=cov, missing=missing, notes=notes, ref_rules=ref, rule_tab=rule_tab,
                excluded_kinds=excluded_kinds, quotes=quotes, conv=conv, mism=mism, mall=mall,
                spot_info={"days": len(rs.days(SPOT_FIRST, SPOT_LAST)) - len(spot_missing), "units": units,
                           "missing": spot_missing},
                trade_info=info[info["cid"].isin(set(mk["cid"]))] if len(info) else info,
-               near=near, near_kind=near_kind, mon=mon, lag=lt, dd=dd, ymon=yield_month(w),
                timing=json.loads(tj.read_text()) if tj.exists() else None,
                timing_spot=json.loads((cache / "timing_spot.json").read_text())
                if (cache / "timing_spot.json").exists() else None)
