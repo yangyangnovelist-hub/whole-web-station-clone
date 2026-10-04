@@ -118,7 +118,8 @@ def report(t, decision, lags):
          f"H 规则（test I 的信号，每次都加、2 秒间隔）的每个候选：触发后 {1000 * decision:.0f} ms（币安到都柏林约 105 ms 加发单）"
          "时边际 ≥ 12¢ 才算发单；撮合时刻（延迟 L，含 150 ms 冻结）边际仍 ≥ 12¢ 才算成交。"
          "真单试点 10 张发单只成交 1 张，下表看在哪个 L 上成交率会低到这个程度。", "",
-         f"发单 {len(t):,} 次，{t['market_id'].nunique() if len(t) else 0:,} 个市场。", "",
+         f"候选 {len(t):,} 个，发单 {int(t['sent'].sum()) if len(t) else 0:,} 次，"
+         f"{t.loc[t['sent'], 'market_id'].nunique() if len(t) else 0:,} 个市场。", "",
          "| 撮合延迟 L | 成交率 | 成交的每份 | 至少 5 份时的成交率 | 10 张里成交 ≤ 1 张的概率 |",
          "|---|---:|---:|---:|---:|"]
     from scipy.stats import binom

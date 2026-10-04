@@ -116,6 +116,7 @@ def build(root=HERE, now=None):
          "> " + test_line("检验 D（公平价筛选 θ=12¢）", Path(root) / "real/latency-test-d.md"),
          "> " + test_line("检验 G（币安 2σ、Polymarket 还没动，0.3 秒）", Path(root) / "real/latency-test-g.md"),
          "> " + test_line("检验 I（H 每次都加、反向 2 倍，0.4 秒）", Path(root) / "real/latency-test-i.md"),
+         "> " + test_line("检验 J（触发时发单、限价放宽，0.45 秒）", Path(root) / "real/latency-test-j.md"),
          "**其他前向检验**"]
     L += ["> " + ln for ln in forward_lines(Path(root) / "forward/confirm.md")]
     text = "\n".join(L)

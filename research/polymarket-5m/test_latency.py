@@ -439,3 +439,27 @@ def test_fill_rate_tracks_the_stale_ask(export, tmp_path, monkeypatch):
     # a looser limit (theta 0) fills the 0.70 ask at 0.4 s too: every sent order fills
     ev, rate, n = fr.ev_per_send(t, 0.4, 0.30, 0.0)
     assert n >= N and rate > 0.9
+
+
+def test_test_j_counts_unfilled_orders_as_zero(export, tmp_path, monkeypatch):
+    """The fixture's jump: sent at +0.11 s (ask 0.50), the ask is 0.70 from +0.35 s. With a fair
+    value near 1 the 0.45 s match fills at 0.70; with the limit at fair - 0.40 it does not (0)."""
+    starts = [S0 + 300 * i for i in range(N)]
+    d = tmp_path / "rec" / "1" / "x" / "bundle-btc" / "latency"
+    _latency_dir(d, export, _coinbase_lines(export), starts)
+    lines = [l.replace('"COINBASE_TRADE"', '"BINANCE_WS_TRADE"') for l in _coinbase_lines(export)]
+    (d / "binance_trades.jsonl.gz").write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
+    monkeypatch.setattr(lt, "J_SINCE", "2026-09-01")
+    t, lags = lt.test_j_orders([tmp_path / "rec"])
+    main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
+    assert len(main) == N and main["jfill0.45"].all() and (main["ask0.45"] == 0.70).all()
+    monkeypatch.setattr(lt, "J_LIMIT", 0.40)
+    t, _ = lt.test_j_orders([tmp_path / "rec"])
+    main = t[np.isclose((t["t"] - S0) % 300, 100.05)]
+    assert not main["jfill0.45"].any() and (main["jpnl0.45"] == 0).all()
+    monkeypatch.setattr(lt, "J_N", 10)
+    out = tmp_path / "real" / "latency-test-j.md"
+    lt.main([str(tmp_path / "rec"), "--test-j", "--out", str(out), "--reps", "200"])
+    assert "检验 J（前 10 个市场）" in out.with_suffix(".verdict.md").read_text()
+    lt.run_test_j([tmp_path / "rec"], out)
+    assert "已判定，不再重算" in out.read_text()
