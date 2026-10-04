@@ -100,7 +100,7 @@ def load_seconds(directory, first=None, end=None):
         with zipfile.ZipFile(f) as z:
             raw = z.read(z.namelist()[0])
         d = pd.read_csv(io.BytesIO(raw), header=None, usecols=[0, 4])
-        if not np.issubdtype(d[0].dtype, np.number):  # a header row
+        if not pd.api.types.is_numeric_dtype(d[0]):  # a header row
             d = d.iloc[1:].astype(float)
         t = d[0].to_numpy(np.int64)
         ts.append(np.where(t > 10**14, t // 1_000_000, t // 1000))  # us or ms -> s
