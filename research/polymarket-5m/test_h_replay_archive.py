@@ -19,6 +19,11 @@ def _write_csv_gz(path, fieldnames, rows):
         writer.writerows(rows)
 
 
+def _write_jsonl_gz(path, rows):
+    with gzip.open(path, "wt", encoding="utf-8") as stream:
+        stream.writelines(json.dumps(row) + "\n" for row in rows)
+
+
 def test_spot_events_preserve_null_source_time_and_receipt_order(tmp_path):
     archive = importlib.import_module("h_replay_archive")
     path = tmp_path / "feeds.jsonl"
@@ -73,6 +78,35 @@ def test_spot_events_stream_a_zstd_fixture(tmp_path):
         "price": 80_123.5,
         "size": 0.125,
     }]
+
+
+def test_normalized_strict_stream_validates_family_sequence_and_epoch(tmp_path):
+    archive = importlib.import_module("h_replay_archive")
+    spot = tmp_path / "spot.jsonl.gz"
+    _write_jsonl_gz(spot, [
+        {"kind": "spot_trade", "recv_ms": 1000.25, "source_ts_ms": 999, "seq": 0,
+         "price": 80000.0, "size": 0.01},
+        {"kind": "spot_bbo", "recv_ms": 1000.5, "source_ts_ms": None, "seq": 1,
+         "bid": 79999.0, "ask": 80001.0},
+    ])
+    assert [row["kind"] for row in archive.iter_normalized_events(spot, family="spot")] == [
+        "spot_trade", "spot_bbo",
+    ]
+
+    clob = tmp_path / "clob.jsonl.gz"
+    _write_jsonl_gz(clob, [{
+        "kind": "clob_connection", "recv_ms": 1000.0, "source_ts_ms": None,
+        "seq": 0, "connection_epoch": 1, "token_count": 2,
+    }])
+    assert next(archive.iter_normalized_events(clob, family="clob"))["connection_epoch"] == 1
+    with pytest.raises(archive.ArchiveFormatError, match="still open"):
+        list(archive.iter_normalized_events(clob, family="clob"))
+
+    _write_jsonl_gz(clob, [{
+        "kind": "clob_connection", "recv_ms": 1000.0, "source_ts_ms": None, "seq": 0,
+    }])
+    with pytest.raises(archive.ArchiveFormatError, match="connection_epoch"):
+        list(archive.iter_normalized_events(clob, family="clob"))
 
 
 def test_clob_snapshots_use_outer_receive_order_when_source_time_inverts(tmp_path):

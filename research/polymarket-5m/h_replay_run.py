@@ -549,20 +549,35 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
     frozen = replay.load_freeze(freeze_path)
     execution = replay.config_from_freeze(frozen)
     signal = signal_config_from_freeze(frozen)
-    mappings = list(archive.iter_market_mappings(archive_dir / "market_registry.csv.gz"))
-    outcomes = {row["market_id"]: row["winner"] for row in archive.iter_outcomes(archive_dir / "market_outcomes.csv.gz")}
-    spot = archive.iter_spot_events(archive_dir / "feeds_probe.feeds_20261002.jsonl.zst")
-    clob_paths = sorted(archive_dir.glob("gh_recorder.clob-btc.*.jsonl.zst"))
-    clob = archive.iter_clob_events(clob_paths, error_paths=[archive_dir / "gh_recorder.errors.jsonl.zst"])
+    standard = archive_dir / "strict" if (archive_dir / "strict" / "manifest.json").exists() else archive_dir
+    manifest_path = standard / "manifest.json"
+    if manifest_path.exists():
+        manifest = archive.validate_standard_artifact(standard)["manifest"]
+        mappings = list(archive.iter_market_mappings(standard / "market_registry.csv.gz"))
+        outcomes = {row["market_id"]: row["winner"]
+                    for row in archive.iter_outcomes(standard / "market_outcomes.csv.gz")}
+        spot = archive.iter_normalized_events(standard / "spot_events.jsonl.gz", family="spot")
+        clob = archive.iter_normalized_events(standard / "clob_events.jsonl.gz", family="clob")
+        dataset = {"archive": archive_dir.name, "mapped_markets": len(mappings), "raw_clob_files": 1,
+                   "sample_scope": "standard_forward_artifact", "paper_gate_eligible": True,
+                   "manifest": manifest}
+    else:
+        mappings = list(archive.iter_market_mappings(archive_dir / "market_registry.csv.gz"))
+        outcomes = {row["market_id"]: row["winner"]
+                    for row in archive.iter_outcomes(archive_dir / "market_outcomes.csv.gz")}
+        spot = archive.iter_spot_events(archive_dir / "feeds_probe.feeds_20261002.jsonl.zst")
+        clob_paths = sorted(archive_dir.glob("gh_recorder.clob-btc.*.jsonl.zst"))
+        clob = archive.iter_clob_events(clob_paths, error_paths=[archive_dir / "gh_recorder.errors.jsonl.zst"])
+        dataset = {"archive": archive_dir.name, "mapped_markets": len(mappings),
+                   "raw_clob_files": len(clob_paths), "sample_scope": "single_utc_day_audit",
+                   "paper_gate_eligible": False}
     rows, counters = replay_normalized(spot, clob, mappings, outcomes, execution, signal)
     result = summarize(rows, counters)
-    result["dataset"] = {
-        "archive": archive_dir.name,
-        "mapped_markets": len(mappings),
-        "raw_clob_files": len(clob_paths),
-        "sample_scope": "single_utc_day_audit",
-        "paper_gate_eligible": False,
-    }
+    pending_outcomes = sorted({str(row["market_id"]) for row in rows if row.get("winner") is None})
+    if dataset["sample_scope"] == "standard_forward_artifact":
+        dataset["pending_signal_market_outcomes"] = pending_outcomes
+        dataset["paper_gate_eligible"] = not pending_outcomes
+    result["dataset"] = dataset
     result["protocol"] = {
         "scope": frozen["semantics"]["scope"],
         "fill_qualification": frozen["semantics"]["fill_qualification"],
@@ -575,8 +590,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--archive", required=True)
     parser.add_argument("--freeze", default=str(replay.FREEZE_PATH))
+    parser.add_argument("--require-paper-gate", action="store_true",
+                        help="exit nonzero unless every signal-bearing market has an outcome")
     args = parser.parse_args()
-    print(json.dumps(replay_archive(args.archive, args.freeze), indent=2, sort_keys=True, allow_nan=False))
+    result = replay_archive(args.archive, args.freeze)
+    print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    if args.require_paper_gate and not result["dataset"].get("paper_gate_eligible", False):
+        raise SystemExit("strict replay is not paper-gate eligible")
 
 
 if __name__ == "__main__":

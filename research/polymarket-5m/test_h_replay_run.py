@@ -1,4 +1,10 @@
+import csv
+import gzip
+import json
 import math
+import sys
+
+import pytest
 
 import h_replay as replay
 import h_replay_run as run
@@ -36,6 +42,7 @@ def test_bookticker_clock_is_receipt_minus_106ms_and_uses_trade_sigma():
     assert candidate.slot == 0
     assert candidate.direction == 1
     assert math.isfinite(candidate.sigma)
+    assert len(trigger.timestamps) == len(trigger.log_prices)
 
 
 def test_direct_token_book_quarantines_an_unreproducible_venue_bba():
@@ -124,3 +131,65 @@ def test_same_receipt_millisecond_processes_spot_before_clob():
     clob = [{"kind": "clob_connection", "recv_ms": 100.0, "seq": 0}]
 
     assert [event["kind"] for event in run._merged_events(spot, clob)] == ["spot_bbo", "clob_batch"]
+
+
+def test_replay_archive_auto_detects_standard_forward_contract(tmp_path, monkeypatch):
+    strict = tmp_path / "strict"
+    strict.mkdir()
+    with gzip.open(strict / "market_registry.csv.gz", "wt", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=[
+            "market_id", "start_ts", "up_token_id", "down_token_id", "updated_at",
+        ])
+        writer.writeheader()
+        writer.writerow({"market_id": "m", "start_ts": 0, "up_token_id": "up",
+                         "down_token_id": "down", "updated_at": 0})
+    with gzip.open(strict / "market_outcomes.csv.gz", "wt", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=[
+            "market_id", "winner", "resolution_ts", "source", "recorded_at",
+        ])
+        writer.writeheader()
+        writer.writerow({"market_id": "m", "winner": "Up", "resolution_ts": 300,
+                         "source": "gamma", "recorded_at": 301})
+    with gzip.open(strict / "spot_events.jsonl.gz", "wt") as stream:
+        stream.write(json.dumps({"kind": "spot_bbo", "recv_ms": 100.0, "source_ts_ms": None,
+                                 "seq": 0, "bid": 1.0, "ask": 2.0}) + "\n")
+    with gzip.open(strict / "clob_events.jsonl.gz", "wt") as stream:
+        stream.write(json.dumps({"kind": "clob_connection", "recv_ms": 90.0, "source_ts_ms": None,
+                                 "seq": 0, "connection_epoch": 1, "token_count": 2}) + "\n")
+        stream.write(json.dumps({"kind": "clob_error", "recv_ms": 91.0, "source_ts_ms": None,
+                                 "seq": 1, "connection_epoch": 1, "error": "closed"}) + "\n")
+    (strict / "manifest.json").write_text(json.dumps({
+        "schema": "polymarket-5m-strict-replay-v1", "complete": True,
+        "recorder_complete": True, "missing_resolved_market_ids": [],
+        "counts": {"markets": 1, "outcomes": 1, "spot_trade": 0, "spot_bbo": 1,
+                   "clob_connection": 1, "clob_snapshot": 0,
+                   "clob_price_change": 0, "clob_error": 1},
+    }))
+    seen = {}
+
+    def fake(spot, clob, mappings, outcomes, execution, signal):
+        seen["spot"] = list(spot)
+        seen["clob"] = list(clob)
+        seen["mappings"] = list(mappings)
+        seen["outcomes"] = outcomes
+        return [], {}
+
+    monkeypatch.setattr(run, "replay_normalized", fake)
+    result = run.replay_archive(tmp_path)
+
+    assert result["dataset"]["sample_scope"] == "standard_forward_artifact"
+    assert result["dataset"]["paper_gate_eligible"] is True
+    assert seen["spot"][0]["kind"] == "spot_bbo"
+    assert seen["clob"][0]["connection_epoch"] == 1
+    assert seen["mappings"][0]["up_token_id"] == "up" and seen["outcomes"] == {"m": "Up"}
+
+
+def test_cli_require_paper_gate_exits_nonzero(monkeypatch, capsys):
+    monkeypatch.setattr(run, "replay_archive", lambda *_: {
+        "dataset": {"paper_gate_eligible": False, "pending_signal_market_outcomes": ["m"]},
+    })
+    monkeypatch.setattr(sys, "argv", ["h_replay_run.py", "--archive", "unused", "--require-paper-gate"])
+
+    with pytest.raises(SystemExit, match="not paper-gate eligible"):
+        run.main()
+    assert '"paper_gate_eligible": false' in capsys.readouterr().out

@@ -280,3 +280,109 @@ def test_binance_trades_reach_the_latency_files(recorded, tmp_path):
     import gzip as gz
     rows = [json.loads(l) for l in gz.open(tmp_path / "bundle" / "latency" / "binance_trades.jsonl.gz", "rt")]
     assert [r["price"] for r in rows] == [80000.5, 80001.0] and rows[0]["trade_ts"] == S0 + 100
+
+
+def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_path):
+    import h_replay_archive as archive
+
+    trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: [])
+    market = {**gamma(S0, up_won=True), "conditionId": "0xstrict"}
+    parsed = pt.parse_gamma_market(market)
+    trader.rec.write("markets", market)
+    trader.markets[parsed["slug"]] = parsed
+    trader.token_coin.update({parsed["up_token"]: "btc", parsed["down_token"]: "btc"})
+    trader.subscribed.update((parsed["up_token"], parsed["down_token"]))
+
+    trader.record_clob_open(S0 * 1000)
+    trader.on_clob(json.dumps([
+        {**book(parsed["up_token"], 0.32, 0.33), "market": "0xstrict", "timestamp": str(S0 * 1000 + 10)},
+        {**book(parsed["down_token"], 0.66, 0.67), "market": "0xstrict", "timestamp": str(S0 * 1000 + 11)},
+    ]), S0 * 1000 + 20.25)
+    trader.on_clob(json.dumps({
+        "event_type": "price_change", "market": "0xstrict", "timestamp": str(S0 * 1000 + 30),
+        "price_changes": [
+            {"asset_id": parsed["up_token"], "price": "0.34", "size": "7", "side": "SELL",
+             "best_bid": "0.32", "best_ask": "0.33"},
+            {"asset_id": parsed["down_token"], "price": "0.65", "size": "6", "side": "BUY",
+             "best_bid": "0.66", "best_ask": "0.67"},
+        ],
+    }), S0 * 1000 + 40.5)
+    trader.record_clob_close("closed 1000", S0 * 1000 + 50)
+    trader.on_binance(json.dumps({"stream": "btcusdt@trade", "data": {
+        "e": "trade", "s": "BTCUSDT", "T": S0 * 1000 + 5, "p": "80000.5", "q": "0.01", "m": False,
+    }}), S0 * 1000 + 6.25)
+    trader.on_binance(json.dumps({"stream": "btcusdt@bookTicker", "data": {
+        "u": 9, "s": "BTCUSDT", "b": "80000.4", "B": "2", "a": "80000.6", "A": "3",
+    }}), S0 * 1000 + 7.5)
+    trader.rec.close()
+
+    assert rc.build(tmp_path, tmp_path / "bundle")["strict_ready"] is False
+    trader.record_complete(S0 * 1000 + 60)
+    trader.rec.close()
+    counts = rc.build(tmp_path, tmp_path / "bundle")
+    strict = tmp_path / "bundle" / "strict"
+    assert counts["strict_ready"] is True
+    manifest = json.loads((strict / "manifest.json").read_text())
+    assert manifest["schema"] == "polymarket-5m-strict-replay-v1"
+    assert manifest["complete"] is True
+    assert manifest["counts"]["spot_bbo"] == 1
+    assert manifest["counts"]["clob_snapshot"] == 2
+    assert manifest["counts"]["clob_price_change"] == 2
+    assert archive.validate_standard_artifact(strict)["counts"] == manifest["counts"]
+
+    spot = list(archive.iter_normalized_events(strict / "spot_events.jsonl.gz", family="spot"))
+    assert [row["kind"] for row in spot] == ["spot_trade", "spot_bbo"]
+    assert spot[1]["source_ts_ms"] is None and spot[1]["bid"] == 80000.4
+
+    clob = list(archive.iter_normalized_events(strict / "clob_events.jsonl.gz", family="clob"))
+    assert [row["kind"] for row in clob] == [
+        "clob_connection", "clob_snapshot", "clob_snapshot",
+        "clob_price_change", "clob_price_change", "clob_error",
+    ]
+    assert {row["asset_id"] for row in clob if "asset_id" in row} == {
+        parsed["up_token"], parsed["down_token"],
+    }
+    assert {row["connection_epoch"] for row in clob} == {1}
+    snapshots = [row for row in clob if row["kind"] == "clob_snapshot"]
+    assert snapshots[0]["asks"][0]["size"] == "150"
+
+    mappings = list(archive.iter_market_mappings(strict / "market_registry.csv.gz"))
+    outcomes = list(archive.iter_outcomes(strict / "market_outcomes.csv.gz"))
+    assert mappings[0]["market_id"] == outcomes[0]["market_id"] == "0xstrict"
+    assert mappings[0]["up_token_id"] == parsed["up_token"] and outcomes[0]["winner"] == "Up"
+
+
+def test_strict_json_reader_rejects_a_partial_line(tmp_path):
+    path = tmp_path / "broken.jsonl.gz"
+    with gzip.open(path, "wt") as stream:
+        stream.write('{"ok":1}\n{"partial":')
+    with pytest.raises(ValueError, match="invalid JSON"):
+        list(rc.iter_jsonl_strict([path]))
+
+
+def test_strict_streams_reject_missing_receipt_timestamps(tmp_path):
+    with pytest.raises(ValueError, match="missing recv_ms"):
+        list(rc._strict_spot_events([{"s": "BTCUSDT", "kind": "bookTicker", "b": "1", "a": "2"}],
+                                    "BTCUSDT"))
+
+    day = tmp_path / "raw" / "2026-10-04"
+    day.mkdir(parents=True)
+    with gzip.open(day / "clob-btc.jsonl.gz", "wt") as stream:
+        stream.write(json.dumps({"sequence": 1, "connection_epoch": 1, "msg": {}}) + "\n")
+    with pytest.raises(ValueError, match="missing recv_ms"):
+        list(rc._strict_clob_inputs(tmp_path, "btc"))
+
+
+def test_strict_clob_integrity_rejects_duplicate_source_sequence(tmp_path):
+    day = tmp_path / "raw" / "2026-10-04"
+    day.mkdir(parents=True)
+    with gzip.open(day / "errors.jsonl.gz", "wt") as stream:
+        stream.write(json.dumps({"where": "clob-open", "at": 1, "sequence": 1,
+                                 "connection_epoch": 1}) + "\n")
+        stream.write(json.dumps({"where": "clob", "at": 4, "sequence": 3,
+                                 "connection_epoch": 1, "connection_active": True}) + "\n")
+    with gzip.open(day / "clob-btc.jsonl.gz", "wt") as stream:
+        stream.write(json.dumps({"recv_ms": 2, "sequence": 1, "connection_epoch": 1,
+                                 "msg": {"event_type": "ignored"}}) + "\n")
+    rows = list(rc._strict_clob_events(tmp_path, "btc", {}))
+    assert rows[-1][1]["source_sequence_regressions"] == 1

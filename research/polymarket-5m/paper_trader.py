@@ -216,6 +216,13 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def binance_stream_names(coins):
+    """Receipt-ordered spot inputs used by the strict sub-second replays."""
+    return tuple(stream for coin in coins for stream in
+                 ((f"{coin}usdt@aggTrade", f"{coin}usdt@trade", f"{coin}usdt@bookTicker") if coin == "btc"
+                  else (f"{coin}usdt@aggTrade",)))
+
+
 def fetch_json(url, timeout=10):
     req = urllib.request.Request(url, headers={"User-Agent": "paper-trader/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -262,6 +269,8 @@ class Recorder:
         self.files, self.last_flush = {}, 0.0
 
     def write(self, name, obj):
+        if name == "markets" and isinstance(obj, dict) and "_recorded_at_ms" not in obj:
+            obj = {**obj, "_recorded_at_ms": time.time_ns() / 1_000_000}
         day = time.strftime("%Y-%m-%d", time.gmtime())
         f = self.files.get((day, name))
         if f is None:
@@ -301,12 +310,43 @@ class LiveTrader:
         self.last_btc = None
         self.subscribed = set()
         self.ws = None
+        self.clob_epoch = 0
+        self.clob_sequence = 0
+        self.clob_active = False
+        self.binance_bbo = {}
+
+    def _next_clob_sequence(self):
+        sequence = self.clob_sequence
+        self.clob_sequence += 1
+        return sequence
+
+    def record_clob_open(self, at_ms=None):
+        """Start one explicit connection epoch before accepting any book messages."""
+        self.clob_epoch += 1
+        self.clob_active = True
+        self.rec.write("errors", {"at": now_ms() if at_ms is None else at_ms, "where": "clob-open",
+                                  "tokens": len(self.subscribed), "connection_epoch": self.clob_epoch,
+                                  "sequence": self._next_clob_sequence()})
+        return self.clob_epoch
+
+    def record_clob_close(self, error, at_ms=None):
+        """Close the current connection epoch in the same global receipt sequence."""
+        was_active = self.clob_active
+        self.clob_active = False
+        self.rec.write("errors", {"at": now_ms() if at_ms is None else at_ms, "where": "clob",
+                                  "err": str(error), "connection_epoch": self.clob_epoch,
+                                  "connection_active": was_active, "sequence": self._next_clob_sequence()})
+
+    def record_complete(self, at_ms=None):
+        self.rec.write("errors", {"at": now_ms() if at_ms is None else at_ms,
+                                  "where": "recorder-complete"})
 
     # -- state updates (pure, unit-tested) --
     def on_clob(self, text, recv_ms):
         if text in ("PONG", "pong"):
             return
         msg = json.loads(text)
+        sequence = self._next_clob_sequence()
         by_coin = {}
         for ev in msg if isinstance(msg, list) else [msg]:
             if not isinstance(ev, dict) or ev.get("event_type") == "new_market":
@@ -317,7 +357,8 @@ class LiveTrader:
             by_coin.setdefault(self.token_coin.get(token, "other"), []).append(ev)
         for coin, events in by_coin.items():
             if coin != "other":
-                self.rec.write(f"clob-{coin}", {"recv_ms": recv_ms, "msg": events})
+                self.rec.write(f"clob-{coin}", {"recv_ms": recv_ms, "connection_epoch": self.clob_epoch,
+                                                 "sequence": sequence, "msg": events})
         apply_clob_message(self.ladders, msg, recv_ms)
 
     def on_rtds(self, text, recv_ms, stream="rtds"):
@@ -338,12 +379,26 @@ class LiveTrader:
                                         "px": msg.get("price"), "sz": msg.get("size"), "side": msg.get("side")})
 
     def on_binance(self, text, recv_ms):
-        """Binance aggregated trades (combined stream), kept compact: symbol, exchange time, price."""
+        """Binance raw trades and BBO changes, kept in their actual receipt order."""
         msg = json.loads(text)
         d = msg.get("data", msg)
         if d.get("e") == "aggTrade":
-            self.rec.write("binance", {"recv_ms": recv_ms, "s": d.get("s"), "T": d.get("T"), "p": d.get("p"),
-                                       "q": d.get("q"), "m": d.get("m")})
+            self.rec.write("binance", {"recv_ms": recv_ms, "s": d.get("s"), "T": d.get("T"),
+                                       "p": d.get("p"), "q": d.get("q"), "m": d.get("m")})
+        elif d.get("e") == "trade":
+            self.rec.write("binance-strict", {"kind": "trade", "recv_ms": recv_ms, "s": d.get("s"),
+                                              "T": d.get("T"), "p": d.get("p"), "q": d.get("q"),
+                                              "m": d.get("m")})
+        elif d.get("s") and d.get("b") is not None and d.get("a") is not None:
+            key = str(d["s"])
+            bbo = (str(d["b"]), str(d["a"]))
+            if self.binance_bbo.get(key) == bbo:
+                return
+            self.binance_bbo[key] = bbo
+            self.rec.write("binance-strict", {"kind": "bookTicker", "recv_ms": recv_ms, "s": d.get("s"),
+                                              "E": d.get("T") or d.get("E"), "u": d.get("u"),
+                                              "b": d.get("b"), "B": d.get("B"),
+                                              "a": d.get("a"), "A": d.get("A")})
 
     def top(self, token):
         lad = self.ladders.get(token, Ladder())
@@ -475,17 +530,17 @@ class LiveTrader:
                     self.ws = ws
                     await ws.send(json.dumps({"assets_ids": sorted(self.subscribed), "type": "market",
                                               "custom_feature_enabled": True}))
-                    self.rec.write("errors", {"at": now_ms(), "where": "clob-open", "tokens": len(self.subscribed)})
+                    self.record_clob_open(time.time_ns() / 1_000_000)
                     pinger = asyncio.create_task(self._ping(ws, "PING", 10))
                     try:
                         async for text in ws:
-                            self.on_clob(text, now_ms())
+                            self.on_clob(text, time.time_ns() / 1_000_000)
                     finally:
                         pinger.cancel()
                     # a clean close (1000/1001) ends the loop without raising: log it like the others
-                    self.rec.write("errors", {"at": now_ms(), "where": "clob", "err": f"closed {ws.close_code}"})
+                    self.record_clob_close(f"closed {ws.close_code}", time.time_ns() / 1_000_000)
             except Exception as e:
-                self.rec.write("errors", {"at": now_ms(), "where": "clob", "err": repr(e)})
+                self.record_clob_close(repr(e), time.time_ns() / 1_000_000)
             self.ws = None
             await asyncio.sleep(2)
 
@@ -522,12 +577,12 @@ class LiveTrader:
 
     async def binance_loop(self):
         import websockets
-        url = BINANCE_WS.format(streams="/".join(f"{c}usdt@aggTrade" for c in self.coins))
+        url = BINANCE_WS.format(streams="/".join(binance_stream_names(self.coins)))
         while True:
             try:
                 async with websockets.connect(url, ping_interval=20, max_size=None) as ws:
                     async for text in ws:
-                        self.on_binance(text, now_ms())
+                        self.on_binance(text, time.time_ns() / 1_000_000)
             except Exception as e:
                 self.rec.write("errors", {"at": now_ms(), "where": "binance", "err": repr(e)})
             await asyncio.sleep(2)
@@ -577,13 +632,25 @@ class LiveTrader:
         tasks = [asyncio.create_task(c) for c in
                  (self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
                   self.coinbase_loop(), self.binance_loop(), self.scheduler(), self.resolver(), self.reporter())]
+        completed = False
         try:
             await asyncio.sleep(hours * 3600)
+            completed = True
         finally:
             for t in tasks:
                 t.cancel()
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            fatal = [result for result in task_results
+                     if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)]
+            completed = completed and not fatal
+            if self.clob_active:
+                self.record_clob_close("recorder stop", time.time_ns() / 1_000_000)
+            if completed:
+                self.record_complete(time.time_ns() / 1_000_000)
             self.rec.close()
             write_report(self.out)
+            if fatal:
+                raise RuntimeError(f"recorder task failed: {fatal[0]!r}")
 
 
 def write_report(out):

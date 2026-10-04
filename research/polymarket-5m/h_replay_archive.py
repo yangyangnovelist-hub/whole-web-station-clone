@@ -6,8 +6,10 @@ import csv
 import gzip
 import heapq
 import json
+import math
 import shutil
 import subprocess
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,10 @@ class ArchiveFormatError(ValueError):
 @contextmanager
 def _open_text(path):
     path = Path(path)
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            yield stream
+        return
     if path.suffix != ".zst":
         with path.open("rt", encoding="utf-8") as stream:
             yield stream
@@ -88,6 +94,84 @@ def iter_spot_events(path):
                 "size": row["q"],
             }
             seq += 1
+
+
+def iter_normalized_events(path, *, family):
+    """Read the standard forward artifact and enforce its causal stream contract."""
+    kinds = {
+        "spot": {"spot_trade", "spot_bbo"},
+        "clob": {"clob_connection", "clob_snapshot", "clob_price_change", "clob_error"},
+    }
+    if family not in kinds:
+        raise ValueError(f"unknown event family: {family}")
+    previous_seq = -1
+    previous_recv_ms = -float("inf")
+    active_epoch = None
+    last_epoch = 0
+    for line_number, row in _iter_json_objects(path):
+        try:
+            kind = row["kind"]
+            sequence = int(row["seq"])
+            receive_ms = float(row["recv_ms"])
+            if kind not in kinds[family]:
+                raise ValueError(f"unexpected {family} kind {kind!r}")
+            if sequence != previous_seq + 1:
+                raise ValueError(f"non-contiguous seq {sequence} after {previous_seq}")
+            if receive_ms < previous_recv_ms:
+                raise ValueError(f"recv_ms moved backwards from {previous_recv_ms} to {receive_ms}")
+            if "source_ts_ms" not in row:
+                raise ValueError("missing source_ts_ms")
+            if family == "spot":
+                required = ("price", "size") if kind == "spot_trade" else ("bid", "ask")
+                if any(key not in row for key in required):
+                    raise ValueError(f"missing {required}")
+                values = [float(row[key]) for key in required]
+                if not all(math.isfinite(value) for value in values) or values[0] <= 0 or values[1] < 0:
+                    raise ValueError(f"invalid numeric {kind}")
+                if kind == "spot_bbo" and values[0] >= values[1]:
+                    raise ValueError("crossed spot_bbo")
+            else:
+                if "connection_epoch" not in row:
+                    raise ValueError("missing connection_epoch")
+                epoch = int(row["connection_epoch"])
+                if epoch <= 0:
+                    raise ValueError("connection_epoch must be positive")
+                if kind == "clob_connection":
+                    if active_epoch is not None or epoch <= last_epoch:
+                        raise ValueError(f"invalid connection epoch {epoch}")
+                    active_epoch, last_epoch = epoch, epoch
+                elif active_epoch != epoch:
+                    raise ValueError(f"event epoch {epoch} without matching open")
+                if kind == "clob_snapshot" and any(key not in row for key in
+                                                    ("market_id", "asset_id", "bids", "asks")):
+                    raise ValueError("incomplete clob_snapshot")
+                if kind == "clob_snapshot":
+                    float(row["source_ts_ms"])
+                    for side in ("bids", "asks"):
+                        if not isinstance(row[side], list):
+                            raise ValueError(f"{side} is not a list")
+                        for level in row[side]:
+                            price, size = float(level["price"]), float(level["size"])
+                            if not (math.isfinite(price) and math.isfinite(size) and 0 <= price <= 1 and size >= 0):
+                                raise ValueError(f"invalid {side} level")
+                if kind == "clob_price_change" and any(key not in row for key in
+                                                        ("market_id", "asset_id", "price", "size", "side")):
+                    raise ValueError("incomplete clob_price_change")
+                if kind == "clob_price_change":
+                    float(row["source_ts_ms"])
+                    price, size = float(row["price"]), float(row["size"])
+                    if (row["side"] not in ("BUY", "SELL") or not math.isfinite(price) or
+                            not math.isfinite(size) or not 0 <= price <= 1 or size < 0):
+                        raise ValueError("invalid clob_price_change")
+                if kind == "clob_error":
+                    active_epoch = None
+            previous_seq = sequence
+            previous_recv_ms = receive_ms
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ArchiveFormatError(f"{Path(path).name}:{line_number}: {exc}") from exc
+        yield row
+    if family == "clob" and active_epoch is not None:
+        raise ArchiveFormatError(f"{Path(path).name}: EOF with connection_epoch {active_epoch} still open")
 
 
 def _iter_clob_file(path, file_index):
@@ -178,7 +262,7 @@ def iter_market_mappings(path):
                 try:
                     yield {
                         "kind": "market_mapping",
-                        "recv_ms": float(row["updated_at"]) * 1_000,
+                        "recv_ms": float(row["updated_at"]) * 1_000 if row.get("updated_at") else None,
                         "seq": seq,
                         "source_ts_ms": None,
                         "market_id": row["market_id"],
@@ -226,7 +310,7 @@ def iter_outcomes(path):
                     "kind": "market_outcome",
                     "recv_ms": float(row["recorded_at"]) * 1_000,
                     "seq": seq,
-                    "source_ts_ms": float(row["resolution_ts"]) * 1_000,
+                    "source_ts_ms": float(row["resolution_ts"]) * 1_000 if row.get("resolution_ts") else None,
                     "market_id": row["market_id"],
                     "winner": winner,
                     "up_won": winner == "Up",
@@ -234,3 +318,31 @@ def iter_outcomes(path):
                 }
             except (KeyError, TypeError, ValueError) as exc:
                 raise ArchiveFormatError(f"{path.name}:{seq + 2}: invalid market outcome row") from exc
+
+
+def validate_standard_artifact(path):
+    """Stream-validate one standard strict artifact and reconcile it with its manifest."""
+    root = Path(path)
+    if (root / "strict" / "manifest.json").exists():
+        root = root / "strict"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("schema") != "polymarket-5m-strict-replay-v1" or manifest.get("complete") is not True:
+        raise ArchiveFormatError(f"{root}: incomplete or unknown manifest")
+    counts = Counter()
+    for event in iter_normalized_events(root / "spot_events.jsonl.gz", family="spot"):
+        counts[event["kind"]] += 1
+    for event in iter_normalized_events(root / "clob_events.jsonl.gz", family="clob"):
+        counts[event["kind"]] += 1
+    mappings = list(iter_market_mappings(root / "market_registry.csv.gz"))
+    outcomes = list(iter_outcomes(root / "market_outcomes.csv.gz"))
+    counts["markets"] = len(mappings)
+    counts["outcomes"] = len(outcomes)
+    expected = manifest.get("counts") or {}
+    if any(int(expected.get(key, -1)) != counts.get(key, 0) for key in set(expected) | set(counts)):
+        raise ArchiveFormatError(f"{root}: manifest counts do not match streams")
+    market_ids = {row["market_id"] for row in mappings}
+    if not outcomes or any(row["market_id"] not in market_ids for row in outcomes):
+        raise ArchiveFormatError(f"{root}: outcome without direct-token market mapping")
+    if manifest.get("missing_resolved_market_ids") or not manifest.get("recorder_complete"):
+        raise ArchiveFormatError(f"{root}: incomplete resolved-market coverage")
+    return {"manifest": manifest, "counts": dict(counts)}

@@ -56,7 +56,7 @@ jobs:
         if: steps.cfg.outputs.enabled == 'true'
         run: |
           python paper_trader.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} \
-            --coins "${{ steps.cfg.outputs.coins_csv }}" || true
+            --coins "${{ steps.cfg.outputs.coins_csv }}"
           ls -la "$RUNNER_TEMP"/paper/raw/*/ && du -sh "$RUNNER_TEMP/paper/raw" && df -h "$RUNNER_TEMP" | tail -1
           zcat "$RUNNER_TEMP"/paper/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
 
@@ -67,10 +67,18 @@ jobs:
 
       - name: Resolve, convert and test
         if: steps.cfg.outputs.enabled == 'true'
-        continue-on-error: true
         run: |
-          sleep 90
-          python -c "import recording as r, sys; print('unresolved:', r.fetch_outcomes(sys.argv[1]))" "$RUNNER_TEMP/paper"
+          # The recorder can stop just after a new five-minute market opens.  Wait through that
+          # market's close, then retry Gamma briefly instead of packaging signal rows without outcomes.
+          sleep 360
+          unresolved=1
+          for i in 1 2 3 4 5; do
+            unresolved="$(python -c "import recording as r, sys; print(r.fetch_outcomes(sys.argv[1]))" "$RUNNER_TEMP/paper")"
+            echo "unresolved: $unresolved"
+            [ "$unresolved" = 0 ] && break
+            sleep 30
+          done
+          [ "$unresolved" = 0 ]
           for c in ${{ steps.cfg.outputs.coins }}; do
             b="$RUNNER_TEMP/paper/bundle-$c"
             echo "== $c"
@@ -105,12 +113,33 @@ jobs:
             --verdict-out forward/momentum5s-verdict.json \
             --out forward/momentum5s.md
 
+      - name: Require strict BTC replay artifact
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from h_replay_archive import validate_standard_artifact
+          d = Path("${{ runner.temp }}/paper/bundle-btc/strict")
+          checked = validate_standard_artifact(d)
+          print(json.dumps(checked["manifest"], sort_keys=True))
+          PY
+          python h_replay_run.py --archive "$RUNNER_TEMP/paper/bundle-btc" --require-paper-gate \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json"
+          test "$(du -sm "$RUNNER_TEMP/paper/bundle-btc/strict" | awk '{print $1}')" -lt 1500
+
       - name: Keep the converted bundles (the raw messages run to gigabytes)
         if: steps.cfg.outputs.enabled == 'true'
         run: |
           cd "$RUNNER_TEMP/paper"
-          tar czf "$RUNNER_TEMP/raw.tgz" bundle-* raw/*/markets.jsonl* raw/*/decisions.jsonl* raw/*/errors.jsonl* 2>/dev/null || true
-          ls -la "$RUNNER_TEMP/raw.tgz"
+          shopt -s nullglob
+          files=(bundle-* raw/*/markets.jsonl* raw/*/decisions.jsonl* raw/*/errors.jsonl*)
+          test "${#files[@]}" -gt 0
+          total_mb="$(du -sm -- "${files[@]}" | awk '{sum += $1} END {print sum + 0}')"
+          test "$total_mb" -lt 6000
+          tar czf "$RUNNER_TEMP/raw.tgz" -- "${files[@]}"
+          tar tzf "$RUNNER_TEMP/raw.tgz" >/dev/null
+          test -s "$RUNNER_TEMP/raw.tgz"
       - uses: actions/upload-artifact@v4
         if: steps.cfg.outputs.enabled == 'true'
         with:

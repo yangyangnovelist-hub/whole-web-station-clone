@@ -97,6 +97,38 @@ def test_live_trader_offline(tmp_path, monkeypatch):
     assert all(ev.get("event_type") != "new_market" for rec in clob for ev in rec["msg"])
 
 
+def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
+    trader = pt.LiveTrader(tmp_path, P, fetch=lambda url: [])
+    trader.token_coin.update({"UP": "btc", "DOWN": "btc"})
+    trader.subscribed.update({"UP", "DOWN"})
+
+    assert trader.record_clob_open(1_000) == 1
+    trader.on_clob(json.dumps([BOOK_UP, BOOK_DOWN]), 1_001.25)
+    trader.record_clob_close("closed 1000", 1_002)
+    trader.on_binance(json.dumps({"stream": "btcusdt@bookTicker", "data": {
+        "u": 7, "s": "BTCUSDT", "b": "80000.1", "B": "2", "a": "80000.2", "A": "3",
+    }}), 1_003.5)
+    trader.on_binance(json.dumps({"stream": "btcusdt@bookTicker", "data": {
+        "u": 8, "s": "BTCUSDT", "b": "80000.1", "B": "20", "a": "80000.2", "A": "30",
+    }}), 1_004.5)  # size-only updates are not frozen-H trigger events
+    trader.rec.close()
+
+    clob = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/clob-btc.jsonl.gz")), "rt")]
+    assert clob[0]["connection_epoch"] == 1 and clob[0]["sequence"] == 1
+    errors = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/errors.jsonl.gz")), "rt")]
+    assert [(row["where"], row["connection_epoch"], row["sequence"]) for row in errors] == [
+        ("clob-open", 1, 0), ("clob", 1, 2),
+    ]
+    binance = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/binance-strict.jsonl.gz")), "rt")]
+    assert binance == [{
+        "kind": "bookTicker", "recv_ms": 1_003.5, "s": "BTCUSDT", "E": None, "u": 7,
+        "b": "80000.1", "B": "2", "a": "80000.2", "A": "3",
+    }]
+    assert pt.binance_stream_names(("btc",)) == (
+        "btcusdt@aggTrade", "btcusdt@trade", "btcusdt@bookTicker",
+    )
+
+
 def test_replay_on_synthetic_bundle(tmp_path):
     root = make_bundle(tmp_path / "polymarket-data-samples")
     ledger = pt.replay(root, pt.Params(taus=(60, 30), lo=0.80, hi=0.99, max_shares=100))

@@ -25,6 +25,8 @@ strategy can be re-tested on data recorded after it was chosen:
   message time, markets and winners, and Polymarket's relay of the Binance
   <coin>usdt price (RTDS crypto_prices) with its own timestamp, and the Coinbase <COIN>-USD
   trade prints with their exchange time (coinbase_trades.jsonl.gz).
+- for BTC, under strict/, receipt-ordered Binance trade/bookTicker events, direct Up and Down
+  CLOB snapshots/deltas, and explicit connection epochs for lossless sub-second replay.
 
 All recorded days go into one bundle, so the forward sample keeps growing.
 """
@@ -33,9 +35,12 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import heapq
 import io
 import json
+import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +48,9 @@ import numpy as np
 import binary as bo
 import paper_trader as pt
 from real_day import FIXED_POINT
+
+
+STRICT_SCHEMA = "polymarket-5m-strict-replay-v1"
 
 
 def iter_jsonl(paths):
@@ -57,6 +65,21 @@ def iter_jsonl(paths):
                         continue
             except (EOFError, OSError):  # ... or a gzip stream without its trailer
                 continue
+
+
+def iter_jsonl_strict(paths):
+    """Read a strict evidence input without hiding a truncated gzip or JSON line."""
+    for path in paths:
+        opener = gzip.open if str(path).endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, 1):
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
+                if not isinstance(row, dict):
+                    raise ValueError(f"{path}:{line_number}: expected JSON object")
+                yield row
 
 
 def raw_files(src, name):
@@ -305,6 +328,272 @@ def clob_close_times(rows):
     return out
 
 
+def _strict_market_tables(markets):
+    registry, outcomes, token_market, market_tokens = [], [], {}, {}
+    for row in markets:
+        raw = row["raw"]
+        try:
+            market = pt.parse_gamma_market(raw)
+        except (KeyError, TypeError, ValueError):
+            continue
+        market_id = str(raw.get("conditionId") or market["slug"])
+        recorded_at = raw.get("_recorded_at_ms")
+        recorded_at = float(recorded_at) / 1000 if recorded_at is not None else None
+        registry.append({"market_id": market_id, "start_ts": market["start"],
+                         "up_token_id": market["up_token"], "down_token_id": market["down_token"],
+                         "updated_at": recorded_at})
+        token_market[market["up_token"]] = market_id
+        token_market[market["down_token"]] = market_id
+        market_tokens[market_id] = (market["up_token"], market["down_token"])
+        if market["up_won"] is not None:
+            source_time = raw.get("closedTime")
+            try:
+                source_time = datetime.fromisoformat(str(source_time).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                source_time = None
+            outcomes.append({"market_id": market_id, "winner": "Up" if market["up_won"] else "Down",
+                             "resolution_ts": source_time, "source": "gamma", "recorded_at": recorded_at})
+    return registry, outcomes, token_market, market_tokens
+
+
+def _strict_spot_events(records, symbol):
+    sequence = 0
+    for row in records:
+        if str(row.get("s", "")).upper() != symbol:
+            continue
+        recv_ms = row.get("recv_ms")
+        if recv_ms is None:
+            raise ValueError(f"{symbol} strict spot row is missing recv_ms")
+        if row.get("kind") == "bookTicker" or (row.get("b") is not None and row.get("a") is not None
+                                                 and row.get("p") is None):
+            try:
+                event = {"kind": "spot_bbo", "recv_ms": float(recv_ms), "seq": sequence,
+                         "source_ts_ms": None if row.get("E") is None else float(row["E"]),
+                         "bid": float(row["b"]), "ask": float(row["a"])}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"malformed {symbol} bookTicker row") from exc
+        elif row.get("T") is not None and row.get("p") is not None:
+            try:
+                event = {"kind": "spot_trade", "recv_ms": float(recv_ms), "seq": sequence,
+                         "source_ts_ms": float(row["T"]), "price": float(row["p"]),
+                         "size": float(row.get("q") or 0)}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"malformed {symbol} trade row") from exc
+        else:
+            raise ValueError(f"unknown {symbol} strict spot row")
+        yield event
+        sequence += 1
+
+
+def _strict_clob_inputs(src, coin):
+    """Merge CLOB frames and connection markers without loading the L2 stream into memory."""
+    def books():
+        for ordinal, row in enumerate(iter_jsonl_strict(clob_files(src, coin))):
+            if row.get("recv_ms") is None:
+                raise ValueError(f"strict {coin} CLOB row is missing recv_ms")
+            sequence = row.get("sequence")
+            key = (0, int(sequence), 1) if sequence is not None else (1, float(row["recv_ms"]), 1, ordinal)
+            yield key, "message", row
+
+    def markers():
+        ordinal = 0
+        for row in iter_jsonl_strict(raw_files(src, "errors")):
+            if row.get("where") not in ("clob-open", "clob"):
+                continue
+            if row.get("at") is None:
+                raise ValueError(f"strict {coin} CLOB marker is missing at")
+            if row.get("where") == "clob" and row.get("connection_active") is False:
+                continue  # a failed connect has no book epoch to close
+            sequence = row.get("sequence")
+            rank = 0 if row["where"] == "clob-open" else 2
+            key = (0, int(sequence), rank) if sequence is not None else (1, float(row["at"]), rank, ordinal)
+            yield key, "marker", row
+            ordinal += 1
+
+    yield from heapq.merge(books(), markers(), key=lambda item: item[0])
+
+
+def _strict_clob_events(src, coin, token_market):
+    sequence = 0
+    active_epoch = None
+    last_epoch = 0
+    stats = {"explicit_order": True, "source_sequence_regressions": 0,
+             "missing_source_ts": 0, "dropped_pre_epoch": 0,
+             "dropped_epoch_mismatch": 0, "receive_time_regressions": 0, "open_epoch_at_eof": None}
+    snapshots = set()
+    last_receive_ms = -float("inf")
+    last_source_sequence = -1
+    for _, source, row in _strict_clob_inputs(src, coin):
+        receive_ms = float(row["at"] if source == "marker" else row["recv_ms"])
+        if receive_ms < last_receive_ms:
+            stats["receive_time_regressions"] += 1
+        last_receive_ms = receive_ms
+        explicit = row.get("sequence") is not None and row.get("connection_epoch") is not None
+        stats["explicit_order"] = stats["explicit_order"] and explicit
+        if row.get("sequence") is not None:
+            source_sequence = int(row["sequence"])
+            if source_sequence <= last_source_sequence:
+                stats["source_sequence_regressions"] += 1
+            last_source_sequence = source_sequence
+        if source == "marker":
+            if row["where"] == "clob-open":
+                epoch = int(row.get("connection_epoch") or last_epoch + 1)
+                if epoch <= last_epoch or active_epoch is not None:
+                    stats["dropped_epoch_mismatch"] += 1
+                    continue
+                active_epoch = last_epoch = epoch
+                yield {"kind": "clob_connection", "recv_ms": float(row["at"]), "seq": sequence,
+                       "source_ts_ms": None, "connection_epoch": epoch,
+                       "token_count": row.get("tokens")}, stats, snapshots
+                sequence += 1
+            else:
+                epoch = int(row.get("connection_epoch") or active_epoch or 0)
+                if epoch <= 0 or active_epoch != epoch:
+                    stats["dropped_epoch_mismatch"] += 1
+                    continue
+                yield {"kind": "clob_error", "recv_ms": float(row["at"]), "seq": sequence,
+                       "source_ts_ms": None, "connection_epoch": epoch, "error": row.get("err")}, stats, snapshots
+                sequence += 1
+                active_epoch = None
+            continue
+
+        epoch = int(row.get("connection_epoch") or active_epoch or 0)
+        if active_epoch is None or epoch <= 0:
+            stats["dropped_pre_epoch"] += 1
+            continue
+        if epoch != active_epoch:
+            stats["dropped_epoch_mismatch"] += 1
+            continue
+        messages = row.get("msg")
+        for message in messages if isinstance(messages, list) else [messages]:
+            if not isinstance(message, dict):
+                continue
+            source_ts = message.get("timestamp")
+            try:
+                source_ts = float(source_ts)
+            except (TypeError, ValueError):
+                source_ts = None
+            event_type = message.get("event_type")
+            if event_type == "book":
+                token = str(message.get("asset_id", ""))
+                if token not in token_market:
+                    continue
+                if source_ts is None:
+                    stats["missing_source_ts"] += 1
+                    continue
+                event = {"kind": "clob_snapshot", "recv_ms": float(row["recv_ms"]), "seq": sequence,
+                         "source_ts_ms": source_ts, "connection_epoch": epoch,
+                         "market_id": str(message.get("market") or token_market[token]), "asset_id": token,
+                         "bids": message.get("bids") if "bids" in message else message.get("buys") or [],
+                         "asks": message.get("asks") if "asks" in message else message.get("sells") or []}
+                if "tick_size" in message:
+                    event["tick_size"] = message["tick_size"]
+                snapshots.add((epoch, token))
+                yield event, stats, snapshots
+                sequence += 1
+            elif event_type == "price_change":
+                if source_ts is None:
+                    stats["missing_source_ts"] += 1
+                    continue
+                for change in message.get("price_changes") or []:
+                    token = str(change.get("asset_id", ""))
+                    if token not in token_market:
+                        continue
+                    event = {"kind": "clob_price_change", "recv_ms": float(row["recv_ms"]),
+                             "seq": sequence, "source_ts_ms": source_ts, "connection_epoch": epoch,
+                             "market_id": str(message.get("market") or token_market[token]),
+                             "asset_id": token, "price": change.get("price"), "size": change.get("size"),
+                             "side": change.get("side")}
+                    for key in ("best_bid", "best_ask"):
+                        if key in change:
+                            event[key] = change[key]
+                    yield event, stats, snapshots
+                    sequence += 1
+    stats["open_epoch_at_eof"] = active_epoch
+
+
+def write_strict_bundle(src, out, coin, markets):
+    """Write the lossless inputs required for receipt-ordered G/H/I/J replay."""
+    strict = Path(out) / "strict"
+    strict.mkdir(parents=True, exist_ok=True)
+    names = ("manifest.json", "spot_events.jsonl.gz", "clob_events.jsonl.gz",
+             "market_registry.csv.gz", "market_outcomes.csv.gz")
+    for name in names:
+        path = strict / name
+        if path.exists():
+            path.unlink()
+
+    saw_market = False
+    for raw_market in iter_jsonl_strict(raw_files(src, "markets")):
+        if str(raw_market.get("slug", "")).startswith(f"{coin}-updown-5m-"):
+            pt.parse_gamma_market(raw_market)
+            saw_market = True
+    if not saw_market:
+        raise ValueError(f"strict {coin} recording has no valid market metadata")
+    registry, outcomes, token_market, market_tokens = _strict_market_tables(markets)
+    with gzip.open(strict / "market_registry.csv.gz", "wt", newline="") as stream:
+        fields = ("market_id", "start_ts", "up_token_id", "down_token_id", "updated_at")
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(registry)
+    with gzip.open(strict / "market_outcomes.csv.gz", "wt", newline="") as stream:
+        fields = ("market_id", "winner", "resolution_ts", "source", "recorded_at")
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(outcomes)
+
+    counts = {"markets": len(registry), "outcomes": len(outcomes), "spot_trade": 0, "spot_bbo": 0,
+              "clob_connection": 0, "clob_snapshot": 0, "clob_price_change": 0, "clob_error": 0}
+    times = []
+    spot_regressions = 0
+    last_spot_ms = -float("inf")
+    with gzip.open(strict / "spot_events.jsonl.gz", "wt", compresslevel=3) as stream:
+        for event in _strict_spot_events(iter_jsonl_strict(raw_files(src, "binance-strict")),
+                                         f"{coin.upper()}USDT"):
+            stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+            counts[event["kind"]] += 1
+            times.append(float(event["recv_ms"]))
+            if float(event["recv_ms"]) < last_spot_ms:
+                spot_regressions += 1
+            last_spot_ms = float(event["recv_ms"])
+
+    clob_stats = None
+    snapshots = set()
+    with gzip.open(strict / "clob_events.jsonl.gz", "wt", compresslevel=3) as stream:
+        for event, clob_stats, snapshots in _strict_clob_events(src, coin, token_market):
+            stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+            counts[event["kind"]] += 1
+            times.append(float(event["recv_ms"]))
+    clob_stats = clob_stats or {"explicit_order": False, "source_sequence_regressions": 0,
+                                "missing_source_ts": 0,
+                                "dropped_pre_epoch": 0, "dropped_epoch_mismatch": 0,
+                                "receive_time_regressions": 0, "open_epoch_at_eof": None}
+    epochs = {epoch for epoch, _ in snapshots}
+    paired_market_ids = {market_id for market_id, pair in market_tokens.items()
+                         if any((epoch, pair[0]) in snapshots and (epoch, pair[1]) in snapshots for epoch in epochs)}
+    resolved_market_ids = {row["market_id"] for row in outcomes}
+    unresolved_market_ids = sorted(set(market_tokens) - resolved_market_ids)
+    missing_resolved_books = sorted(resolved_market_ids - paired_market_ids)
+    recorder_complete = any(row.get("where") == "recorder-complete"
+                            for row in iter_jsonl_strict(raw_files(src, "errors")))
+    complete = bool(registry and outcomes and counts["spot_trade"] and counts["spot_bbo"] and
+                    counts["clob_connection"] and paired_market_ids and not missing_resolved_books and
+                    recorder_complete and spot_regressions == 0 and clob_stats["explicit_order"] and
+                    clob_stats["source_sequence_regressions"] == 0 and
+                    clob_stats["missing_source_ts"] == 0 and clob_stats["dropped_pre_epoch"] == 0 and
+                    clob_stats["dropped_epoch_mismatch"] == 0 and
+                    clob_stats["receive_time_regressions"] == 0 and clob_stats["open_epoch_at_eof"] is None)
+    manifest = {"schema": STRICT_SCHEMA, "coin": coin, "run_id": os.environ.get("GITHUB_RUN_ID"),
+                "complete": complete, "started_ms": min(times) if times else None,
+                "ended_ms": max(times) if times else None, "counts": counts,
+                "recorder_complete": recorder_complete, "spot_receive_time_regressions": spot_regressions,
+                "markets_with_both_token_snapshots": len(paired_market_ids),
+                "missing_resolved_market_ids": missing_resolved_books,
+                "unresolved_market_ids": unresolved_market_ids, "clob_integrity": clob_stats}
+    (strict / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {"strict_ready": complete, **{f"strict_{key}": value for key, value in counts.items()}}
+
+
 class LatencyFiles:
     """latency.py's input under <out>/latency: markets and winners, the Up token's exchange-stamped
     top of book (streamed in through `book`), the relayed Binance price, the Coinbase prints and the
@@ -436,6 +725,8 @@ def build(src, out, coin="btc"):
         for f in files.values():
             f.close()
     counts.update(lat.close(src, coin))
+    if coin == "btc":  # G/H/I/J are BTC-only; do not duplicate raw L2 for the four side datasets.
+        counts.update(write_strict_bundle(src, out, coin, markets))
     return counts
 
 
