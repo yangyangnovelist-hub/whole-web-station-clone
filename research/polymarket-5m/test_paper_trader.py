@@ -105,12 +105,31 @@ def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
     assert trader.record_clob_open(1_000) == 1
     trader.on_clob(json.dumps([BOOK_UP, BOOK_DOWN]), 1_001.25)
     trader.record_clob_close("closed 1000", 1_002)
+    trader.record_binance_open("spot", 1_003)
+    trader.record_binance_open("spot", 1_003.1, conn_id=1)
+    trader.record_binance_open("spot", 1_003.2, conn_id=2)
     trader.on_binance(json.dumps({"stream": "btcusdt@bookTicker", "data": {
         "u": 7, "s": "BTCUSDT", "b": "80000.1", "B": "2", "a": "80000.2", "A": "3",
     }}), 1_003.5)
     trader.on_binance(json.dumps({"stream": "btcusdt@bookTicker", "data": {
         "u": 8, "s": "BTCUSDT", "b": "80000.1", "B": "20", "a": "80000.2", "A": "30",
     }}), 1_004.5)  # size-only updates are not frozen-H trigger events
+    trader.record_binance_close("spot", "closed 1000", 1_004.7, conn_id=1)
+    trader.record_binance_close("spot", "closed 1000", 1_004.8, conn_id=2)
+    trader.record_binance_close("spot", "closed 1000", 1_005)
+
+    trader.record_binance_open("futures", 1_006)
+    trader.record_binance_open("futures", 1_006.1, conn_id=1)
+    trader.on_binance_futures(json.dumps({
+        "e": "bookTicker", "E": 900, "T": 899, "u": 11, "s": "BTCUSDT",
+        "b": "80000.1", "B": "2", "a": "80000.2", "A": "3",
+    }), 1_006.5)
+    trader.on_binance_futures(json.dumps({
+        "e": "bookTicker", "E": 901, "T": 900, "u": 12, "s": "BTCUSDT",
+        "b": "80000.1", "B": "20", "a": "80000.2", "A": "30",
+    }), 1_007.5)  # production consumes every futures frame, including size-only changes
+    trader.record_binance_close("futures", "closed 1000", 1_007.8, conn_id=1)
+    trader.record_binance_close("futures", "closed 1000", 1_008)
     trader.rec.close()
 
     clob = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/clob-btc.jsonl.gz")), "rt")]
@@ -120,10 +139,20 @@ def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
         ("clob-open", 1, 0), ("clob", 1, 2),
     ]
     binance = [json.loads(line) for line in gzip.open(next(tmp_path.glob("raw/*/binance-strict.jsonl.gz")), "rt")]
-    assert binance == [{
+    assert [row["kind"] for row in binance] == ["connection", "bookTicker", "disconnect"]
+    assert {key: binance[1][key] for key in ("kind", "recv_ms", "s", "E", "u", "b", "B", "a", "A",
+                                                   "connection_epoch", "sequence", "active_connections",
+                                                   "max_active_connections", "conn_id")} == {
         "kind": "bookTicker", "recv_ms": 1_003.5, "s": "BTCUSDT", "E": None, "u": 7,
-        "b": "80000.1", "B": "2", "a": "80000.2", "A": "3",
-    }]
+        "b": "80000.1", "B": "2", "a": "80000.2", "A": "3", "connection_epoch": 1,
+        "sequence": 1, "active_connections": 3, "max_active_connections": 3, "conn_id": 0,
+    }
+    futures = [json.loads(line) for line in
+               gzip.open(next(tmp_path.glob("raw/*/binance-futures-strict.jsonl.gz")), "rt")]
+    assert [row["kind"] for row in futures] == ["connection", "bookTicker", "bookTicker", "disconnect"]
+    assert [(row.get("T"), row.get("E")) for row in futures[1:3]] == [(899, 900), (900, 901)]
+    assert all(row["connection_epoch"] == 1 and row["sequence"] == index
+               for index, row in enumerate(futures))
     assert pt.binance_stream_names(("btc",)) == (
         "btcusdt@aggTrade", "btcusdt@trade", "btcusdt@bookTicker",
     )

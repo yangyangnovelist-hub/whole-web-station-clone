@@ -45,6 +45,7 @@ def limit_price(
 class ReplayConfig:
     book_lag_ms: float = 106.0
     local_path_ms: float = 0.86
+    order_wire_ms: float = 0.0
     venue_hold_ms: float = 150.0
     evaluation_ms: tuple[float, ...] = (300.0, 350.0, 400.0, 500.0)
     theta: float = 0.12
@@ -55,6 +56,10 @@ class ReplayConfig:
     reverse_multiplier: float = 2.0
     pilot_min_usd: float = 1.0
     max_order_usd: float = 3.9
+    signal_time_basis: str = "synthetic_receive_minus_lag"
+    retry_after_no_send_or_kill: bool = False
+    reentry_enabled: bool = True
+    max_orders_per_min: int = 0
 
 
 def load_freeze(path: str | Path = FREEZE_PATH) -> dict[str, Any]:
@@ -67,6 +72,7 @@ def config_from_freeze(frozen: dict[str, Any]) -> ReplayConfig:
     return ReplayConfig(
         book_lag_ms=float(timing["book_trigger_synthetic_lag_ms"]),
         local_path_ms=float(timing["decision_sign_send_warm_ms"]),
+        order_wire_ms=float(timing.get("order_wire_ms", 0.0)),
         venue_hold_ms=float(timing["venue_hold_ms"]),
         evaluation_ms=tuple(float(value) for value in timing["evaluation_ms"]),
         theta=float(execution["theta"]),
@@ -77,6 +83,10 @@ def config_from_freeze(frozen: dict[str, Any]) -> ReplayConfig:
         reverse_multiplier=float(execution["opposite_signal_multiplier"]),
         pilot_min_usd=float(execution["pilot_min_usd"]),
         max_order_usd=float(execution["max_order_usd"]),
+        signal_time_basis=str(timing.get("signal_time_basis", "synthetic_receive_minus_lag")),
+        retry_after_no_send_or_kill=bool(frozen["semantics"].get("retry_after_no_send_or_kill", False)),
+        reentry_enabled=bool(execution.get("reentry", True)),
+        max_orders_per_min=int(execution.get("max_orders_per_min", 0)),
     )
 
 
@@ -106,6 +116,7 @@ class _Attempt:
     market_id: str
     signal_receive_ms: float
     signal_source_ms: Optional[float]
+    signal_source: Optional[str]
     signal_ms: float
     direction: str
     fair: float
@@ -233,6 +244,9 @@ class HReplay:
         self._pending: list[tuple[float, int, float, _Attempt]] = []
         self._sequence = 0
         self._source_watermark = -math.inf
+        self._sent_by_evaluation: dict[float, list[float]] = {
+            float(value): [] for value in self.config.evaluation_ms
+        }
         self.records: list[dict[str, Any]] = []
 
     def _market(self, market_id: str) -> _Market:
@@ -353,44 +367,70 @@ class HReplay:
             decision_reason = "ask_above_limit"
         else:
             decision_reason = "sent"
-        signal_ms = receive_ms - self.config.book_lag_ms
+        raw_source_ms = event.get("source_ms")
+        if self.config.signal_time_basis == "exchange_source_timestamp" and raw_source_ms is not None:
+            signal_ms = float(raw_source_ms)
+        else:
+            signal_ms = receive_ms - self.config.book_lag_ms
         send_ms = receive_ms + self.config.local_path_ms
         for evaluation_ms, branch in market.branches.items():
             if branch.pending:
                 continue
             if branch.first_fill_direction is None:
-                if branch.first_locked:
+                if branch.first_locked and not self.config.retry_after_no_send_or_kill:
                     continue
-                branch.first_locked = True
+                if not self.config.retry_after_no_send_or_kill:
+                    branch.first_locked = True
                 size_multiplier = 1.0
                 is_reverse = False
             else:
+                if not self.config.reentry_enabled:
+                    continue
                 if (branch.last_fill_signal_ms is not None
                         and signal_ms - branch.last_fill_signal_ms < self.config.reentry_min_ms - 1e-9):
                     continue
                 is_reverse = direction != branch.first_fill_direction
                 size_multiplier = self.config.reverse_multiplier if is_reverse else 1.0
+            target_shares = self.config.base_shares * size_multiplier
+            signed_size, _ = (_pilot_plan(fixed_limit, target_shares, self.config)
+                              if fixed_limit is not None else (None, None))
+            decision_gate = decision_reason
+            branch_sent = sent
+            if branch_sent and signed_size is None:
+                branch_sent = False
+                decision_gate = "order_size_cap"
+            sent_times = self._sent_by_evaluation[evaluation_ms]
+            cutoff = send_ms - 60_000.0
+            while sent_times and sent_times[0] <= cutoff:
+                sent_times.pop(0)
+            if (branch_sent and self.config.max_orders_per_min > 0 and
+                    len(sent_times) >= self.config.max_orders_per_min):
+                branch_sent = False
+                decision_gate = "rate"
             attempt = _Attempt(
                 market_id=market_id,
                 signal_receive_ms=receive_ms,
                 signal_source_ms=event.get("source_ms"),
+                signal_source=event.get("signal_source"),
                 signal_ms=signal_ms,
                 direction=direction,
                 fair=fair,
                 decision_ask=decision_ask,
                 fixed_limit=fixed_limit,
-                sent=sent,
-                decision_reason=decision_reason,
+                sent=branch_sent,
+                decision_reason=decision_gate,
                 book_epoch=market.book_epoch,
                 first_fill_direction=branch.first_fill_direction,
                 size_multiplier=size_multiplier,
                 is_reverse=is_reverse,
                 send_ms=send_ms,
-                earliest_match_ms=send_ms + self.config.venue_hold_ms,
+                earliest_match_ms=send_ms + self.config.order_wire_ms + self.config.venue_hold_ms,
                 trial_edge=event.get("trial_edge"),
                 trigger_reason=event.get("trigger_reason"),
             )
-            branch.pending = True
+            if branch_sent:
+                branch.pending = True
+                sent_times.append(send_ms)
             self._sequence += 1
             self._pending.append((signal_ms + evaluation_ms, self._sequence, evaluation_ms, attempt))
 
@@ -407,22 +447,25 @@ class HReplay:
             attempt.fixed_limit,
             target_shares,
         )
-        if book is not None and attempt.book_epoch != book.epoch:
-            reason = "disconnect"
-        elif not attempt.sent:
+        can_match = True
+        if not attempt.sent:
             reason = attempt.decision_reason
+            can_match = False
+        elif book is not None and attempt.book_epoch != book.epoch:
+            reason = "disconnect"
+            can_match = False
         elif signed_size is None:
             reason = "order_size_cap"
+            can_match = False
         elif evaluation_time_ms < attempt.earliest_match_ms - 1e-9:
             reason = "venue_hold"
+            can_match = False
         elif book is None or not book.ready:
             reason = "book_unavailable"
-        elif eligible_depth < target_shares - 1e-9:
-            reason = "insufficient_direct_depth"
+            can_match = False
         else:
-            reason = "filled"
-        filled = reason == "filled"
-        if filled and maker_usd is not None and attempt.fixed_limit is not None:
+            reason = "matchable"
+        if can_match and maker_usd is not None and attempt.fixed_limit is not None:
             filled_shares, fill_price, fill_fee = _fak_fill(
                 book.asks(attempt.direction),
                 attempt.fixed_limit,
@@ -431,6 +474,14 @@ class HReplay:
             )
         else:
             filled_shares, fill_price, fill_fee = 0.0, None, 0.0
+        if reason == "matchable":
+            if filled_shares >= target_shares - 1e-9:
+                reason = "filled"
+            elif filled_shares > 0:
+                reason = "partial_fill"
+            else:
+                reason = "insufficient_effective_depth"
+        filled = filled_shares > 0
         record = {
             "market_id": attempt.market_id,
             "ordering_clock": "receive_ms",
@@ -438,6 +489,7 @@ class HReplay:
             "future_health_checked": False,
             "signal_receive_ms": attempt.signal_receive_ms,
             "signal_source_ms": attempt.signal_source_ms,
+            "signal_source": attempt.signal_source,
             "signal_ms": attempt.signal_ms,
             "direction": attempt.direction,
             "direct_token": attempt.direction,
@@ -472,7 +524,8 @@ class HReplay:
             "filled": filled,
             "reason": reason,
         }
-        branch.pending = False
+        if attempt.sent:
+            branch.pending = False
         if filled:
             if branch.first_fill_direction is None:
                 branch.first_fill_direction = attempt.direction

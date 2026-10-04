@@ -33,7 +33,30 @@ def test_first_trigger_no_fill_is_not_replaced_by_later_executable_trigger():
     assert rows[0]["signal_receive_ms"] == 106
     assert rows[0]["sent"] is True
     assert rows[0]["filled"] is False
-    assert rows[0]["reason"] == "insufficient_direct_depth"
+    assert rows[0]["reason"] == "insufficient_effective_depth"
+
+
+def test_partial_fak_fill_counts_as_fill_and_stops_same_market_reentry():
+    events = [
+        {"kind": "snapshot", "market_id": "m", "receive_ms": 90, "source_ms": 90,
+         "up_asks": [[0.40, 3]], "down_asks": [[0.60, 10]]},
+        {"kind": "signal", "market_id": "m", "receive_ms": 100, "source_ms": 100,
+         "direction": "Up", "fair": 0.70},
+        {"kind": "snapshot", "market_id": "m", "receive_ms": 450, "source_ms": 450,
+         "up_asks": [[0.40, 3]], "down_asks": [[0.60, 10]]},
+        {"kind": "signal", "market_id": "m", "receive_ms": 500, "source_ms": 500,
+         "direction": "Down", "fair": 0.70},
+    ]
+    config = hr.ReplayConfig(evaluation_ms=(300.0,), local_path_ms=1.0,
+                             retry_after_no_send_or_kill=True, reentry_enabled=False,
+                             max_order_usd=10.0, signal_time_basis="exchange_source_timestamp")
+
+    rows = hr.replay_events(events, config)
+
+    assert len(rows) == 1
+    assert rows[0]["reason"] == "partial_fill"
+    assert rows[0]["filled"] is True
+    assert rows[0]["filled_shares"] == pytest.approx(3.0)
 
 
 def test_fixed_49_limit_accepts_cumulative_depth_but_rejects_50():
@@ -255,21 +278,49 @@ def test_frozen_manifest_preserves_golden_live_evidence_without_edge_backfill():
     config = hr.config_from_freeze(frozen)
     evidence = frozen["golden_live_evidence"]
 
-    assert config.book_lag_ms == 106.0
-    assert config.local_path_ms == 0.86
+    assert config.book_lag_ms == 0.0
+    assert config.local_path_ms == 0.9
+    assert config.order_wire_ms == 15.0
     assert config.venue_hold_ms == 150.0
     assert config.evaluation_ms == (300.0, 350.0, 400.0, 500.0)
-    assert frozen["semantics"]["candidate_sources"] == ["binance_spot_bookTicker"]
-    assert frozen["semantics"]["retry_after_no_send_or_kill"] is False
-    assert frozen["semantics"]["fill_qualification"] == (
-        "at_least_target_shares_on_direct_token_ask_ladder"
-    )
+    assert frozen["semantics"]["candidate_sources"] == [
+        "binance_spot_trade", "binance_futures_bookTicker",
+    ]
+    assert frozen["semantics"]["retry_after_no_send_or_kill"] is True
+    assert config.signal_time_basis == "exchange_source_timestamp"
+    assert config.max_order_usd == 5.0
+    assert config.max_orders_per_min == 1
+    assert config.reentry_enabled is False
+    assert frozen["semantics"]["fill_qualification"] == "all_positive_FAK_partial_and_full_fills_count"
     assert evidence["decision_ask"] == 0.33
     assert evidence["fixed_limit"] == 0.49
     assert evidence["filled_shares"] == 5.697675
     assert evidence["fill_price"] == 0.43
     assert evidence["signal_to_match_ms"] == 481.75
     assert evidence["trial_edge"] is None
+
+
+def test_timestamped_current_h_uses_source_clock_and_rate_limits_retries():
+    frozen = hr.load_freeze()
+    config = hr.config_from_freeze(frozen)
+    config = hr.ReplayConfig(**{**config.__dict__, "evaluation_ms": (300.0,)})
+    events = [
+        {"kind": "snapshot", "market_id": "first", "receive_ms": 100, "source_ms": 0,
+         "up_asks": [[0.33, 10]], "down_asks": [[0.67, 10]]},
+        {"kind": "snapshot", "market_id": "second", "receive_ms": 100, "source_ms": 0,
+         "up_asks": [[0.33, 10]], "down_asks": [[0.67, 10]]},
+        {"kind": "signal", "market_id": "first", "receive_ms": 106, "source_ms": 0,
+         "direction": "Up", "fair": 0.63},
+        {"kind": "signal", "market_id": "second", "receive_ms": 1_106, "source_ms": 1_000,
+         "direction": "Up", "fair": 0.63},
+    ]
+
+    first, second = hr.replay_events(events, config)
+
+    assert first["signal_ms"] == 0
+    assert first["signal_to_send_ms"] == pytest.approx(106.9)
+    assert first["sent"] is True
+    assert second["sent"] is False and second["reason"] == "rate"
 
 
 def test_golden_fill_replays_fixed_maker_amount_at_price_improvement():

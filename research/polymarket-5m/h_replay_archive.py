@@ -100,6 +100,8 @@ def iter_normalized_events(path, *, family):
     """Read the standard forward artifact and enforce its causal stream contract."""
     kinds = {
         "spot": {"spot_trade", "spot_bbo"},
+        "source": {"spot_connection", "spot_trade", "spot_bbo", "spot_disconnect",
+                   "futures_connection", "futures_bbo", "futures_disconnect"},
         "clob": {"clob_connection", "clob_snapshot", "clob_price_change", "clob_error"},
     }
     if family not in kinds:
@@ -108,6 +110,10 @@ def iter_normalized_events(path, *, family):
     previous_recv_ms = -float("inf")
     active_epoch = None
     last_epoch = 0
+    source_active = {"spot": None, "futures": None}
+    source_last_epoch = {"spot": 0, "futures": 0}
+    source_previous_sequence = {"spot": -1, "futures": -1}
+    previous_clob_source_ms = -float("inf")
     for line_number, row in _iter_json_objects(path):
         try:
             kind = row["kind"]
@@ -121,16 +127,40 @@ def iter_normalized_events(path, *, family):
                 raise ValueError(f"recv_ms moved backwards from {previous_recv_ms} to {receive_ms}")
             if "source_ts_ms" not in row:
                 raise ValueError("missing source_ts_ms")
-            if family == "spot":
+            if family in ("spot", "source") and kind in ("spot_trade", "spot_bbo", "futures_bbo"):
                 required = ("price", "size") if kind == "spot_trade" else ("bid", "ask")
                 if any(key not in row for key in required):
                     raise ValueError(f"missing {required}")
                 values = [float(row[key]) for key in required]
                 if not all(math.isfinite(value) for value in values) or values[0] <= 0 or values[1] < 0:
                     raise ValueError(f"invalid numeric {kind}")
-                if kind == "spot_bbo" and values[0] >= values[1]:
-                    raise ValueError("crossed spot_bbo")
-            else:
+                if kind in ("spot_bbo", "futures_bbo") and values[0] >= values[1]:
+                    raise ValueError(f"crossed {kind}")
+                if kind in ("spot_trade", "futures_bbo"):
+                    source_timestamp = float(row["source_ts_ms"])
+                    if not math.isfinite(source_timestamp):
+                        raise ValueError(f"invalid source_ts_ms for {kind}")
+            if family == "source":
+                stream = str(row["stream"])
+                if stream not in source_active or not kind.startswith(stream + "_"):
+                    raise ValueError(f"invalid source stream {stream!r} for {kind}")
+                stream_sequence = int(row["stream_sequence"])
+                if stream_sequence != source_previous_sequence[stream] + 1:
+                    raise ValueError(f"non-contiguous {stream} sequence {stream_sequence}")
+                source_previous_sequence[stream] = stream_sequence
+                epoch = int(row["connection_epoch"])
+                if epoch <= 0:
+                    raise ValueError("connection_epoch must be positive")
+                if kind == f"{stream}_connection":
+                    if source_active[stream] is not None or epoch <= source_last_epoch[stream]:
+                        raise ValueError(f"invalid {stream} connection epoch {epoch}")
+                    source_active[stream] = epoch
+                    source_last_epoch[stream] = epoch
+                elif source_active[stream] != epoch:
+                    raise ValueError(f"{stream} event epoch {epoch} without matching open")
+                if kind == f"{stream}_disconnect":
+                    source_active[stream] = None
+            elif family == "clob":
                 if "connection_epoch" not in row:
                     raise ValueError("missing connection_epoch")
                 epoch = int(row["connection_epoch"])
@@ -146,7 +176,7 @@ def iter_normalized_events(path, *, family):
                                                     ("market_id", "asset_id", "bids", "asks")):
                     raise ValueError("incomplete clob_snapshot")
                 if kind == "clob_snapshot":
-                    float(row["source_ts_ms"])
+                    source_timestamp = float(row["source_ts_ms"])
                     for side in ("bids", "asks"):
                         if not isinstance(row[side], list):
                             raise ValueError(f"{side} is not a list")
@@ -158,11 +188,15 @@ def iter_normalized_events(path, *, family):
                                                         ("market_id", "asset_id", "price", "size", "side")):
                     raise ValueError("incomplete clob_price_change")
                 if kind == "clob_price_change":
-                    float(row["source_ts_ms"])
+                    source_timestamp = float(row["source_ts_ms"])
                     price, size = float(row["price"]), float(row["size"])
                     if (row["side"] not in ("BUY", "SELL") or not math.isfinite(price) or
                             not math.isfinite(size) or not 0 <= price <= 1 or size < 0):
                         raise ValueError("invalid clob_price_change")
+                if kind in ("clob_snapshot", "clob_price_change"):
+                    if not math.isfinite(source_timestamp) or source_timestamp < previous_clob_source_ms:
+                        raise ValueError("clob source_ts_ms moved backwards")
+                    previous_clob_source_ms = source_timestamp
                 if kind == "clob_error":
                     active_epoch = None
             previous_seq = sequence
@@ -172,6 +206,8 @@ def iter_normalized_events(path, *, family):
         yield row
     if family == "clob" and active_epoch is not None:
         raise ArchiveFormatError(f"{Path(path).name}: EOF with connection_epoch {active_epoch} still open")
+    if family == "source" and any(epoch is not None for epoch in source_active.values()):
+        raise ArchiveFormatError(f"{Path(path).name}: EOF with Binance connection still open")
 
 
 def _iter_clob_file(path, file_index):
@@ -326,10 +362,10 @@ def validate_standard_artifact(path):
     if (root / "strict" / "manifest.json").exists():
         root = root / "strict"
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("schema") != "polymarket-5m-strict-replay-v1" or manifest.get("complete") is not True:
+    if manifest.get("schema") != "polymarket-5m-strict-replay-v2" or manifest.get("complete") is not True:
         raise ArchiveFormatError(f"{root}: incomplete or unknown manifest")
     counts = Counter()
-    for event in iter_normalized_events(root / "spot_events.jsonl.gz", family="spot"):
+    for event in iter_normalized_events(root / "source_events.jsonl.gz", family="source"):
         counts[event["kind"]] += 1
     for event in iter_normalized_events(root / "clob_events.jsonl.gz", family="clob"):
         counts[event["kind"]] += 1

@@ -47,7 +47,7 @@
       ],
       "priority": 3,
       "passes": false,
-      "notes": "The recorder and standard BTC artifact now preserve receipt-ordered bookTicker plus raw spot trades, per-message direct Up/Down L2, explicit connection epochs, real receipt timestamps, source-sequence integrity, normal-completion markers, and an actual strict-H replay whose paper gate fails closed on unresolved signal markets. Local tests pass; this story remains open until the first fresh workflow artifact validates the contract and idempotent cross-run accumulation plus terminal-only notification are wired."
+      "notes": "Strict current-H V2 is implemented locally: three spot and two futures sockets race by receipt time; raw spot trades and timestamped futures BBO share the production sigma; effective mirrored Up/Down books, partial FAK fills, fixed limits, one order/minute, no reentry after any fill, 15 ms order wire time and a 500 ms primary gate are replayed. CLOB source-clock regressions fail closed. Accumulation preserves every retry from the first recording of each market/latency and rejects overlapping later recordings. The stopping sample requires 1,000 fills over seven UTC days, share-weighted day-cluster 99% lower bound above zero and a Poisson-binomial p-value Bonferroni-corrected across 100 strategies. GitHub-hosted data is audit-only; this story remains open until a fresh artifact validates V2 and an eu-west-1 holdout enters the stopping sample."
     },
     {
       "id": "US-004",
@@ -79,7 +79,7 @@
       ],
       "priority": 5,
       "passes": false,
-      "notes": "The first capped H fillability pilot completed: 10 FAK sends, 1 fill (10%), 9 kills and realised PnL +$3.149919740025, but trial_edge was null and this is not a passed alpha gate. A later timestamped-first pilot sent 3 and filled 0. On explicit owner authorisation after funding, a new bounded timestamped-first pilot is active with 20 FAK maximum, fixed five-share target, $5.00 order cap, $5.35 single-position exposure cap, $5 daily/cumulative realised-loss stops and one order/minute; no other live scope is authorised."
+      "notes": "The first H pilot completed 10 FAK sends, 1 fill, 9 kills and realised PnL +$3.149919740025, but trial_edge was null and this is not an alpha pass. The current authorised timestamped-first pilot is at 5/20 sends with zero fills: local receive-to-send p50 is 0.877 ms, exchange source-to-send p50 107.96 ms and send-to-response p50 346.31 ms; no match timestamp exists yet. Five-share target, $5.00 order cap, $5.35 single-position exposure cap and one order/minute remain. At the owner's explicit instruction the realised-loss stops are disabled, while technical latches and unresolved/resting-order protections remain. Public-book paper fills are only a surviving-depth upper bound, so promotion still requires positive real FAK calibration and explicit live authorisation."
     }
   ]
 }

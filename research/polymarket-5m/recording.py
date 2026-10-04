@@ -38,6 +38,7 @@ import gzip
 import heapq
 import io
 import json
+import math
 import os
 import time
 from datetime import datetime
@@ -50,7 +51,7 @@ import paper_trader as pt
 from real_day import FIXED_POINT
 
 
-STRICT_SCHEMA = "polymarket-5m-strict-replay-v1"
+STRICT_SCHEMA = "polymarket-5m-strict-replay-v2"
 
 
 def iter_jsonl(paths):
@@ -385,6 +386,92 @@ def _strict_spot_events(records, symbol):
         sequence += 1
 
 
+def _source_stats():
+    return {"explicit_order": True, "sequence_regressions": 0, "receive_time_regressions": 0,
+            "epoch_mismatches": 0, "dropped_outside_epoch": 0, "open_epoch_at_eof": None,
+            "max_active_connections": 0}
+
+
+def _strict_binance_stream(records, source, symbol, stats):
+    """Normalize one independently ordered Binance socket without loading it into memory."""
+    active_epoch = None
+    last_epoch = 0
+    previous_sequence = -1
+    previous_receive_ms = -float("inf")
+    for row in records:
+        if str(row.get("s", symbol)).upper() != symbol and row.get("kind") not in ("connection", "disconnect"):
+            continue
+        try:
+            receive_ms = float(row["recv_ms"])
+            sequence = int(row["sequence"])
+            epoch = int(row["connection_epoch"])
+        except (KeyError, TypeError, ValueError) as exc:
+            stats["explicit_order"] = False
+            raise ValueError(f"{source} strict source row is missing causal metadata") from exc
+        if sequence != previous_sequence + 1:
+            stats["sequence_regressions"] += 1
+        if receive_ms < previous_receive_ms:
+            stats["receive_time_regressions"] += 1
+        previous_sequence, previous_receive_ms = sequence, receive_ms
+        stats["max_active_connections"] = max(stats["max_active_connections"],
+                                                  int(row.get("max_active_connections") or 0))
+        kind = row.get("kind")
+        event = {"recv_ms": receive_ms, "source_ts_ms": None, "connection_epoch": epoch,
+                 "stream_sequence": sequence, "stream": source}
+        if kind == "connection":
+            if active_epoch is not None or epoch <= last_epoch:
+                stats["epoch_mismatches"] += 1
+                continue
+            active_epoch = last_epoch = epoch
+            event["kind"] = f"{source}_connection"
+        elif kind == "disconnect":
+            if active_epoch != epoch:
+                stats["epoch_mismatches"] += 1
+                continue
+            event.update(kind=f"{source}_disconnect", error=row.get("error"))
+            active_epoch = None
+        else:
+            if active_epoch != epoch:
+                stats["dropped_outside_epoch"] += 1
+                continue
+            try:
+                bid, ask = float(row.get("b")), float(row.get("a"))
+            except (TypeError, ValueError):
+                bid = ask = math.nan
+            if source == "spot" and kind == "trade":
+                try:
+                    event.update(kind="spot_trade", source_ts_ms=float(row["T"]),
+                                 price=float(row["p"]), size=float(row.get("q") or 0))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("malformed strict spot trade") from exc
+            elif source == "spot" and kind == "bookTicker" and 0 < bid < ask:
+                event.update(kind="spot_bbo", bid=bid, ask=ask)
+            elif source == "futures" and kind == "bookTicker" and 0 < bid < ask:
+                try:
+                    event.update(kind="futures_bbo", source_ts_ms=float(row["T"]),
+                                 event_ts_ms=float(row["E"]), bid=bid, ask=ask)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("malformed strict futures bookTicker") from exc
+            else:
+                raise ValueError(f"unknown {source} strict source row")
+        yield (receive_ms, 0 if source == "spot" else 1, sequence), event
+    stats["open_epoch_at_eof"] = active_epoch
+
+
+def _strict_source_events(src, symbol):
+    """Merge spot trades and timestamped futures BBO by actual local receipt time."""
+    stats = {"spot": _source_stats(), "futures": _source_stats()}
+    streams = [
+        _strict_binance_stream(iter_jsonl_strict(raw_files(src, "binance-strict")),
+                                "spot", symbol, stats["spot"]),
+        _strict_binance_stream(iter_jsonl_strict(raw_files(src, "binance-futures-strict")),
+                                "futures", symbol, stats["futures"]),
+    ]
+    for sequence, (_, event) in enumerate(heapq.merge(*streams, key=lambda item: item[0])):
+        event["seq"] = sequence
+        yield event, stats
+
+
 def _strict_clob_inputs(src, coin):
     """Merge CLOB frames and connection markers without loading the L2 stream into memory."""
     def books():
@@ -418,11 +505,13 @@ def _strict_clob_events(src, coin, token_market):
     active_epoch = None
     last_epoch = 0
     stats = {"explicit_order": True, "source_sequence_regressions": 0,
+             "source_time_regressions": 0,
              "missing_source_ts": 0, "dropped_pre_epoch": 0,
              "dropped_epoch_mismatch": 0, "receive_time_regressions": 0, "open_epoch_at_eof": None}
     snapshots = set()
     last_receive_ms = -float("inf")
     last_source_sequence = -1
+    last_source_ms = -float("inf")
     for _, source, row in _strict_clob_inputs(src, coin):
         receive_ms = float(row["at"] if source == "marker" else row["recv_ms"])
         if receive_ms < last_receive_ms:
@@ -481,6 +570,9 @@ def _strict_clob_events(src, coin, token_market):
                 if source_ts is None:
                     stats["missing_source_ts"] += 1
                     continue
+                if source_ts < last_source_ms:
+                    stats["source_time_regressions"] += 1
+                last_source_ms = max(last_source_ms, source_ts)
                 event = {"kind": "clob_snapshot", "recv_ms": float(row["recv_ms"]), "seq": sequence,
                          "source_ts_ms": source_ts, "connection_epoch": epoch,
                          "market_id": str(message.get("market") or token_market[token]), "asset_id": token,
@@ -495,6 +587,9 @@ def _strict_clob_events(src, coin, token_market):
                 if source_ts is None:
                     stats["missing_source_ts"] += 1
                     continue
+                if source_ts < last_source_ms:
+                    stats["source_time_regressions"] += 1
+                last_source_ms = max(last_source_ms, source_ts)
                 for change in message.get("price_changes") or []:
                     token = str(change.get("asset_id", ""))
                     if token not in token_market:
@@ -516,7 +611,7 @@ def write_strict_bundle(src, out, coin, markets):
     """Write the lossless inputs required for receipt-ordered G/H/I/J replay."""
     strict = Path(out) / "strict"
     strict.mkdir(parents=True, exist_ok=True)
-    names = ("manifest.json", "spot_events.jsonl.gz", "clob_events.jsonl.gz",
+    names = ("manifest.json", "source_events.jsonl.gz", "spot_events.jsonl.gz", "clob_events.jsonl.gz",
              "market_registry.csv.gz", "market_outcomes.csv.gz")
     for name in names:
         path = strict / name
@@ -542,20 +637,17 @@ def write_strict_bundle(src, out, coin, markets):
         writer.writeheader()
         writer.writerows(outcomes)
 
-    counts = {"markets": len(registry), "outcomes": len(outcomes), "spot_trade": 0, "spot_bbo": 0,
+    counts = {"markets": len(registry), "outcomes": len(outcomes),
+              "spot_connection": 0, "spot_trade": 0, "spot_bbo": 0, "spot_disconnect": 0,
+              "futures_connection": 0, "futures_bbo": 0, "futures_disconnect": 0,
               "clob_connection": 0, "clob_snapshot": 0, "clob_price_change": 0, "clob_error": 0}
     times = []
-    spot_regressions = 0
-    last_spot_ms = -float("inf")
-    with gzip.open(strict / "spot_events.jsonl.gz", "wt", compresslevel=3) as stream:
-        for event in _strict_spot_events(iter_jsonl_strict(raw_files(src, "binance-strict")),
-                                         f"{coin.upper()}USDT"):
+    source_stats = {"spot": _source_stats(), "futures": _source_stats()}
+    with gzip.open(strict / "source_events.jsonl.gz", "wt", compresslevel=3) as stream:
+        for event, source_stats in _strict_source_events(src, f"{coin.upper()}USDT"):
             stream.write(json.dumps(event, separators=(",", ":")) + "\n")
             counts[event["kind"]] += 1
             times.append(float(event["recv_ms"]))
-            if float(event["recv_ms"]) < last_spot_ms:
-                spot_regressions += 1
-            last_spot_ms = float(event["recv_ms"])
 
     clob_stats = None
     snapshots = set()
@@ -576,17 +668,28 @@ def write_strict_bundle(src, out, coin, markets):
     missing_resolved_books = sorted(resolved_market_ids - paired_market_ids)
     recorder_complete = any(row.get("where") == "recorder-complete"
                             for row in iter_jsonl_strict(raw_files(src, "errors")))
-    complete = bool(registry and outcomes and counts["spot_trade"] and counts["spot_bbo"] and
+    source_ok = all(stats["explicit_order"] and stats["sequence_regressions"] == 0 and
+                    stats["receive_time_regressions"] == 0 and stats["epoch_mismatches"] == 0 and
+                    stats["dropped_outside_epoch"] == 0 and stats["open_epoch_at_eof"] is None
+                    for stats in source_stats.values())
+    source_ok = (source_ok and
+                 source_stats["spot"]["max_active_connections"] >= pt.SPOT_RACE_CONNECTIONS and
+                 source_stats["futures"]["max_active_connections"] >= pt.FUTURES_RACE_CONNECTIONS)
+    complete = bool(registry and outcomes and counts["spot_connection"] and counts["spot_trade"] and
+                    counts["spot_disconnect"] and counts["futures_connection"] and counts["futures_bbo"] and
+                    counts["futures_disconnect"] and
                     counts["clob_connection"] and paired_market_ids and not missing_resolved_books and
-                    recorder_complete and spot_regressions == 0 and clob_stats["explicit_order"] and
+                    recorder_complete and source_ok and clob_stats["explicit_order"] and
                     clob_stats["source_sequence_regressions"] == 0 and
+                    clob_stats["source_time_regressions"] == 0 and
                     clob_stats["missing_source_ts"] == 0 and clob_stats["dropped_pre_epoch"] == 0 and
                     clob_stats["dropped_epoch_mismatch"] == 0 and
                     clob_stats["receive_time_regressions"] == 0 and clob_stats["open_epoch_at_eof"] is None)
     manifest = {"schema": STRICT_SCHEMA, "coin": coin, "run_id": os.environ.get("GITHUB_RUN_ID"),
+                "collector_region": os.environ.get("POLYMARKET_COLLECTOR_REGION", "unknown"),
                 "complete": complete, "started_ms": min(times) if times else None,
                 "ended_ms": max(times) if times else None, "counts": counts,
-                "recorder_complete": recorder_complete, "spot_receive_time_regressions": spot_regressions,
+                "recorder_complete": recorder_complete, "source_integrity": source_stats,
                 "markets_with_both_token_snapshots": len(paired_market_ids),
                 "missing_resolved_market_ids": missing_resolved_books,
                 "unresolved_market_ids": unresolved_market_ids, "clob_integrity": clob_stats}

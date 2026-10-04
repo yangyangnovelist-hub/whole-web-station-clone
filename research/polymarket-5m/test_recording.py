@@ -308,12 +308,26 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
         ],
     }), S0 * 1000 + 40.5)
     trader.record_clob_close("closed 1000", S0 * 1000 + 50)
+    trader.record_binance_open("spot", S0 * 1000 + 4)
+    trader.record_binance_open("spot", S0 * 1000 + 4.1, conn_id=1)
+    trader.record_binance_open("spot", S0 * 1000 + 4.2, conn_id=2)
     trader.on_binance(json.dumps({"stream": "btcusdt@trade", "data": {
         "e": "trade", "s": "BTCUSDT", "T": S0 * 1000 + 5, "p": "80000.5", "q": "0.01", "m": False,
     }}), S0 * 1000 + 6.25)
     trader.on_binance(json.dumps({"stream": "btcusdt@bookTicker", "data": {
         "u": 9, "s": "BTCUSDT", "b": "80000.4", "B": "2", "a": "80000.6", "A": "3",
     }}), S0 * 1000 + 7.5)
+    trader.record_binance_close("spot", "closed 1000", S0 * 1000 + 7.8, conn_id=1)
+    trader.record_binance_close("spot", "closed 1000", S0 * 1000 + 7.9, conn_id=2)
+    trader.record_binance_close("spot", "closed 1000", S0 * 1000 + 8)
+    trader.record_binance_open("futures", S0 * 1000 + 8.5)
+    trader.record_binance_open("futures", S0 * 1000 + 8.6, conn_id=1)
+    trader.on_binance_futures(json.dumps({
+        "e": "bookTicker", "E": S0 * 1000 + 6, "T": S0 * 1000 + 5, "u": 10, "s": "BTCUSDT",
+        "b": "80000.45", "B": "2", "a": "80000.55", "A": "3",
+    }), S0 * 1000 + 9.25)
+    trader.record_binance_close("futures", "closed 1000", S0 * 1000 + 9.9, conn_id=1)
+    trader.record_binance_close("futures", "closed 1000", S0 * 1000 + 10)
     trader.rec.close()
 
     assert rc.build(tmp_path, tmp_path / "bundle")["strict_ready"] is False
@@ -323,16 +337,21 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     strict = tmp_path / "bundle" / "strict"
     assert counts["strict_ready"] is True
     manifest = json.loads((strict / "manifest.json").read_text())
-    assert manifest["schema"] == "polymarket-5m-strict-replay-v1"
+    assert manifest["schema"] == "polymarket-5m-strict-replay-v2"
     assert manifest["complete"] is True
     assert manifest["counts"]["spot_bbo"] == 1
+    assert manifest["counts"]["futures_bbo"] == 1
     assert manifest["counts"]["clob_snapshot"] == 2
     assert manifest["counts"]["clob_price_change"] == 2
     assert archive.validate_standard_artifact(strict)["counts"] == manifest["counts"]
 
-    spot = list(archive.iter_normalized_events(strict / "spot_events.jsonl.gz", family="spot"))
-    assert [row["kind"] for row in spot] == ["spot_trade", "spot_bbo"]
-    assert spot[1]["source_ts_ms"] is None and spot[1]["bid"] == 80000.4
+    source = list(archive.iter_normalized_events(strict / "source_events.jsonl.gz", family="source"))
+    assert [row["kind"] for row in source] == [
+        "spot_connection", "spot_trade", "spot_bbo", "spot_disconnect",
+        "futures_connection", "futures_bbo", "futures_disconnect",
+    ]
+    assert source[2]["source_ts_ms"] is None and source[2]["bid"] == 80000.4
+    assert source[5]["source_ts_ms"] == S0 * 1000 + 5
 
     clob = list(archive.iter_normalized_events(strict / "clob_events.jsonl.gz", family="clob"))
     assert [row["kind"] for row in clob] == [

@@ -109,6 +109,27 @@ def test_normalized_strict_stream_validates_family_sequence_and_epoch(tmp_path):
         list(archive.iter_normalized_events(clob, family="clob"))
 
 
+def test_normalized_clob_rejects_source_clock_regression(tmp_path):
+    archive = importlib.import_module("h_replay_archive")
+    clob = tmp_path / "clob.jsonl.gz"
+    rows = [
+        {"kind": "clob_connection", "recv_ms": 1_000.0, "source_ts_ms": None,
+         "seq": 0, "connection_epoch": 1, "token_count": 2},
+        {"kind": "clob_snapshot", "recv_ms": 1_001.0, "source_ts_ms": 990.0,
+         "seq": 1, "connection_epoch": 1, "market_id": "m", "asset_id": "up",
+         "bids": [], "asks": []},
+        {"kind": "clob_snapshot", "recv_ms": 1_002.0, "source_ts_ms": 989.0,
+         "seq": 2, "connection_epoch": 1, "market_id": "m", "asset_id": "down",
+         "bids": [], "asks": []},
+        {"kind": "clob_error", "recv_ms": 1_003.0, "source_ts_ms": None,
+         "seq": 3, "connection_epoch": 1, "error": "closed"},
+    ]
+    _write_jsonl_gz(clob, rows)
+
+    with pytest.raises(archive.ArchiveFormatError, match="source_ts_ms moved backwards"):
+        list(archive.iter_normalized_events(clob, family="clob"))
+
+
 def test_clob_snapshots_use_outer_receive_order_when_source_time_inverts(tmp_path):
     archive = importlib.import_module("h_replay_archive")
     path = tmp_path / "clob.jsonl"

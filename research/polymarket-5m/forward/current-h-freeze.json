@@ -1,25 +1,30 @@
 {
-  "strategy_id": "CURRENT-H-END-TO-END-V1",
+  "strategy_id": "CURRENT-H-TIMESTAMPED-FIRST-V2",
   "paper_only": true,
   "semantics": {
     "event_order": "receive_ms_stable",
     "source_timestamp": "fair_and_match_book_lookup_after_causal_receive",
-    "trigger": "first_bookTicker_candidate_immutable",
+    "trigger": "receipt_ordered_spot_trade_and_timestamped_futures_bookTicker",
     "candidate_sources": [
-      "binance_spot_bookTicker"
+      "binance_spot_trade",
+      "binance_futures_bookTicker"
     ],
-    "retry_after_no_send_or_kill": false,
-    "book_ladders": "direct_up_and_direct_down_only",
-    "fill_qualification": "at_least_target_shares_on_direct_token_ask_ladder",
-    "scope": "conservative_live_subset_not_trade_fallback_mirrored_liquidity_or_partial_fill",
+    "retry_after_no_send_or_kill": true,
+    "book_ladders": "live_equivalent_effective_up_and_down",
+    "fill_qualification": "all_positive_FAK_partial_and_full_fills_count",
+    "fill_model": "public_book_surviving_depth_upper_bound_requires_live_FAK_calibration",
+    "scope": "current_timestamped_first_live_path_with_rate_limit_and_no_reentry_after_fill",
     "disconnect": "clear_book_and_require_fresh_full_snapshot",
     "future_health_check": false,
     "emit_no_fill": true
   },
   "timing": {
-    "book_trigger_synthetic_lag_ms": 106.0,
-    "decision_sign_send_warm_ms": 0.86,
+    "book_trigger_synthetic_lag_ms": 0.0,
+    "signal_time_basis": "exchange_source_timestamp",
+    "decision_sign_send_warm_ms": 0.9,
+    "order_wire_ms": 15.0,
     "venue_hold_ms": 150.0,
+    "primary_evaluation_ms": 500.0,
     "evaluation_ms": [
       300.0,
       350.0,
@@ -44,13 +49,23 @@
     "fee_rate": 0.07,
     "base_shares": 5.0,
     "pilot_min_usd": 1.0,
-    "max_order_usd": 3.9,
+    "max_order_usd": 5.0,
+    "max_orders_per_min": 1,
     "minimum_direct_depth_shares": 5.0,
     "order_type": "FAK",
     "reentry_min_ms": 2000.0,
-    "opposite_signal_multiplier": 2.0,
+    "opposite_signal_multiplier": 1.0,
     "same_signal_multiplier": 1.0,
-    "reentry_requires_actual_fill": true
+    "reentry_requires_actual_fill": true,
+    "reentry": false
+  },
+  "statistics": {
+    "family_tests": 100,
+    "multiple_testing": "Bonferroni",
+    "paper_gate_min_fills": 1000,
+    "paper_gate_min_utc_days": 7,
+    "paper_gate_alpha": 0.01,
+    "live_calibration_required": true
   },
   "golden_live_evidence": {
     "decision_ask": 0.33,

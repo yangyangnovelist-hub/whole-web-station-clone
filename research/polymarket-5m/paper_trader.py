@@ -24,6 +24,7 @@ import json
 import math
 import time
 import urllib.request
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +46,12 @@ COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"  # public trade prints, exch
 # Binance's market-data-only host, reachable from US runners (stream.binance.com answers 451 there):
 # every aggregated BTCUSDT (etc.) trade with its exchange time, the feed the May-August backtests used.
 BINANCE_WS = "wss://data-stream.binance.vision/stream?streams={streams}"
+BINANCE_FUTURES_WS = (
+    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
+    "wss://fstream.binance.com/public/ws/btcusdt@bookTicker",
+)
+SPOT_RACE_CONNECTIONS = 3
+FUTURES_RACE_CONNECTIONS = 2
 SLUG = "{coin}-updown-5m-{start}"
 COINS = ("btc", "eth", "sol", "xrp", "doge")  # the coins with 5m Up/Down series
 NAN = float("nan")
@@ -314,6 +321,12 @@ class LiveTrader:
         self.clob_sequence = 0
         self.clob_active = False
         self.binance_bbo = {}
+        self.binance_sources = {
+            "spot": {"epoch": 0, "sequence": 0, "active_connections": set(), "max_active": 0},
+            "futures": {"epoch": 0, "sequence": 0, "active_connections": set(), "max_active": 0},
+        }
+        self.binance_seen = {"spot": set(), "futures": set()}
+        self.binance_seen_order = {"spot": deque(), "futures": deque()}
 
     def _next_clob_sequence(self):
         sequence = self.clob_sequence
@@ -340,6 +353,49 @@ class LiveTrader:
     def record_complete(self, at_ms=None):
         self.rec.write("errors", {"at": now_ms() if at_ms is None else at_ms,
                                   "where": "recorder-complete"})
+
+    def _binance_record(self, source, row):
+        state = self.binance_sources[source]
+        record = {**row, "connection_epoch": state["epoch"], "sequence": state["sequence"],
+                  "active_connections": len(state["active_connections"]),
+                  "max_active_connections": state["max_active"]}
+        state["sequence"] += 1
+        self.rec.write("binance-strict" if source == "spot" else "binance-futures-strict", record)
+
+    def _first_binance_frame(self, source, key):
+        seen = self.binance_seen[source]
+        if key in seen:
+            return False
+        seen.add(key)
+        order = self.binance_seen_order[source]
+        order.append(key)
+        if len(order) > 100_000:
+            seen.discard(order.popleft())
+        return True
+
+    def record_binance_open(self, source, at_ms=None, conn_id=0):
+        state = self.binance_sources[source]
+        active = state["active_connections"]
+        if conn_id in active:
+            raise RuntimeError(f"{source} Binance connection {conn_id} already active")
+        first = not active
+        active.add(conn_id)
+        state["max_active"] = max(state["max_active"], len(active))
+        if first:
+            state["epoch"] += 1
+            self._binance_record(source, {"kind": "connection", "recv_ms": now_ms() if at_ms is None else at_ms,
+                                          "conn_id": conn_id})
+        return state["epoch"]
+
+    def record_binance_close(self, source, error, at_ms=None, conn_id=0):
+        state = self.binance_sources[source]
+        active = state["active_connections"]
+        if conn_id not in active:
+            return
+        active.remove(conn_id)
+        if not active:
+            self._binance_record(source, {"kind": "disconnect", "recv_ms": now_ms() if at_ms is None else at_ms,
+                                          "error": str(error), "conn_id": conn_id})
 
     # -- state updates (pure, unit-tested) --
     def on_clob(self, text, recv_ms):
@@ -378,27 +434,57 @@ class LiveTrader:
             self.rec.write("coinbase", {"recv_ms": recv_ms, "p": msg.get("product_id"), "t": msg.get("time"),
                                         "px": msg.get("price"), "sz": msg.get("size"), "side": msg.get("side")})
 
-    def on_binance(self, text, recv_ms):
+    def on_binance(self, text, recv_ms, conn_id=0):
         """Binance raw trades and BBO changes, kept in their actual receipt order."""
         msg = json.loads(text)
         d = msg.get("data", msg)
         if d.get("e") == "aggTrade":
+            identity = d.get("a")
+            if identity is None:
+                identity = (d.get("T"), d.get("p"), d.get("q"), d.get("m"))
+            key = ("aggTrade", str(d.get("s")), identity)
+            if not self._first_binance_frame("spot", key):
+                return
             self.rec.write("binance", {"recv_ms": recv_ms, "s": d.get("s"), "T": d.get("T"),
                                        "p": d.get("p"), "q": d.get("q"), "m": d.get("m")})
         elif d.get("e") == "trade":
-            self.rec.write("binance-strict", {"kind": "trade", "recv_ms": recv_ms, "s": d.get("s"),
-                                              "T": d.get("T"), "p": d.get("p"), "q": d.get("q"),
-                                              "m": d.get("m")})
+            identity = d.get("t")
+            if identity is None:
+                identity = (d.get("T"), d.get("p"), d.get("q"), d.get("m"))
+            key = ("trade", str(d.get("s")), identity)
+            if not self._first_binance_frame("spot", key):
+                return
+            self._binance_record("spot", {"kind": "trade", "recv_ms": recv_ms, "s": d.get("s"),
+                                           "T": d.get("T"), "p": d.get("p"), "q": d.get("q"),
+                                           "m": d.get("m"), "conn_id": conn_id})
         elif d.get("s") and d.get("b") is not None and d.get("a") is not None:
+            key = ("bookTicker", str(d.get("s")), d.get("u"))
+            if not self._first_binance_frame("spot", key):
+                return
             key = str(d["s"])
             bbo = (str(d["b"]), str(d["a"]))
             if self.binance_bbo.get(key) == bbo:
                 return
             self.binance_bbo[key] = bbo
-            self.rec.write("binance-strict", {"kind": "bookTicker", "recv_ms": recv_ms, "s": d.get("s"),
-                                              "E": d.get("T") or d.get("E"), "u": d.get("u"),
-                                              "b": d.get("b"), "B": d.get("B"),
-                                              "a": d.get("a"), "A": d.get("A")})
+            self._binance_record("spot", {"kind": "bookTicker", "recv_ms": recv_ms, "s": d.get("s"),
+                                           "E": d.get("T") or d.get("E"), "u": d.get("u"),
+                                           "b": d.get("b"), "B": d.get("B"),
+                                           "a": d.get("a"), "A": d.get("A"), "conn_id": conn_id})
+
+    def on_binance_futures(self, text, recv_ms, conn_id=0):
+        """Every timestamped futures BBO frame, matching the production H trigger input."""
+        msg = json.loads(text)
+        d = msg.get("data", msg)
+        if d.get("e") != "bookTicker" or not d.get("s") or d.get("b") is None or d.get("a") is None:
+            return
+        key = ("bookTicker", str(d.get("s")), d.get("u"))
+        if not self._first_binance_frame("futures", key):
+            return
+        self._binance_record("futures", {
+            "kind": "bookTicker", "recv_ms": recv_ms, "s": d.get("s"),
+            "T": d.get("T") or d.get("E"), "E": d.get("E"), "u": d.get("u"),
+            "b": d.get("b"), "B": d.get("B"), "a": d.get("a"), "A": d.get("A"), "conn_id": conn_id,
+        })
 
     def top(self, token):
         lad = self.ladders.get(token, Ladder())
@@ -575,16 +661,50 @@ class LiveTrader:
                 self.rec.write("errors", {"at": now_ms(), "where": "coinbase", "err": repr(e)})
             await asyncio.sleep(2)
 
-    async def binance_loop(self):
+    async def binance_loop(self, conn_id=0):
         import websockets
         url = BINANCE_WS.format(streams="/".join(binance_stream_names(self.coins)))
         while True:
             try:
                 async with websockets.connect(url, ping_interval=20, max_size=None) as ws:
-                    async for text in ws:
-                        self.on_binance(text, time.time_ns() / 1_000_000)
+                    self.record_binance_open("spot", time.time_ns() / 1_000_000, conn_id)
+                    try:
+                        async for text in ws:
+                            self.on_binance(text, time.time_ns() / 1_000_000, conn_id)
+                    except BaseException as error:
+                        self.record_binance_close("spot", repr(error), time.time_ns() / 1_000_000, conn_id)
+                        raise
+                    else:
+                        self.record_binance_close("spot", f"closed {ws.close_code}",
+                                                  time.time_ns() / 1_000_000, conn_id)
             except Exception as e:
                 self.rec.write("errors", {"at": now_ms(), "where": "binance", "err": repr(e)})
+            await asyncio.sleep(2)
+
+    async def binance_futures_loop(self, conn_id=0):
+        import websockets
+        endpoint = 0
+        while True:
+            url = BINANCE_FUTURES_WS[endpoint % len(BINANCE_FUTURES_WS)]
+            received = 0
+            try:
+                async with websockets.connect(url, ping_interval=20, max_size=None) as ws:
+                    self.record_binance_open("futures", time.time_ns() / 1_000_000, conn_id)
+                    try:
+                        async for text in ws:
+                            received += 1
+                            self.on_binance_futures(text, time.time_ns() / 1_000_000, conn_id)
+                    except BaseException as error:
+                        self.record_binance_close("futures", repr(error), time.time_ns() / 1_000_000, conn_id)
+                        raise
+                    else:
+                        self.record_binance_close("futures", f"closed {ws.close_code}",
+                                                   time.time_ns() / 1_000_000, conn_id)
+            except Exception as e:
+                self.rec.write("errors", {"at": now_ms(), "where": "binance-futures", "url": url,
+                                          "frames": received, "err": repr(e)})
+                if received == 0:
+                    endpoint += 1
             await asyncio.sleep(2)
 
     @staticmethod
@@ -629,9 +749,11 @@ class LiveTrader:
         asyncio.get_running_loop().set_exception_handler(
             lambda loop, ctx: self.rec.write("errors", {"at": now_ms(), "where": "loop",
                                                         "err": repr(ctx.get("exception") or ctx.get("message"))}))
-        tasks = [asyncio.create_task(c) for c in
-                 (self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
-                  self.coinbase_loop(), self.binance_loop(), self.scheduler(), self.resolver(), self.reporter())]
+        coroutines = [self.discover(), self.clob_loop(), self.rtds_loop(), self.rtds_loop("rtds-binance"),
+                      self.coinbase_loop(), self.scheduler(), self.resolver(), self.reporter()]
+        coroutines += [self.binance_loop(index) for index in range(SPOT_RACE_CONNECTIONS)]
+        coroutines += [self.binance_futures_loop(index) for index in range(FUTURES_RACE_CONNECTIONS)]
+        tasks = [asyncio.create_task(c) for c in coroutines]
         completed = False
         try:
             await asyncio.sleep(hours * 3600)

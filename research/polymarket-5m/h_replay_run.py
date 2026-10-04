@@ -197,6 +197,56 @@ class BookTickerTrigger:
         return Candidate(slot, timestamp_s, 1 if move > 0 else -1, move, sigma, log_price, anchor)
 
 
+class TimestampedFirstTrigger:
+    """Production H source race: spot trades train sigma and race timestamped futures BBO."""
+
+    def __init__(self, config: SignalConfig) -> None:
+        self.config = config
+        self.grid = SigmaGrid(config.sigma_window_s, config.sigma_min_observations, config.forward_fill_s)
+        self.trade_timestamps: list[float] = []
+        self.trade_log_prices: list[float] = []
+        self.futures_timestamps: list[float] = []
+        self.futures_log_prices: list[float] = []
+
+    def _candidate(self, timestamps: list[float], log_prices: list[float], timestamp_ms: float,
+                   price: float) -> Optional[Candidate]:
+        if not price > 0:
+            return None
+        timestamp_s = timestamp_ms / 1_000.0
+        if timestamps and timestamp_s < timestamps[-1]:
+            timestamp_s = timestamps[-1]
+        log_price = math.log(price)
+        timestamps.append(timestamp_s)
+        log_prices.append(log_price)
+        if len(timestamps) > 4_096 and timestamps[0] < timestamp_s - 10.0:
+            cut = bisect_right(timestamps, timestamp_s - 10.0)
+            del timestamps[:cut]
+            del log_prices[:cut]
+        slot = int(timestamp_s // WINDOW_S) * WINDOW_S
+        end = slot + WINDOW_S
+        if not end - self.config.tau_hi_s <= timestamp_s < end - self.config.tau_lo_s:
+            return None
+        reference_index = bisect_right(timestamps, timestamp_s - 1.0) - 1
+        if reference_index < 0 or timestamp_s - timestamps[reference_index] > self.config.reference_age_s:
+            return None
+        sigma = self.grid.sigma()
+        move = log_price - log_prices[reference_index]
+        if not math.isfinite(sigma) or abs(move) <= self.config.z0 * sigma:
+            return None
+        anchor_index = bisect_right(timestamps, timestamp_s - self.config.anchor_s) - 1
+        anchor = log_prices[anchor_index] if anchor_index >= 0 else math.nan
+        return Candidate(slot, timestamp_s, 1 if move > 0 else -1, move, sigma, log_price, anchor)
+
+    def update_trade(self, source_timestamp_ms: float, price: float) -> Optional[Candidate]:
+        if price > 0:
+            self.grid.update(source_timestamp_ms / 1_000.0, math.log(price))
+        return self._candidate(self.trade_timestamps, self.trade_log_prices, source_timestamp_ms, price)
+
+    def update_futures(self, source_timestamp_ms: float, bid: float, ask: float) -> Optional[Candidate]:
+        return self._candidate(self.futures_timestamps, self.futures_log_prices, source_timestamp_ms,
+                               (bid + ask) / 2.0)
+
+
 @dataclass
 class TokenBook:
     bids: dict[float, float] = field(default_factory=dict)
@@ -263,11 +313,32 @@ class DirectMarketBook:
     def source_ms(self) -> float:
         return max(self.up.source_ms, self.down.source_ms)
 
+    @staticmethod
+    def _key(price: float) -> int:
+        return int(round(price * 10_000))
+
+    def effective_asks(self, direction: str) -> list[list[float]]:
+        own = self.up if direction == "Up" else self.down
+        opposite = self.down if direction == "Up" else self.up
+        levels: dict[int, float] = {}
+        for price, size in own.asks.items():
+            key = self._key(price)
+            levels[key] = max(levels.get(key, 0.0), size)
+        for price, size in opposite.bids.items():
+            key = 10_000 - self._key(price)
+            levels[key] = max(levels.get(key, 0.0), size)
+        return [[key / 10_000.0, levels[key]] for key in sorted(levels)]
+
     def midpoint(self) -> float:
-        if not self.ready or not self.up.bids or not self.up.asks:
+        if not self.ready:
             return math.nan
-        bid = max(self.up.bids)
-        ask = min(self.up.asks)
+        direct_bids = [self._key(price) for price in self.up.bids]
+        mirrored_bids = [10_000 - self._key(price) for price in self.down.asks]
+        asks = self.effective_asks("Up")
+        if not (direct_bids or mirrored_bids) or not asks:
+            return math.nan
+        bid = max([*direct_bids, *mirrored_bids]) / 10_000.0
+        ask = asks[0][0]
         return (bid + ask) / 2.0 if bid < ask else math.nan
 
 
@@ -312,10 +383,10 @@ def _clob_batches(events: Iterable[dict[str, Any]]) -> Iterator[dict[str, Any]]:
 
 
 def _merged_events(
-    spot_events: Iterable[dict[str, Any]],
+    source_events: Iterable[dict[str, Any]],
     clob_events: Iterable[dict[str, Any]],
 ) -> Iterator[dict[str, Any]]:
-    spot = (((float(event["recv_ms"]), 0, int(event["seq"])), event) for event in spot_events)
+    spot = (((float(event["recv_ms"]), 0, int(event["seq"])), event) for event in source_events)
     clob = (((float(event["recv_ms"]), 1, int(event["seq"])), event) for event in _clob_batches(clob_events))
     for _, event in heapq.merge(spot, clob, key=lambda item: item[0]):
         yield event
@@ -394,8 +465,8 @@ def _apply_clob_batch(
                 "market_id": market.market_id,
                 "receive_ms": receive_ms,
                 "source_ms": market.source_ms,
-                "up_asks": market.up.ask_levels(),
-                "down_asks": market.down.ask_levels(),
+                "up_asks": market.effective_asks("Up"),
+                "down_asks": market.effective_asks("Down"),
                 "advance_watermark": False,
             })
         else:
@@ -443,7 +514,7 @@ def _candidate_fair(
 
 
 def replay_normalized(
-    spot_events: Iterable[dict[str, Any]],
+    source_events: Iterable[dict[str, Any]],
     clob_events: Iterable[dict[str, Any]],
     mappings: Iterable[dict[str, Any]],
     outcomes: dict[str, str],
@@ -452,22 +523,30 @@ def replay_normalized(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     markets, tokens = _mapping_dict(mappings)
     rings: dict[int, SourceRing] = {}
-    trigger = BookTickerTrigger(signal_config)
+    trigger = TimestampedFirstTrigger(signal_config)
     machine = replay.HReplay(execution_config)
     connected = False
     counters: Counter[str] = Counter()
-    for event in _merged_events(spot_events, clob_events):
+    for event in _merged_events(source_events, clob_events):
         kind = event["kind"]
         if kind == "clob_batch":
             connected = _apply_clob_batch(event, machine, tokens, rings, connected)
             counters["clob_batches"] += 1
             continue
+        candidate = None
+        source = None
         if kind == "spot_trade":
-            trigger.update_trade(float(event["source_ts_ms"]), float(event["price"]))
+            candidate = trigger.update_trade(float(event["source_ts_ms"]), float(event["price"]))
             counters["spot_trades"] += 1
+            source = "spot_trade"
+        elif kind == "futures_bbo":
+            candidate = trigger.update_futures(float(event["source_ts_ms"]),
+                                               float(event["bid"]), float(event["ask"]))
+            counters["futures_bbo"] += 1
+            source = "futures_book_ticker"
+        else:
+            counters[kind] += 1
             continue
-        counters["spot_bbo"] += 1
-        candidate = trigger.update_bbo(float(event["recv_ms"]), float(event["bid"]), float(event["ask"]))
         if candidate is None or not connected:
             continue
         market = markets.get(candidate.slot)
@@ -475,17 +554,21 @@ def replay_normalized(
             counters["candidate_no_market"] += 1
             continue
         fair, reason = _candidate_fair(candidate, rings.get(candidate.slot), signal_config)
+        counters[f"candidate_{reason}"] += 1
+        counters[f"candidate_source_{source}"] += 1
+        if reason != "trigger":
+            continue
         machine.feed({
             "kind": "signal",
             "market_id": market.market_id,
             "receive_ms": float(event["recv_ms"]),
-            "source_ms": event.get("source_ts_ms"),
+            "source_ms": candidate.timestamp_s * 1_000.0,
+            "signal_source": source,
             "direction": "Up" if candidate.direction > 0 else "Down",
             "fair": fair,
             "trigger_reason": reason,
             "trial_edge": None,
         })
-        counters[f"candidate_{reason}"] += 1
     machine.finish()
     rows = machine.records
     for row in rows:
@@ -527,6 +610,8 @@ def summarize(rows: list[dict[str, Any]], counters: dict[str, Any]) -> dict[str,
         pnl_per_share = [float(row["pnl_per_share"]) for row in fills]
         days = sorted({str(row["day"]) for row in fills})
         reasons = Counter(str(row["reason"]) for row in sample)
+        sent_sources = Counter(str(row.get("signal_source") or "unknown") for row in sample if row["sent"])
+        fill_sources = Counter(str(row.get("signal_source") or "unknown") for row in fills)
         mean_ev = sum(pnl_per_share) / len(pnl_per_share) if pnl_per_share else None
         output["latencies"][str(int(latency))] = {
             "signals": len(sample),
@@ -540,11 +625,14 @@ def summarize(rows: list[dict[str, Any]], counters: dict[str, Any]) -> dict[str,
             "day_cluster_lower_99": None,
             "exact_p": _exact_pvalue(fills) if mean_ev is not None and mean_ev > 0 else 1.0,
             "reasons": dict(sorted(reasons.items())),
+            "sent_by_source": dict(sorted(sent_sources.items())),
+            "fills_by_source": dict(sorted(fill_sources.items())),
         }
     return output
 
 
-def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FREEZE_PATH) -> dict[str, Any]:
+def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FREEZE_PATH,
+                   rows_out: str | Path | None = None) -> dict[str, Any]:
     archive_dir = Path(archive_dir)
     frozen = replay.load_freeze(freeze_path)
     execution = replay.config_from_freeze(frozen)
@@ -556,10 +644,12 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
         mappings = list(archive.iter_market_mappings(standard / "market_registry.csv.gz"))
         outcomes = {row["market_id"]: row["winner"]
                     for row in archive.iter_outcomes(standard / "market_outcomes.csv.gz")}
-        spot = archive.iter_normalized_events(standard / "spot_events.jsonl.gz", family="spot")
+        spot = archive.iter_normalized_events(standard / "source_events.jsonl.gz", family="source")
         clob = archive.iter_normalized_events(standard / "clob_events.jsonl.gz", family="clob")
         dataset = {"archive": archive_dir.name, "mapped_markets": len(mappings), "raw_clob_files": 1,
-                   "sample_scope": "standard_forward_artifact", "paper_gate_eligible": True,
+                   "sample_scope": "standard_forward_artifact",
+                   "collector_region": manifest.get("collector_region", "unknown"),
+                   "paper_gate_eligible": manifest.get("collector_region") == "eu-west-1",
                    "manifest": manifest}
     else:
         mappings = list(archive.iter_market_mappings(archive_dir / "market_registry.csv.gz"))
@@ -572,11 +662,20 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
                    "raw_clob_files": len(clob_paths), "sample_scope": "single_utc_day_audit",
                    "paper_gate_eligible": False}
     rows, counters = replay_normalized(spot, clob, mappings, outcomes, execution, signal)
+    observation_run_id = str(dataset.get("manifest", {}).get("run_id") or archive_dir.name)
+    for row in rows:
+        row["observation_run_id"] = observation_run_id
+    if rows_out is not None:
+        destination = Path(rows_out)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("w", encoding="utf-8") as stream:
+            for row in rows:
+                stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
     result = summarize(rows, counters)
     pending_outcomes = sorted({str(row["market_id"]) for row in rows if row.get("winner") is None})
     if dataset["sample_scope"] == "standard_forward_artifact":
         dataset["pending_signal_market_outcomes"] = pending_outcomes
-        dataset["paper_gate_eligible"] = not pending_outcomes
+        dataset["paper_gate_eligible"] = bool(dataset["paper_gate_eligible"] and not pending_outcomes)
     result["dataset"] = dataset
     result["protocol"] = {
         "scope": frozen["semantics"]["scope"],
@@ -592,8 +691,9 @@ def main() -> None:
     parser.add_argument("--freeze", default=str(replay.FREEZE_PATH))
     parser.add_argument("--require-paper-gate", action="store_true",
                         help="exit nonzero unless every signal-bearing market has an outcome")
+    parser.add_argument("--rows-out", help="write replay observations as JSONL for idempotent accumulation")
     args = parser.parse_args()
-    result = replay_archive(args.archive, args.freeze)
+    result = replay_archive(args.archive, args.freeze, args.rows_out)
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
     if args.require_paper_gate and not result["dataset"].get("paper_gate_eligible", False):
         raise SystemExit("strict replay is not paper-gate eligible")

@@ -124,9 +124,30 @@ jobs:
           checked = validate_standard_artifact(d)
           print(json.dumps(checked["manifest"], sort_keys=True))
           PY
-          python h_replay_run.py --archive "$RUNNER_TEMP/paper/bundle-btc" --require-paper-gate \
+          python h_replay_run.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --rows-out "$RUNNER_TEMP/current-h-rows.jsonl" \
             > "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json"
+          if python - "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json" <<'PY'
+          import json, sys
+          raise SystemExit(0 if json.load(open(sys.argv[1]))["dataset"]["paper_gate_eligible"] else 1)
+          PY
+          then
+            python h_forward.py "$RUNNER_TEMP/current-h-rows.jsonl"
+          else
+            echo "Strict artifact validated, but its collector region is not production-equivalent; audit only."
+          fi
           test "$(du -sm "$RUNNER_TEMP/paper/bundle-btc/strict" | awk '{print $1}')" -lt 1500
+
+      - name: Persist pooled stopping state before nonessential artifact work
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A forward 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: forward-test results from recording run ${{ github.run_id }}" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
 
       - name: Keep the converted bundles (the raw messages run to gigabytes)
         if: steps.cfg.outputs.enabled == 'true'
@@ -147,21 +168,8 @@ jobs:
           path: ${{ runner.temp }}/raw.tgz
           retention-days: 30
 
-      - name: Commit pooled results
-        if: steps.cfg.outputs.enabled == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A forward 2>/dev/null || true
-          git diff --cached --quiet && exit 0
-          git commit -q -m "research: forward-test results from recording run ${{ github.run_id }}" \
-            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
-            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
-          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
-          exit 1
-
       - name: Start the next run
-        if: always() && steps.cfg.outputs.enabled == 'true'
+        if: success() && steps.cfg.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run polymarket-forward.yml --ref "${{ github.ref_name }}"
