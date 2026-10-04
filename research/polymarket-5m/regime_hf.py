@@ -43,7 +43,9 @@ Conventions shared with the other Hugging Face lanes (cross.py, jump2s_hf.py, mi
   a Polymarket print on that token with taker side BUY trades STRICTLY above L, or a usable snapshot
   shows the token's best bid STRICTLY above L, the print or the level showing >= 5 shares
   (conservative on queue priority: only a price through our level proves everyone at L was filled;
-  a touch at L is never a fill). Not filled by entry + h: taker exit decided at entry + h.
+  a touch at L is never a fill). Not filled by entry + h: taker exit decided at entry + h. A bid >= L
+  at the moment the order goes live that cannot be priced (stale book, < 5 shares) gives no resting
+  fill at all (the taker exit at the timer is used).
 
 The six base strategies (REGIME.md; every window, one realised P&L each, with units):
 1. H ("H"): candidates = jump prints received with 240 >= seconds left >= 15 (the H rule's window,
@@ -71,17 +73,19 @@ The six base strategies (REGIME.md; every window, one realised P&L each, with un
    received by then; the side whose probability P is in [0.95, 0.99) is bought when its ask at that
    moment is <= P - 1c, by a limit at P - 1c filled at + 0.5 s only if the ask then is still <= P - 1c.
    Held to settlement.
-6. Maker ("maker"): from 285 to 20 s before the end, resting BUY orders of 5 shares on both tokens at
-   the Up mid - 2c (Up) and 1 - Up mid - 2c (Down; = selling Up at mid + 2c), each floored to the
-   cent, in 0.02 .. 0.98. A side's order is replaced when its price changes at a fresh, usable
-   snapshot (cancel effective 0.2 s after the decision, the new order live 0.5 s after it; an order a
-   cancel overtakes is never live). A Binance jump received at c cancels both (effective c + 0.2 s)
-   and no order is placed before c + 1 s. Fill: a print on that token with taker side SELL STRICTLY
-   below our price, or a usable snapshot with the token's best ask STRICTLY below it, showing >= 5
-   shares (as the resting sells above), at our price without fee; an order whose price the book
-   already crosses when it goes live (fresh ask <= our price, >= 5 shares) is a taker buy at that ask
-   (fee). At most one fill per token per window (then that side stops quoting). Held to settlement.
-   Quotes are re-derived only from the book, so a fill on one side does not move the other side.
+6. Maker ("maker"): from 285 to 20 s before the end, resting BUY orders of 5 shares on both tokens,
+   each at its own token's mid - 2c (the Down bid at the Down mid - 2c is selling Up at about the Up
+   mid + 2c: "两边在中间价 ± 2¢"), floored to the cent, in 0.02 .. 0.98 (mid: see below). A side's order
+   is placed or replaced when its price changes at a fresh snapshot with a usable mid (cancel
+   effective 0.2 s after the decision, the new order live 0.5 s after it; an order a cancel overtakes
+   is never live). Every Binance jump received at c cancels both (effective c + 0.2 s), and no order
+   is placed before 1 s after the last such jump. Fill: a print on that token with taker side SELL
+   STRICTLY below our price, or a usable snapshot with the token's best ask STRICTLY below it,
+   showing >= 5 shares (as the resting sells above), at our price without fee. An order the book
+   already crosses when it goes live (ask <= our price) is a taker buy at that ask (fee) when the ask
+   is fresh, in 0.02 .. 0.98 with >= 5 shares, and no fill at all otherwise. At most one fill per token
+   per window (that side then stops quoting). Held to settlement. Quotes come from the book only, so
+   a fill on one side does not move the other side's quote. A trade's t is its order's decision time.
 7. None: P&L 0 (pnl_none).
 
 Per strategy s the columns (all $ after every fee; at 5 shares a trade and at the "20-share" size =
@@ -113,7 +117,7 @@ P&L over the previous 12 / 48 windows is built in regime_learn.py from the table
   of the previous 5m market (the one ending at this open) over its window; book_ups_pre: of this
   market's own book over the 60 s before its open. fac_up: the factor P(up) used by "direction".
 - Also kept (not features): day (archive), market, start (s), won (Up won, final), w (settlement
-  TWAP window, s), book_cov, bin_cov (below).
+  TWAP window, s), book_cov, bin_cov (below), n_chg (live top-of-book changes in the window).
 
 Where REGIME.md and the task are silent, the conservative choice made here:
 - Evaluable: book_cov = share of the window's 300 seconds with a live top-of-book change, bin_cov =
@@ -151,7 +155,6 @@ Where REGIME.md and the task are silent, the conservative choice made here:
 """
 from __future__ import annotations
 
-import math
 import shutil
 import time
 from pathlib import Path
@@ -258,7 +261,8 @@ def build_inputs(cache=None, out_dir=INPUTS, start="2026-05-20", end="2026-09-01
         shutil.copyfile(src, out_dir / name)
     a, b = ts(start), ts(end)
     p = pd.read_parquet(cache / "panel_1m.parquet", columns=["spot_vol", "spot_close", "fut_close", "funding_rate"])
-    T = (p.index.asi8 // 10**9).astype(np.int64) if isinstance(p.index, pd.DatetimeIndex) else p.index.to_numpy(np.int64)
+    T = (((p.index - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).to_numpy(np.int64)
+         if isinstance(p.index, pd.DatetimeIndex) else p.index.to_numpy(np.int64))  # row T: known at T
     m = T - 60
     keep = (m >= a) & (m < b)
     p, m = p[keep], m[keep]

@@ -564,3 +564,47 @@ def test_subcommand_end_to_end_final_outcomes_and_carry(tmp_path, monkeypatch):
     assert r3["trades_H"] == 1 and r3["pnl_H"] == pytest.approx(5 * (1 - 0.51 - fee(0.51)), abs=1e-4)
     assert r3["trades_maker"] == 1 and r3["pnl_maker"] == pytest.approx(5 * (1 - 0.48), abs=1e-4)  # carried print
     assert np.isfinite(r1["fac_up"]) and np.isfinite(r1["rv30m"]) and np.isfinite(r1["dvol_rv"])  # real/regime-inputs
+
+
+def test_build_inputs_minute_file(tmp_path):
+    """Panel row T (known at T) becomes minute T - 60; rv2 sums the squared 1 s log returns of that minute's
+    seconds (bp^2), the first one against the previous minute's last close."""
+    cache, mix = tmp_path / "cache", tmp_path / "mix"
+    cache.mkdir()
+    mix.mkdir()
+    for name in ("factor_preds_5m.csv.gz", "dvol_1h.csv.gz"):
+        (mix / name).write_bytes(b"x")
+    t0 = int(pd.Timestamp("2026-05-20", tz="UTC").timestamp())
+    idx = pd.date_range("2026-05-19 23:59", periods=6, freq="1min", tz="UTC", name="t")  # 23:59 .. 00:04
+    panel = pd.DataFrame({"spot_vol": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0], "spot_close": 100.0,
+                          "fut_close": [100.0, 100.0, 100.05, 99.9, 100.0, 100.0],
+                          "funding_rate": [1e-4, 1e-4, 1e-4, 2e-4, 2e-4, 2e-4]}, index=idx)
+    panel.to_parquet(cache / "panel_1m.parquet")
+    sec = np.arange(t0 - 120, t0 + 300)
+    close = 100.0 * np.exp(np.where(sec >= t0 + 30, 2e-4, 0.0) + np.where(sec >= t0 + 70, -1e-4, 0.0))
+    pd.DataFrame({"close": close}, index=pd.Index(sec, name="sec")).to_parquet(cache / "spot_1s_close.parquet")
+    out = R.build_inputs(cache, tmp_path / "inp", start="2026-05-20", end="2026-05-21", mix_inputs=mix)
+    assert list(out["minute"]) == [t0, t0 + 60, t0 + 120, t0 + 180]  # panel rows 00:01 .. 00:04
+    assert list(out["vol"]) == [4.0, 5.0, 6.0, 7.0] and list(out["nr"]) == [60, 60, 60, 60]
+    assert list(out["basis_bp"]) == pytest.approx([5.0, -10.0, 0.0, 0.0])
+    assert list(out["funding_bp"]) == pytest.approx([1.0, 2.0, 2.0, 2.0])
+    assert list(out["rv2"]) == pytest.approx([4.0, 1.0, 0.0, 0.0], abs=1e-3)
+    assert (tmp_path / "inp" / "binance_1m.csv.gz").exists() and (tmp_path / "inp" / "dvol_1h.csv.gz").exists()
+    M = R.Minutes(pd.read_csv(tmp_path / "inp" / "binance_1m.csv.gz"))
+    s, c = M.window("rv2", np.array([t0 + 120.0]), 2)
+    assert s[0] == pytest.approx(5.0, abs=1e-3) and c[0] == 2  # minutes t0, t0 + 60 (closed by t0 + 120)
+    assert M.funding(np.array([t0 + 120.0]))[0] == pytest.approx(2.0)
+
+
+def test_twap_era_market_runs_every_strategy():
+    """A window opening 2026-08-20 settles on the 60 s TWAP (w = 60): H's fair uses binary.twap_std_factor and
+    the late model the TWAP rule; both still trade on a clear move."""
+    s2 = int(pd.Timestamp("2026-08-20 12:00", tz="UTC").timestamp())
+    f = book(start=s2)
+    b = binance(steps=((100.0, 3.0),), start=s2)
+    rows, tr, info = R.day_trades(f, markets(("m1", s2, 1.0)), b, prints([], start=s2), inputs={})
+    assert rows["w"].iloc[0] == 60 and info["n_H"] == 1
+    h = trades_of(tr, "H").iloc[0]
+    assert h["t"] - s2 == pytest.approx(100.1) and h["price"] == 0.51
+    mk = R.Market("m1", s2, s2 + 300, 1.0, R.Books(f, {"m1": float(s2)}), R.Spot(b), {})
+    assert mk.w == 60 and np.isfinite(R.late_model(mk)[1])

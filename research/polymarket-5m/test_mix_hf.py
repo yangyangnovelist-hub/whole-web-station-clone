@@ -246,14 +246,33 @@ def test_maker_fill_print_or_bid_at_or_above_the_limit_only_after_the_order_is_l
     assert one(r3, "jump", 1, T0)["how_mk1_5"] == 1
 
 
+def test_queue_sensitivity_needs_a_print_above_the_limit():
+    # +1c = 0.51: a print AT 0.51 at te + 1.9 s fills under MIX.md's rule; the strict sensitivity waits
+    # for the print above it at te + 3 s; +2c (0.52) is reached by the bid at te + 7 s either way
+    bid = lambda rel: np.where(rel < 107.6 - 1e-9, 0.40, 0.52)  # noqa: E731
+    pr = [(102.5, "up", 0.51, "buy"), (103.6, "up", 0.515, "buy")]
+    u = one(day(f=book(up_bid=bid), pr=pr)[0], "jump", 1, T0)
+    cost = 0.50 + fee(0.50)
+    assert u["how_mk1_5"] == 2 and u["hold_mk1_5"] == pytest.approx(1.9)
+    assert u["fs1"] == pytest.approx(3.0) and u["fs2"] == pytest.approx(7.0) and np.isnan(u["fs5"])
+    r = pd.DataFrame([u])
+    assert M.strict_pnl(r, "mk1_5")[0] == pytest.approx(0.51 - cost)
+    assert M.strict_pnl(r, "mk2_5")[0] == pytest.approx(u["pnl_tk5"])  # 7 s > 5 s: the taker exit
+    assert M.strict_pnl(r, "mk2_10")[0] == pytest.approx(0.52 - cost) and M.strict_pnl(r, "tk5") is None
+    # only the print at the limit: strictly, the +1c sell is never filled within 5 s
+    u2 = one(day(f=book(up_bid=bid), pr=pr[:1])[0], "jump", 1, T0)
+    assert u2["how_mk1_5"] == 2 and M.strict_pnl(pd.DataFrame([u2]), "mk1_5")[0] == pytest.approx(u2["pnl_tk5"])
+    assert u2["fs1"] == pytest.approx(7.0)  # the bid reaches 0.52 >= 0.51 at te + 7 s
+
+
 def test_resting_sell_that_would_cross_on_arrival_is_a_taker_sale():
     bid = lambda rel: np.where((rel >= 101.0 - 1e-9) & (rel < 101.2), 0.56, 0.40)  # noqa: E731
     rows, _ = day(f=book(up_bid=bid))
     u = one(rows, "jump", 1, T0)
     cost = 0.50 + fee(0.50)
     for x in M.MAKER_X:
-        assert u[f"how_mk{x}_5"] == 1 and u[f"pnl_mk{x}_5"] == pytest.approx(0.56 - fee(0.56) - cost)
-        assert u[f"hold_mk{x}_5"] == pytest.approx(0.5)
+        assert u[f"how_mk{x}_5"] == 3 and u[f"pnl_mk{x}_5"] == pytest.approx(0.56 - fee(0.56) - cost)
+        assert u[f"hold_mk{x}_5"] == pytest.approx(0.5) and u[f"sh20_mk{x}_5"] == 11  # min(20, ask 20, bid 11)
 
 
 def test_thin_bid_on_arrival_does_not_cross_and_nothing_counts_after_the_end():

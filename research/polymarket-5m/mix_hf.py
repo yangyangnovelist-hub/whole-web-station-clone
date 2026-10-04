@@ -4,9 +4,11 @@ its top few percent. Paper research on market data only (no orders, no keys).
 
 Data: whodisidk/polymarket-btc-updown-exchange-data (BTC 5m, 2026-05-25 .. 08-29: 100 ms books of
 both tokens, every Polymarket print with its taker side, every Binance BTCUSDT print with trade and
-recorder times). Runs on GitHub as `python cross.py mix [N] --workdir DIR --out real/....md`
-(ci/cross.request, the polymarket-cross lane). The factor-model predictions and the hourly DVOL it
-needs are shipped in real/mix-inputs/ (built locally by `build_inputs`, see below).
+recorder times). Runs on GitHub as `python cross.py mix [N] --workdir DIR --out real/cross-mix-hf.md`
+(ci/cross.request "cmd: mix --out real/cross-mix-hf.md", the polymarket-cross lane, which commits only
+real/cross-*: the report, real/cross-mix-frozen.json and real/cross-mix-rows.csv.gz; out_paths). The
+factor-model predictions and the hourly DVOL it needs are shipped in real/mix-inputs/ (built locally
+by `build_inputs`, see below).
 
 Pipeline (MIX.md; every constant below was fixed before anything was run):
 1. Per daily archive (downloaded, read and deleted one at a time; per-day rows written to
@@ -57,6 +59,8 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
      shows the token's best bid >= L; tl = te + 0.5 s is when the order is live (see below). Not
      filled by te + h: cancelled, and sold as in tk{h} (else settlement).
    - "settle": held to the official result.
+   how (per policy): 0 held to settlement, 1 taker sale at te + h + 0.5 s, 2 maker fill at L, 3 the
+   resting sell crossed on arrival (taker sale at the bid at tl, see below).
    pnl = proceeds - entry price - every taker fee. Each row also keeps, per policy, the holding time
    (entry fill to exit fill, or to the market's end when held) and the 20-share size (see units).
 5. After all days, segments by market start (UTC): A = 05-25 .. 07-15, B = 07-16 .. 08-15, C = 08-16
@@ -75,7 +79,12 @@ Pipeline (MIX.md; every constant below was fixed before anything was run):
    Single-signal controls: for each frozen rule, the same policy and q with the single feature
    (either direction) whose top q on the same A out-of-sample rows had the best per-share pnl
    (>= 300 trades), frozen with the rules and evaluated beside them.
-6. Report (Chinese, with units) and the traded rows of the frozen rules and their controls.
+   Queue sensitivity (reported beside the verdict, never used by it): fs{x} = seconds from the entry
+   fill to the first hit of the +x resting sell when a print must be ABOVE L (a print at exactly L
+   may only have filled orders queued ahead at L; bids >= L count as before); strict_pnl re-prices
+   the maker policies with it.
+6. Report (Chinese, with units) and the traded rows of the frozen rules and their controls (with
+   their strict-fill pnl for maker rules).
 
 Where MIX.md and the task are silent, the conservative choice made here:
 - Resting sell latency: MIX.md says the sell is posted immediately after the buy fills; it is
@@ -175,6 +184,8 @@ B_ALPHA, C_ALPHA = 0.05 / 3, 0.05
 TIE_MAX = 1.5               # a control's top-q may take at most 1.5 q of the rows
 BUDGET_S = 285 * 60         # stop reading archives after this (the lane has 330 min)
 FETCH_TRIES = 3
+STRICT_TICK = 1e-6          # strict sensitivity: a print counts only at >= L + 1e-6 (ticks are >= 0.001)
+HOW = {0: "持有到结算", 1: "吃单卖", 2: "挂单成交", 3: "挂单到达时直接吃买一"}
 UNITS = (5, 20)
 
 POLICIES = (["settle"] + [f"tk{h}" for h in HOLDS] + [f"mk{x}_{h}" for x in MAKER_X for h in HOLDS])
@@ -448,7 +459,10 @@ def label_cols():
     return cols
 
 
-ROW_COLS = META + FEATURES + label_cols()
+# strict-fill sensitivity (not MIX.md's rule): seconds from the entry fill to the first hit of the resting
+# sell at +x when a print must be ABOVE L (a print at L may have filled only orders ahead in the queue)
+STRICT_COLS = [f"fs{x}" for x in MAKER_X]
+ROW_COLS = META + FEATURES + label_cols() + STRICT_COLS
 
 
 def _empty_rows():
@@ -565,6 +579,7 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
     F = {c: np.full(n, np.nan) for c in ("h_edge", "dmid2", "dmid10", "imb", "spread", "price_t")}
     price, asz_e = np.full(n, np.nan), np.full(n, np.nan)
     L = {f"{k}_{pol}": np.full(n, np.nan) for pol in POLICIES for k in ("pnl", "hold", "how", "sh20")}
+    S = {c: np.full(n, np.nan) for c in STRICT_COLS}
     won_up = dict(zip(m5["market_id"], m5["up_won"].astype(float)))
     won = np.where(s > 0, np.array([won_up[m] for m in R["market"]]), 1 - np.array([won_up[m] for m in R["market"]]))
     order = pd.Series(np.arange(n)).groupby(R["market"], sort=False).indices
@@ -631,10 +646,13 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
             sel = np.flatnonzero(ss == sd)
             if not len(sel):
                 continue
-            ev_t, ev_v = _events(bk, a, b, sd, pr_by.get((m, sd)))
+            ev_t, ev_v, ev_p = _events(bk, a, b, sd, pr_by.get((m, sd)))
+            ev_s = np.where(ev_p, ev_v - STRICT_TICK, ev_v)  # strict: a print must be above L
             for x in MAKER_X:
                 lim = np.minimum(np.round(pe[sel] + x / 100.0, 6), MAKER_CAP)
-                first = _first_hit(ev_t, ev_v, tl[sel], np.minimum(te[sel] + max(HOLDS), end[sel]), lim)
+                t_to = np.minimum(te[sel] + max(HOLDS), end[sel])
+                first = _first_hit(ev_t, ev_v, tl[sel], t_to, lim)
+                S[f"fs{x}"][ix[sel]] = _first_hit(ev_t, ev_s, tl[sel], t_to, lim) - te[sel]
                 with np.errstate(invalid="ignore"):
                     mkt = cross_ok[sel] & (bl[sel] >= lim - 1e-9)
                 for h in HOLDS:
@@ -643,7 +661,7 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
                     tp, th, tw, tsh = (v[sel] for v in tk[h])
                     pnl = np.where(mkt, bl[sel] - fee(bl[sel]) - cost[sel], np.where(filled, lim - cost[sel], tp))
                     hold = np.where(mkt, MAKER_LIVE_S, np.where(filled, first - te[sel], th))
-                    how = np.where(mkt, 1.0, np.where(filled, 2.0, tw))
+                    how = np.where(mkt, 3.0, np.where(filled, 2.0, tw))
                     sh = np.where(mkt, np.minimum(sh_e[sel], bsl[sel]), np.where(filled, sh_e[sel], tsh))
                     ii = ix[sel]
                     L[f"pnl_{pol}"][ii], L[f"hold_{pol}"][ii], L[f"how_{pol}"][ii], L[f"sh20_{pol}"][ii] = \
@@ -663,25 +681,28 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
         else:
             out[c] = R[c]
     out.update(L)
+    out.update({c: np.where(np.isfinite(v), v, np.nan) for c, v in S.items()})
     rows = pd.DataFrame(out)[keep].reset_index(drop=True)
     info["rows"] = len(rows)
     return compact(rows), info
 
 
 def _events(bk, a, b, sd, pr):
-    """Time-sorted (times, prices) at which a resting sell of side sd's token could be hit: active,
-    uncrossed, fresh snapshots (top of book changed <= 1 s before) with that token's best bid, and
-    taker BUY prints of the token (receipt time)."""
+    """Time-sorted (times, prices, is-print) at which a resting sell of side sd's token could be hit:
+    active, uncrossed, fresh snapshots (top of book changed <= 1 s before) with that token's best bid,
+    and taker BUY prints of the token (receipt time)."""
     T = bk.T[a:b]
     g = np.arange(a, b)
     bid, _, _, _, ok = _quote(bk, g, np.full(len(g), sd))
     v = np.where(ok & _fresh(bk, g, T) & np.isfinite(bid), bid, -np.inf)
+    isp = np.zeros(len(T), bool)
     if pr is not None and len(pr[0]):
         T = np.concatenate([T, pr[0]])
         v = np.concatenate([v, pr[1]])
+        isp = np.concatenate([isp, np.ones(len(pr[0]), bool)])
         o = np.argsort(T, kind="stable")
-        T, v = T[o], v[o]
-    return T, v
+        T, v, isp = T[o], v[o], isp[o]
+    return T, v, isp
 
 
 def _first_hit(ev_t, ev_v, t_from, t_to, lim):
@@ -839,6 +860,25 @@ def units(tr, pol, n_days):
     return out
 
 
+def strict_pnl(rows, pol):
+    """Per-share pnl of maker policy `pol` (mk{x}_{h}) when a print must be ABOVE the resting price
+    (fs{x}); the crossing-on-arrival sale (how 3) and the fallback taker exit are unchanged. None for
+    other policies or without the fs columns. A sensitivity beside MIX.md's rule, not the rule."""
+    if not str(pol).startswith("mk") or f"fs{pol[2:].split('_')[0]}" not in rows:
+        return None
+    x, h = (int(v) for v in pol[2:].split("_"))
+    price = rows["price"].to_numpy(float)
+    lim = np.minimum(np.round(price + x / 100.0, 6), MAKER_CAP)
+    te = rows["t"].to_numpy(float) + LAT_S
+    left = rows["start"].to_numpy(float) + 300.0 - te
+    fs = rows[f"fs{x}"].to_numpy(float)
+    how = rows[f"how_{pol}"].to_numpy(float)
+    with np.errstate(invalid="ignore"):
+        filled = (how != 3) & np.isfinite(fs) & (fs <= np.minimum(h, left) + T_EPS)
+    return np.where(how == 3, rows[f"pnl_{pol}"].to_numpy(float),
+                    np.where(filled, lim - price - fee(price), rows[f"pnl_tk{h}"].to_numpy(float)))
+
+
 def n_days(rows):
     """UTC days (of market start) present in rows."""
     return int(pd.Series(np.floor(rows["start"].to_numpy(float) / DAY)).nunique()) if len(rows) else 0
@@ -959,7 +999,8 @@ def evaluate(rows, spec, complete_c=True, log=print):
         y = A[f"pnl_{pol}"].to_numpy(float)
         sc_a = walk_forward(Xa, y, A["start"].to_numpy(float), model)
         final = make_model(model).fit(Xa, y)
-        out = dict(rule=r, stats={}, units={}, ctl_stats={}, ctl_units={}, b_pass=False, c_pass=None, c_open=False)
+        out = dict(rule=r, stats={}, units={}, ctl_stats={}, ctl_units={}, strict={}, b_pass=False, c_pass=None,
+                   c_open=False)
         segs = {"A": (A[oos], sc_a[oos])}
         B = M[mseg == "B"]
         segs["B"] = (B, final.predict(B[FEATURES].to_numpy(float)) if len(B) else np.array([]))
@@ -977,6 +1018,9 @@ def evaluate(rows, spec, complete_c=True, log=print):
             tr = S[sel]
             out["stats"][name] = cl_stat(tr[f"pnl_{pol}"].to_numpy(float), tr["market"].astype(str).to_numpy())
             out["units"][name] = units(tr, pol, days[name])
+            sp = strict_pnl(tr, pol)
+            if sp is not None:  # sensitivity only: the verdict uses MIX.md's fill rule
+                out["strict"][name] = cl_stat(sp, tr["market"].astype(str).to_numpy())
             traded.append(tr.assign(rule=r["id"], segment=name, score=sc[sel], policy=pol))
             ctl = r.get("control")
             if ctl:
@@ -1100,7 +1144,10 @@ def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds
     A = rows[seg == "A"]
     spec, fresh, _ = freeze(A, frozen_path, log)  # A only: nothing of B or C reaches the freeze
     del A
+    digest = hashlib.sha256(Path(frozen_path).read_bytes()).hexdigest()
+    log(f"frozen file sha256 {digest} (before B / C are scored)")
     res, traded, meta = evaluate(rows, spec, complete_c=complete_c, log=log)
+    meta["frozen_sha256"] = digest
     meta["rows_note"] = write_traded(traded, rows_path)
     L = report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing, ds, frozen_path, rows_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1110,7 +1157,7 @@ def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds
 
 
 TRADED_COLS = ["rule", "segment", "policy", "market", "start", "t", "kind", "side", "jdir", "price", "ask_size", "won",
-               "score", "pnl", "hold", "how", "sh20"]
+               "score", "pnl", "hold", "how", "sh20", "pnl_strict"]
 ROWS_MAX_BYTES = 19_500_000
 
 
@@ -1121,7 +1168,7 @@ def write_traded(traded, path):
     path = Path(path)
     if not len(traded):
         pd.DataFrame(columns=TRADED_COLS).to_csv(path, index=False)
-        return "没有交易行。"
+        return "没有交易行"
     tr = traded.reset_index(drop=True)
     pol = tr["policy"].astype(str).to_numpy()
     for k in ("pnl", "hold", "how", "sh20"):
@@ -1129,9 +1176,15 @@ def write_traded(traded, path):
         for p_ in np.unique(pol):
             m = pol == p_
             tr.loc[m, k] = tr.loc[m, f"{k}_{p_}"].to_numpy(float)
+    tr["pnl_strict"] = np.nan
+    for p_ in np.unique(pol):
+        m = pol == p_
+        sp = strict_pnl(tr[m], p_)
+        if sp is not None:
+            tr.loc[m, "pnl_strict"] = sp
     tr = tr[TRADED_COLS].copy()
     tr["t"] = tr["t"].round(3)
-    for c in ("price", "ask_size", "score", "pnl", "hold", "sh20"):
+    for c in ("price", "ask_size", "score", "pnl", "hold", "sh20", "pnl_strict"):
         tr[c] = tr[c].astype(float).round(5)
     seg, ctl = tr["segment"].astype(str), tr["rule"].astype(str).str.endswith("-ctl")
     for note, keep in (("全部", np.ones(len(tr), bool)), ("去掉对照的 A 行", ~((seg == "A") & ctl)), ("去掉 A 行", seg != "A")):
@@ -1200,7 +1253,8 @@ def cost_table(rows, segs=("A", "B")):
                 continue
             p = rows["price"].to_numpy(float)[k]
             sp = rows["spread"].to_numpy(float)[k]
-            cells.append(f"{np.nanmean(p):.3f} / {100 * np.nanmean(sp):.2f}¢ / {100 * np.nanmean(fee(p)):.2f}¢")
+            cells.append(f"{np.nanmean(p):.3f} / {100 * np.nanmean(sp):.2f}¢（中位 {100 * np.nanmedian(sp):.0f}¢） / "
+                         f"{100 * np.nanmean(fee(p)):.2f}¢")
         L.append("| 买入价 / 决策时价差 / 买入手续费（平均） | " + " | ".join(cells) + " |")
         if all(f"how_mk{x}_10" in rows for x in MAKER_X):
             cells = []
@@ -1209,6 +1263,23 @@ def cost_table(rows, segs=("A", "B")):
                 cells.append("–" if not k.any() else
                              " / ".join(f"{np.mean(rows[f'how_mk{x}_10'].to_numpy()[k] == 2):.0%}" for x in MAKER_X))
             L.append("| 挂单 10 秒内成交率（+1 / +2 / +3 / +5¢） | " + " | ".join(cells) + " |")
+        if all(f"fs{x}" in rows for x in MAKER_X):
+            left = rows["start"].to_numpy(float) + 300.0 - rows["t"].to_numpy(float) - LAT_S
+            cells = []
+            for _, m in groups:
+                k = m & (seg == sg)
+                if not k.any():
+                    cells.append("–")
+                    continue
+                r = []
+                for x in MAKER_X:
+                    fs = rows[f"fs{x}"].to_numpy(float)[k]
+                    with np.errstate(invalid="ignore"):
+                        hit = (rows[f"how_mk{x}_10"].to_numpy()[k] != 3) & np.isfinite(fs) & \
+                            (fs <= np.minimum(10.0, left[k]) + T_EPS)
+                    r.append(f"{np.mean(hit):.0%}")
+                cells.append(" / ".join(r))
+            L.append("| 同上，成交价须高于挂单价（排队敏感性） | " + " | ".join(cells) + " |")
     return L
 
 
@@ -1250,7 +1321,8 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
     L += ["## 判定", ""]
     if not rules:
         L += [f"A 段没有一个候选规则达到 {MIN_A_TRADES} 笔样本外交易，没有可冻结的规则。"]
-    frozen_note = ("本次运行冻结" if fresh else "冻结文件已存在，沿用（未重新冻结）") + f"：{spec.get('made', '–')}。"
+    frozen_note = ("本次运行冻结" if fresh else "冻结文件已存在，沿用（未重新冻结）") + f"：{spec.get('made', '–')}" \
+        + (f"，文件 sha256 `{meta['frozen_sha256'][:16]}…`（在给 B、C 打分之前记进日志）" if meta.get("frozen_sha256") else "") + "。"
     if rules:
         L += [frozen_note + ("" if meta.get("fp_ok", True) else
                              " **注意：A 段数据与冻结时不同（指纹不符），C 不计算。**"), "",
@@ -1267,10 +1339,20 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
                 cells += ["未开锁箱（B 未通过）" if not o["b_pass"] else "未开锁箱（C 数据不全或 A 数据与冻结时不同）", "–"]
             L.append("| " + " | ".join(cells) + " |")
         L += ["", "B、C 都用全部 A 训练出的模型打分，门槛是冻结时 A 样本外分数的分位数（所以 B、C 的成交比例不一定正好是 q）。"]
+        sens = [o for o in res if o.get("strict")]
+        if sens:
+            L += ["", "挂单规则的排队敏感性（不改判定）：MIX.md 的口径是成交价 ≥ 挂单价就算挂单成交；成交价正好等于挂单价时，"
+                  "同价位排在前面的单可能先成交、轮不到我们。下面只算成交价**高于**挂单价（或买一 ≥ 挂单价）才成交，"
+                  "其余照旧（没成交到点吃单卖）：", "",
+                  "| 规则 | A 样本外每份 | B 每份 | C 每份 |", "|---|---|---|---|"]
+            for o in sens:
+                cells = [o["rule"]["id"]] + [_st(o["strict"].get(k)) if k in o["strict"] else "未开锁箱" for k in "ABC"]
+                L.append("| " + " | ".join(cells) + " |")
     L += ["", "## 每条规则每天的量（带单位）", "",
           "份数：每笔 5 份（卖一至少 5 份），或每笔 min(20, 买入时卖一数量, 吃单卖出时买一数量) 份；挂单成交按整单成交算。"
           "买入花费 = 份数 × (买入价 + 手续费)；利润 = 份数 × 每份盈亏；占用资金按买入成交到卖出成交（持有到结算的算到市场结束）"
-          "的时间加权，峰值是同一天同时持仓花费之和的最大值。天数 = 该段有数据的 UTC 天数（A 只算样本外 "
+          "的时间加权；峰值是同一天同时持仓花费之和的最大值，表里是各天峰值的中位数，括号里是峰值最大的一天"
+          "（没有交易的天算 0）。天数 = 该段有数据的 UTC 天数（A 只算样本外 "
           f"{spec.get('a_oos_from', '–')} 起）。", ""]
     for o in res:
         r = o["rule"]
@@ -1287,7 +1369,8 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
                   f"门槛 {ctl['cut']:+.4f}）", ""] + UNITS_HEAD
             for name in ("A", "B", "C"):
                 if name in o["ctl_units"]:
-                    L.append(_units_line(name, o["ctl_units"][name], o["ctl_stats"][name]))
+                    L.append(_units_line(f"{name}{'（样本外）' if name == 'A' else ''}", o["ctl_units"][name],
+                                         o["ctl_stats"][name]))
                 else:
                     L.append(f"| {name} | 未开锁箱 | – | – | – | – | – | – | – |")
         else:
@@ -1298,8 +1381,9 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
         top = cand[cand["n"] >= MIN_A_TRADES].sort_values("mean", ascending=False).head(15)
         L += ["## A 样本外候选（前 15，挑选只看这一列）", "",
               f"{spec.get('n_candidates', len(cand))} 个候选，{spec.get('n_eligible', len(top))} 个达到 {MIN_A_TRADES} 笔。"
-              "最好的几个是从很多候选里挑出来的最大值，A 上的数字偏乐观，所以要看 B。", "",
-              "| 执行方式 | 模型 | 前 q | 每份 ± 标准误 |", "|---|---|---:|---|"]
+              "最好的几个是从很多候选里挑出来的最大值，A 上的数字偏乐观，所以要看 B。"]
+        if len(top):
+            L += ["", "| 执行方式 | 模型 | 前 q | 每份 ± 标准误 |", "|---|---|---:|---|"]
         for r in top.itertuples(index=False):
             L.append(f"| {POLICY_NAMES[r.policy]} | {r.model} | {100 * r.q:g}% | {_st(r._asdict())} |")
         L.append("")
@@ -1318,6 +1402,6 @@ def report(rows, spec, fresh, res, meta, infos, failed, skipped, n_arcs, missing
     L += ["", "</details>", "",
           f"冻结文件 `{frozen_path.name}`，冻结规则（和对照）交易过的逐行数据在 `{rows_path.name}`"
           f"（{meta.get('rows_note', '')}；t = 决策时刻，记录机时钟，秒；pnl 是那条规则执行方式的每份盈亏，"
-          "how：0 持有到结算、1 吃单卖、2 挂单成交）。"
+          "how：" + "、".join(f"{k} {v}" for k, v in HOW.items()) + "）。"
           + (f" K 线缺 {'、'.join(missing)}，这些月份的分钟收盘改用日档里的币安逐笔推出。" if missing else "")]
     return L
