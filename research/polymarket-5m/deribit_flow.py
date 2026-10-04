@@ -27,7 +27,9 @@ Proxy assumptions (Deribit publishes no historical positions, so these are appro
   = 1 BTC.
 - Greeks. Black-Scholes with r = q = 0 on the Deribit index (the expiry's forward/basis is ignored),
   ACT/365 year. Dealer gamma at T uses the CURRENT index price S(T) (the index_price of the last
-  trade before T, any instrument), the instrument's last traded IV before T and tau = expiry - T
+  trade before T, any instrument; S_age_s says how old, up to a few minutes in quiet spells), the
+  instrument's last traded IV before T (looked up from the first grid time of T's UTC day minus
+  7 days, so up to 8 days old) and tau = expiry - T
   (no floor; on the grid tau >= 5 min). Deribit reports IV 0 or 999 when it has none; IVs outside
   1%..400% are treated as missing. If an open instrument has no valid IV in the window, the last
   known ATM IV (below) is used, else the last valid IV of any trade. Dollar gamma per 1% move:
@@ -554,7 +556,9 @@ def check(f, klines, dvol=None):
             L.append(f"  {p} {c:<32} median {q.median():+8.2f}  p10 {q.quantile(.1):+8.2f}  "
                      f"p90 {q.quantile(.9):+8.2f}  share<0 {np.mean(q < 0):.2f}  n {q.notna().sum()}")
     L.append("Spearman with realised vol over the NEXT hour (raw; and residual of log next-1h RV after"
-             " log past-1h RV, log DVOL and hour-of-day dummies); and with past-1h RV:")
+             " log past-1h RV, log DVOL and hour-of-day dummies); and with past-1h RV. Exploratory: the"
+             " series are persistent hourly samples, so no p-values are printed (factors.py tests them"
+             " with Newey-West):")
     for p in ("A", "B"):
         g = h.loc[h["period"] == p]
         hours = [(g.index.hour == k).astype(float) for k in range(1, 24)]
@@ -566,8 +570,7 @@ def check(f, klines, dvol=None):
             a = _spearman(g[c].to_numpy(), g["rv_fwd_1h"].to_numpy())
             b = _spearman(g[c].to_numpy(), res)
             c0 = _spearman(g[c].to_numpy(), g["rv_past_1h"].to_numpy())
-            L.append(f"  {p} {c:<32} fwdRV {a[0]:+.3f} (p {a[1]:.1g})  resid {b[0]:+.3f} (p {b[1]:.1g})  "
-                     f"pastRV {c0[0]:+.3f}  n {a[2]}")
+            L.append(f"  {p} {c:<32} fwdRV {a[0]:+.3f}  resid {b[0]:+.3f}  pastRV {c0[0]:+.3f}  n {a[2]}")
     L.append("By dealer-gamma quintile (cut points from A): mean next-1h RV, mean past-1h RV, "
              "trend continuation = mean sign(past 1h ret) x next 1h ret (bp), Spearman(past, next 1h ret):")
     for c in ("dealer_gamma_usd_1pct", "dealer_gamma_7d_usd_1pct"):
@@ -584,13 +587,13 @@ def check(f, klines, dvol=None):
                 L.append(f"  {c[:-9]:<24} {p} Q{k + 1} ({lo}..{hi} $M)  fwdRV {gg['rv_fwd_1h'].mean():.3f}  "
                          f"pastRV {gg['rv_past_1h'].mean():.3f}  cont {cont.mean():+6.1f} +/-{cont.std() / np.sqrt(max(len(cont), 1)):.1f} bp  "
                          f"rho {sp[0]:+.3f}  n {len(gg)}")
-    L.append("Customer net delta flow vs the next-hour return (Spearman):")
+    L.append("Customer net delta flow vs the next-hour return (Spearman; exploratory, no p-values):")
     for p in ("A", "B"):
         g = h.loc[h["period"] == p]
         for c in ("cust_delta_flow_1h", "cust_delta_flow_24h"):
             a = _spearman(g[c].to_numpy(), g["ret_fwd_1h"].to_numpy())
             b = _spearman(g[c].to_numpy(), g["ret_past_1h"].to_numpy())
-            L.append(f"  {p} {c:<20} next 1h ret {a[0]:+.3f} (p {a[1]:.1g})  past 1h ret {b[0]:+.3f}  n {a[2]}")
+            L.append(f"  {p} {c:<20} next 1h ret {a[0]:+.3f}  past 1h ret {b[0]:+.3f}  n {a[2]}")
     return "\n".join(L), x
 
 

@@ -112,17 +112,31 @@ def test_a_kline_is_known_one_minute_after_it_opens_and_gaps_stay_empty(built):
     assert at(panel, 61)["premium"] == pytest.approx(60 / 1e6)
 
 
-def test_metrics_are_known_five_minutes_after_create_time_and_never_fill_across_long_gaps(built):
+def test_metrics_delay_covers_binance_publication_delay():
+    """A row stamped c covers [c, c + 5 min) and Binance published rows up to 166 s after that
+    (live poll 2026-10-04), so the default must be at least c + 8 min."""
+    assert fd.METRICS_DELAY >= 8 * fd.MIN
+
+
+def test_metrics_are_known_eight_minutes_after_create_time_and_never_fill_across_long_gaps(built):
     panel, _, _ = built
-    assert np.isnan(at(panel, 4)["sum_open_interest"]) and at(panel, 5)["sum_open_interest"] == 1000.5
-    assert at(panel, 9)["sum_open_interest"] == 1000.5 and at(panel, 10)["sum_open_interest"] == 1005.5
-    assert at(panel, 5)["metrics_time"] == pd.Timestamp(T0 * 10**9, tz="UTC") and at(panel, 7)["metrics_age_s"] == 120
-    # the 10:00 row (600) is known at 10:05 and carried 15 min; the next row (620) is known at 10:25
-    assert (panel["sum_open_interest"].iloc[605:621] == 1600.5).all()
-    assert panel["sum_open_interest"].iloc[621:625].isna().all() and at(panel, 625)["sum_open_interest"] == 1620.5
+    assert np.isnan(at(panel, 7)["sum_open_interest"]) and at(panel, 8)["sum_open_interest"] == 1000.5
+    assert at(panel, 12)["sum_open_interest"] == 1000.5 and at(panel, 13)["sum_open_interest"] == 1005.5
+    assert at(panel, 8)["metrics_time"] == pd.Timestamp(T0 * 10**9, tz="UTC") and at(panel, 10)["metrics_age_s"] == 120
+    # on the 5-minute grid the latest row at T is stamped T - 10 min
+    assert at(panel, 30)["metrics_time"] == pd.Timestamp((T0 + 20 * 60) * 10**9, tz="UTC")
+    # the 10:00 row (600) is known at 10:08 and carried 15 min; the next row (620) is known at 10:28
+    assert (panel["sum_open_interest"].iloc[608:624] == 1600.5).all()
+    assert panel["sum_open_interest"].iloc[624:628].isna().all() and at(panel, 628)["sum_open_interest"] == 1620.5
     # a 15-minute gap (rows 720 and 735) is filled throughout
-    assert (panel["sum_open_interest"].iloc[725:740] == 1720.5).all() and at(panel, 740)["sum_open_interest"] == 1735.5
-    assert at(panel, 5)["sum_taker_long_short_vol_ratio"] == 0 and at(panel, 10)["count_long_short_ratio"] == 1.3
+    assert (panel["sum_open_interest"].iloc[728:743] == 1720.5).all() and at(panel, 743)["sum_open_interest"] == 1735.5
+    assert at(panel, 8)["sum_taker_long_short_vol_ratio"] == 0 and at(panel, 13)["count_long_short_ratio"] == 1.3
+
+
+def test_the_five_minute_rule_of_factors_md_is_still_available(built):
+    _, _, cache = built
+    p5, _ = fd.build_panel(cache, start=DAY, end=DAY, metrics_delay=5 * fd.MIN)
+    assert np.isnan(at(p5, 4)["sum_open_interest"]) and at(p5, 5)["sum_open_interest"] == 1000.5
 
 
 def test_a_longer_metrics_delay_shifts_every_metrics_row_later(built):

@@ -43,14 +43,16 @@ premium                       premium-index 1 m kline with open time T - 60 s: c
                               premium index, perpetual impact price against the spot index as a
                               fraction of the index, at the end of that minute); known at open + 60 s;
                               not carried
-sum_open_interest             metrics row with create_time c; known at c + 5 min (FACTORS.md: only rows
-sum_open_interest_value       stamped <= decision - 5 min); the latest known row is carried at most
-count_toptrader_long_short_ratio  15 min past c + 5 min, so a gap between rows longer than 15 min is
+sum_open_interest             metrics row with create_time c; known at c + 8 min (METRICS_DELAY: the
+sum_open_interest_value       5-minute period it covers plus Binance's publication delay, see below;
+                              stricter than FACTORS.md's "stamped <= decision - 5 min", so a subset
+                              of it); the latest known row is carried at most
+count_toptrader_long_short_ratio  15 min past c + 8 min, so a gap between rows longer than 15 min is
 sum_toptrader_long_short_ratio    never filled across (inside it the first 15 min still show the last
 count_long_short_ratio            row, as a live reader would, then NaN). Binance meanings: OI in BTC
 sum_taker_long_short_vol_ratio    and USDT; top-trader account L/S; top-trader position L/S; all-
                               account L/S; taker buy/sell volume ratio over [c, c + 5 min).
-metrics_time, metrics_age_s   create_time of the row used; seconds since it became known (c + 5 min)
+metrics_time, metrics_age_s   create_time of the row used; seconds since it became known (c + 8 min)
 funding_rate                  last_funding_rate of the latest settlement with calc_time <= T (known
 funding_interval_hours        from calc_time on, to the ms, so a settlement at 00:00:00.005 first
 funding_time                  shows in the 00:01 row); carried until the next one, no cap.
@@ -68,15 +70,20 @@ Checked on the real data (2026-03-14..09-30, 2026-10-04):
   equals taker-buy / taker-sell volume of the perpetual 1 m klines opening c .. c + 4 min (correlation
   0.999, median relative error 0.02%; the window [c - 5, c) gives 0.12), and sum_open_interest_value /
   sum_open_interest equals the perpetual price at c + 5 min (median error 0.15 bp, against 5 bp at c).
-  So "known at c + 5 min" is the earliest instant the row could exist: right, but with no slack for
-  Binance's publication delay. `--metrics-delay-min 6` (or more) gives a stricter panel.
+  So c + 5 min is the earliest instant the row could exist. Binance then publishes it late: polling
+  the live /futures/data endpoints on 2026-10-04 09:30-09:44 UTC (whose rows equal the vision rows),
+  rows appeared 43-166 s after the end of their 5-minute period (OI 63-130 s, top-trader position
+  L/S 105-166 s, account L/S 43-104 s, taker ratio 46-166 s). With c + 5 min the panel used each row
+  1-3 minutes before a live reader could have it (a look-ahead), so the row is known at c + 8 min
+  (METRICS_DELAY); on the 5-minute decision grid that means the row stamped T - 10 min is the latest
+  one used at T (any delay in (5, 10] min gives the same 5-minute features).
 - DVOL hourly close at hour end equals the 1-minute close at the same instant in all 4,383 hours where
   both are fresh, so both are stamped the same way; spot and perpetual 1 m returns line up at lag 0
   (correlation 0.988, about 0.01 at lags +-1).
 
     python factors_data.py --cache DIR --klines DIR [--dvol dvol.csv] [--start 2026-03-14]
                            [--end 2026-09-30] [--out DIR/panel_1m.parquet] [--no-download]
-                           [--no-dvol-1h] [--metrics-delay-min 5]
+                           [--no-dvol-1h] [--metrics-delay-min 8]
 """
 from __future__ import annotations
 
@@ -112,7 +119,7 @@ DATASETS = {
     "funding": ("monthly", VISION + "/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-{d}.zip",
                 "BTCUSDT-fundingRate-{d}.zip"),
 }
-METRICS_DELAY = 5 * MIN
+METRICS_DELAY = 8 * MIN  # 5-minute period + up to 166 s publication delay (observed), rounded up
 METRICS_MAX_AGE = 15 * MIN
 DVOL_MAX_AGE = 15 * MIN
 DVOL_1H_MAX_AGE = 75 * MIN
@@ -567,8 +574,8 @@ def main(argv=None):
     ap.add_argument("--no-download", action="store_true", help="use only files already in the cache")
     ap.add_argument("--no-dvol-1h", action="store_true", help="skip the hourly DVOL backfill from Deribit")
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--metrics-delay-min", type=float, default=5.0,
-                    help="a metrics row stamped c is known at c + this many minutes (FACTORS.md: 5)")
+    ap.add_argument("--metrics-delay-min", type=float, default=METRICS_DELAY / MIN,
+                    help="a metrics row stamped c is known at c + this many minutes (FACTORS.md: >= 5; default 8 = the period plus the observed publication delay)")
     a = ap.parse_args(argv)
     status = None if a.no_download else download(a.cache, a.start, a.end, workers=a.workers)
     d1h, p1h = None, Path(a.cache) / "dvol_1h.csv"
