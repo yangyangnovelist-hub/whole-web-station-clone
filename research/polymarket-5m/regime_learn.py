@@ -8,23 +8,24 @@ market data only (no orders, no keys); it reads only the windows table.
 
 The windows table (real/regime-windows.csv.gz) is written by regime_hf.py (the REGIME.md producer,
 run on GitHub through cross.py). Expected columns, by their canonical names here (COLMAP below
-maps the producer's names onto them, case-insensitively; the first alias present wins; every
-mapping used is printed in the report):
+maps the producer's names onto them; names are compared lower-cased with everything but letters
+and digits removed, so "pnl_H", "PNL-h" and "pnlH" are one name; the first alias present wins;
+every mapping used is printed in the report):
 - start: the window's open, UTC unix seconds (ms and date strings are converted). market (optional):
   the market's id. One row per window; a repeated start keeps the first row.
-- per strategy s in H, follow, revert, direction, late, maker (REGIME.md's six base strategies;
-  a strategy whose pnl column is absent is left out): pnl_s = the window's realised P&L in $ at 5
-  shares a trade (after every fee), trades_s = trades, shares_s = shares bought, cost_s = $ spent
-  buying (price + fee), caph_s = capital-hours ($ x hours tied up). NaN pnl = the strategy could not
-  be evaluated in the window (no usable book): it is not a training row, and it counts as 0 (no
-  trade) for every rule and control. 0 = evaluated, no trade.
+- per strategy s in H, follow, revert, direction, late, maker (REGIME.md's six base strategies 1-6,
+  also accepted as s1 .. s6; a strategy whose pnl column is absent is left out): pnl_s = the
+  window's realised P&L in $ at 5 shares a trade (after every fee), trades_s = trades, shares_s =
+  shares bought, cost_s = $ spent buying (price + fee), caph_s = capital-hours ($ x hours tied up).
+  NaN pnl = the strategy could not be evaluated in the window (no usable book): it is not a
+  training row, and it counts as 0 (no trade) for every rule and control. 0 = evaluated, no trade.
 - environment at the open (REGIME.md): rv5m, rv30m, rv1h (realised vol, any consistent scale), vr60
   (60-minute variance ratio, trend > 1 > range), dvol_rv (DVOL - realised vol), ret4h, vol_rel
   (Binance volume / its 24 h mean), funding, basis, hour (UTC), weekend (0 / 1), pm_spread
   (Polymarket opening spread), ask_size (shares at the best ask at the open), book_ups (book updates
   per second). Missing ones are NaN (said in the report); hour and weekend are derived from start
   when absent. Any other column is ignored (in particular, any trailing-performance column of the
-  producer: the trailing features are rebuilt here).
+  producer: the trailing features are rebuilt here, so their timing is checked here).
 
 What is done (REGIME.md, fixed 2026-10-04 before running; constants below):
 1. Trailing features, per strategy s: hot12_s, hot48_s = the sum of pnl_s over the previous 12 / 48
@@ -36,10 +37,10 @@ What is done (REGIME.md, fixed 2026-10-04 before running; constants below):
    hot12, hot48. Two targets: the window's pnl (reward) and |pnl| (risk: the mean absolute P&L,
    robust to the fat tails of hold-to-settlement payoffs). Two models each, parameters fixed:
    ridge (alpha 10 on features standardised on the training rows, clipped at +-5 sd, NaN -> 0) and
-   HistGradientBoostingRegressor (depth 3, 8 leaves, >= 200 rows a leaf, lr 0.05, 200 iterations,
-   l2 1, no early stopping, random_state 0). Prediction = the mean of ridge and HGB (no choice of
-   model on A: one less thing selected). Score = predicted pnl / max(predicted |pnl|, |predicted
-   pnl|, $0.001), in [-1, 1] (predicted reward / risk, 预测盈亏比).
+   HistGradientBoostingRegressor (depth 3, 8 leaves, >= 200 rows a leaf, lr 0.05, 200 iterations;
+   l2 1, no early stopping, random_state 0 as factors.py / mix_hf.py). Prediction = the mean of
+   ridge and HGB (no choice of model on A: one less thing selected). Score = predicted pnl /
+   max(predicted |pnl|, |predicted pnl|, $0.001), in [-1, 1] (predicted reward / risk, 预测盈亏比).
    A out of sample: 7-day blocks from 05-25; each block scored by models fit on the A rows of
    windows that ended at least one slot (300 s) before the block's start; the first 14 days only
    train (A out of sample = 06-08 .. 07-15); a fit needs >= 400 rows. B and C are scored by models
@@ -57,13 +58,16 @@ What is done (REGIME.md, fixed 2026-10-04 before running; constants below):
    fingerprint as when it was written (delete it to re-freeze, and say so).
 5. B: pass = mean daily P&L > 0, t >= 2 (days as clusters: t = mean / (sd / sqrt(days))), and the
    mean is above the best always-on control's mean daily P&L on B (the best of the six, picked on B
-   itself: the harder bar). C (08-16 .. 08-29) is opened once, only if B passes and every C day is
-   in the table with >= 144 windows (--allow-partial-c drops the second condition): pass = mean daily
-   P&L > 0. While C is closed, nothing of C is reported (not even the base strategies).
+   itself: the harder bar). C (08-16 .. 08-29) is opened only if B passes and every C day is in the
+   table with >= 144 windows (--allow-partial-c drops the second condition): pass = mean daily P&L
+   > 0. While C is closed, nothing of C is reported (not even the base strategies).
+   C once: the first opening is recorded in <frozen>-c.json (frozen rule, A and C fingerprints,
+   result). A later run reports that first result as the verdict; if the C rows or the frozen rule
+   have changed since, the new C numbers are shown but marked as not a clean lockbox.
 6. Report (Chinese, units): per strategy and per regime state (trend / range x realised-vol tercile
    x sign of DVOL - RV): win rate, average win / average loss (盈亏比), per-share P&L, trades,
    shares, buying cost, P&L and capital tied up per day, max drawdown over the segment; then the
-   switch against the controls per segment.
+   switch against the controls per segment; and how well the predictions ranked the windows.
 
 Where REGIME.md and the task are silent, the conservative choice made here:
 - Segments by the window's open (UTC): A = 05-25 .. 07-15, B = 07-16 .. 08-15, C = 08-16 .. 08-29;
@@ -75,11 +79,14 @@ Where REGIME.md and the task are silent, the conservative choice made here:
   / (24 x days): the time-averaged $ held. Max drawdown = the largest fall of the cumulative P&L
   (window by window, from $0 at the segment's start) below its running peak, in $.
 - Regime states: vol terciles of rv30m with cut points from A, applied unchanged to B and C; a window
-  with a NaN in vr60, rv30m or dvol_rv is in the state "缺数据".
+  with a NaN in vr60, rv30m or dvol_rv is in the state "缺数据" (a component that is NaN on every
+  A row is dropped from the state and the report says so).
 - The A columns of the switch-vs-controls table are A's out-of-sample days (06-08 .. 07-15) for
   every rule (the switch has predictions only there); the best-on-A strategy is chosen on all of A.
 - "Better than the best always-on control" compares the point estimates of the mean daily P&L; the
   paired difference (switch - that control, per day) and its t are reported beside it.
+- The report goes to real/regime-learn.md, not real/regime.md: that name already holds the
+  committed hedging-regime study (regime.py), which is left untouched.
 """
 from __future__ import annotations
 
@@ -87,7 +94,9 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -103,32 +112,39 @@ QTYS = ("pnl", "trades", "shares", "cost", "caph")
 ENV = ("rv5m", "rv30m", "rv1h", "vr60", "dvol_rv", "ret4h", "vol_rel", "funding", "basis", "hour", "weekend",
        "pm_spread", "ask_size", "book_ups")
 
-_S_ALIAS = {"H": ("h", "stale", "hfair", "h_fair"), "follow": ("follow", "fol", "chase", "jump", "follow_scalp"),
-            "revert": ("revert", "rev", "reversal", "reverse", "fade"),
-            "direction": ("direction", "dir", "factor", "fac", "directional"),
-            "late": ("late", "strong", "late_strong", "close", "nearcert"), "maker": ("maker", "mm", "make")}
-_Q_ALIAS = {"pnl": ("pnl", "pnl5", "pnl_usd", "profit", "pnl_5"), "trades": ("trades", "n_trades", "ntrades", "n"),
-            "shares": ("shares", "sh", "sh5", "shares5"), "cost": ("cost", "cost5", "cost_usd", "buy_cost"),
-            "caph": ("caph", "caphr", "cap_h", "cap_hours", "capital_h", "capital_hours", "caphours", "cap_hr")}
+_S_ALIAS = {"H": ("h", "s1", "stale", "hfair", "h_fair", "snipe"),
+            "follow": ("follow", "s2", "fol", "chase", "jump", "follow_scalp", "scalp"),
+            "revert": ("revert", "s3", "rev", "reversal", "reverse", "fade", "reversion"),
+            "direction": ("direction", "s4", "dir", "factor", "fac", "directional", "factors"),
+            "late": ("late", "s5", "strong", "late_strong", "close", "nearcert", "fav", "favorite"),
+            "maker": ("maker", "s6", "mm", "make", "making")}
+_Q_ALIAS = {"pnl": ("pnl", "pnl5", "pnl_usd", "profit", "pnl_5"),
+            "trades": ("trades", "n_trades", "ntrades", "n", "trade_count", "fills"),
+            "shares": ("shares", "sh", "sh5", "shares5", "qty"),
+            "cost": ("cost", "cost5", "cost_usd", "buy_cost", "spent", "buy_usd"),
+            "caph": ("caph", "caphr", "cap_h", "cap_hours", "capital_h", "capital_hours", "caphours", "cap_hr",
+                     "dollar_hours", "cap_usd_h")}
 
-# canonical name -> accepted column names (case-insensitive, first present wins)
+# canonical name -> accepted column names (compared by _norm; first present wins)
 COLMAP = {
-    "start": ("start", "start_s", "window_start", "open_s", "t0", "ts", "start_ts"),
+    "start": ("start", "start_s", "window_start", "open_s", "t0", "ts", "start_ts", "start_time", "open_time",
+              "window_open", "t_open", "market_start"),
     "market": ("market", "market_id", "slug", "condition_id"),
-    "rv5m": ("rv5m", "rv_5m", "rv5", "rv300"),
-    "rv30m": ("rv30m", "rv_30m", "rv30", "rv1800"),
-    "rv1h": ("rv1h", "rv_1h", "rv60m", "rv60", "rv3600"),
-    "vr60": ("vr60", "vr_60", "vr60m", "vr"),
-    "dvol_rv": ("dvol_rv", "dvol_minus_rv", "dvol_rv30", "ivrv", "iv_rv"),
-    "ret4h": ("ret4h", "ret_4h", "r4h", "trend4h"),
-    "vol_rel": ("vol_rel", "volume_rel", "vol_ratio", "volrel", "rel_volume", "vol24"),
+    "rv5m": ("rv5m", "rv5", "rv300", "rv_5m_ann"),
+    "rv30m": ("rv30m", "rv30", "rv1800", "rv_30m_ann"),
+    "rv1h": ("rv1h", "rv60m", "rv60", "rv3600", "rv_1h_ann"),
+    "vr60": ("vr60", "vr60m", "vr", "variance_ratio"),
+    "dvol_rv": ("dvol_rv", "dvol_minus_rv", "dvol_rv30", "ivrv", "iv_rv", "dvol_minus_rv30"),
+    "ret4h": ("ret4h", "r4h", "trend4h", "ret_240m"),
+    "vol_rel": ("vol_rel", "volume_rel", "vol_ratio", "volrel", "rel_volume", "vol24", "vol_rel24", "volume_ratio"),
     "funding": ("funding", "funding_rate", "fund"),
     "basis": ("basis", "basis_bp", "perp_basis"),
     "hour": ("hour", "hour_utc", "hod"),
     "weekend": ("weekend", "is_weekend", "wkend"),
-    "pm_spread": ("pm_spread", "open_spread", "spread_open", "spread"),
-    "ask_size": ("ask_size", "open_ask_size", "ask_sz", "ask_depth", "asksize"),
-    "book_ups": ("book_ups", "book_rate", "updates_per_s", "book_hz", "upd_per_s", "ups"),
+    "pm_spread": ("pm_spread", "open_spread", "spread_open", "spread", "pm_spread_open"),
+    "ask_size": ("ask_size", "open_ask_size", "ask_sz", "ask_depth", "asksize", "ask_size_open"),
+    "book_ups": ("book_ups", "book_rate", "updates_per_s", "book_hz", "upd_per_s", "ups", "book_updates_per_s",
+                 "book_ups_s"),
     **{f"{q}_{s}": tuple(dict.fromkeys([f"{q}_{s}"] + [f"{qa}_{sa}" for qa in _Q_ALIAS[q] for sa in _S_ALIAS[s]]
                                        + [f"{sa}_{qa}" for qa in _Q_ALIAS[q] for sa in _S_ALIAS[s]]))
        for s in STRATS for q in QTYS},
@@ -171,6 +187,10 @@ def segment_of(start_s):
 
 
 # --------------------------------------------------------------------------- loading
+def _norm(name):
+    return re.sub(r"[^0-9a-z]", "", str(name).lower())
+
+
 def _to_seconds(x):
     x = pd.Series(x)
     if not pd.api.types.is_numeric_dtype(x):
@@ -180,24 +200,30 @@ def _to_seconds(x):
     return v / 1000.0 if med > 1e11 else v
 
 
+def map_columns(columns):
+    """{canonical: source column} by COLMAP (first alias present wins)."""
+    norm = {}
+    for c in columns:
+        norm.setdefault(_norm(c), c)
+    mapping = {}
+    for canon, aliases in COLMAP.items():
+        for a in aliases:
+            if _norm(a) in norm:
+                mapping[canon] = norm[_norm(a)]
+                break
+    return mapping
+
+
 def load_windows(src, log=print):
     """(windows frame with canonical columns sorted by start, mapping {canonical: source column},
     strategies present, missing environment columns). src: a path or a DataFrame."""
     raw = src.copy() if isinstance(src, pd.DataFrame) else pd.read_csv(src)
-    lower = {}
-    for c in raw.columns:
-        lower.setdefault(str(c).lower(), c)
-    mapping = {}
-    for canon, aliases in COLMAP.items():
-        for a in aliases:
-            if a.lower() in lower:
-                mapping[canon] = lower[a.lower()]
-                break
+    mapping = map_columns(raw.columns)
     if "start" not in mapping:
         raise ValueError(f"no window-start column (tried {COLMAP['start']}); columns: {list(raw.columns)[:40]}")
     W = pd.DataFrame({"start": _to_seconds(raw[mapping["start"]])})
-    W["market"] = raw[mapping["market"]].astype(str).to_numpy() if "market" in mapping else W["start"].astype(
-        np.int64).astype(str)
+    W["market"] = raw[mapping["market"]].astype(str).to_numpy() if "market" in mapping else \
+        W["start"].round().astype("Int64").astype(str).to_numpy()
     strats = [s for s in STRATS if f"pnl_{s}" in mapping]
     for s in strats:
         for q in QTYS:
@@ -225,6 +251,19 @@ def load_windows(src, log=print):
     W["day"] = np.floor(W["start"].to_numpy(float) / DAY).astype(np.int64)
     W["segment"] = segment_of(W["start"].to_numpy(float))
     return W, mapping, strats, missing
+
+
+def ensure_columns(W, strats, env):
+    """NaN columns for any strategy quantity / environment column the frozen spec names but W lacks."""
+    W = W.copy()
+    for s in strats:
+        for q in QTYS:
+            if f"{q}_{s}" not in W:
+                W[f"{q}_{s}"] = np.nan
+    for e in env:
+        if e not in W:
+            W[e] = np.nan
+    return W
 
 
 def add_trailing(W, strats):
@@ -262,8 +301,8 @@ class Ridge:
 
     def fit(self, X, y):
         X = np.asarray(X, float)
-        with np.errstate(invalid="ignore"), __import__("warnings").catch_warnings():
-            __import__("warnings").simplefilter("ignore", RuntimeWarning)
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
             mu, sd = np.nanmean(X, axis=0), np.nanstd(X, axis=0)
         self.mu = np.where(np.isfinite(mu), mu, 0.0)
         self.sd = np.where(np.isfinite(sd) & (sd > 0), sd, 1.0)
@@ -317,12 +356,13 @@ class Scorer:
     """Ridge + HGB for pnl and for |pnl| of one strategy; score = reward / risk."""
 
     def fit(self, X, y):
+        y = np.asarray(y, float)
         self.m = [make_model(k).fit(X, y) for k in MODELS]
         self.a = [make_model(k).fit(X, np.abs(y)) for k in MODELS]
         return self
 
     def parts(self, X):
-        """{model: (pred pnl, pred |pnl|)} and the averaged pair."""
+        """({model: (pred pnl, pred |pnl|)}, averaged pred pnl, averaged pred |pnl|)."""
         out = {k: (m.predict(X), a.predict(X)) for k, m, a in zip(MODELS, self.m, self.a)}
         mean = np.mean([v[0] for v in out.values()], axis=0)
         absd = np.mean([v[1] for v in out.values()], axis=0)
@@ -342,11 +382,13 @@ def rr_score(m, a):
 
 
 def walk_forward(X, y, start):
-    """A out-of-sample scores (and per-model parts): each out-of-sample block scored by models fit on
-    the rows that ended >= GAP_S before the block's start; NaN elsewhere or when < MIN_TRAIN rows."""
+    """A out-of-sample (score, {model: (pred pnl, pred |pnl|)}, mean pred pnl): each out-of-sample block
+    scored by models fit on the rows that ended >= GAP_S before the block's start; NaN elsewhere or
+    when < MIN_TRAIN rows."""
     start = np.asarray(start, float)
+    y = np.asarray(y, float)
     n = len(y)
-    sc = np.full(n, np.nan)
+    sc, pm = np.full(n, np.nan), np.full(n, np.nan)
     parts = {k: (np.full(n, np.nan), np.full(n, np.nan)) for k in MODELS}
     for b0, b1, oos in a_blocks():
         if not oos:
@@ -357,14 +399,14 @@ def walk_forward(X, y, start):
             continue
         f = Scorer().fit(X[tr], y[tr])
         p, m, a = f.parts(X[te])
-        sc[te] = rr_score(m, a)
+        sc[te], pm[te] = rr_score(m, a), m
         for k in MODELS:
             parts[k][0][te], parts[k][1][te] = p[k]
-    return sc, parts
+    return sc, parts, pm
 
 
 def a_predictions(A, strats, env, log=print):
-    """{s: (A out-of-sample score, per-model parts)} from A rows only."""
+    """{s: (A out-of-sample score, per-model parts, mean pred pnl)} from A rows only."""
     if len(A) and (segment_of(A["start"].to_numpy(float)) != "A").any():
         raise ValueError("a_predictions is given rows outside A")
     out = {}
@@ -378,6 +420,8 @@ def a_predictions(A, strats, env, log=print):
 
 def fit_final(A, strats, env):
     """{s: Scorer fit on every A row that ended >= GAP_S before B starts} (None when too few rows)."""
+    if len(A) and (segment_of(A["start"].to_numpy(float)) != "A").any():
+        raise ValueError("fit_final is given rows outside A")
     b0 = ts(SEGMENTS[1][1])
     out = {}
     for s in strats:
@@ -386,6 +430,18 @@ def fit_final(A, strats, env):
         tr = trainable(A["start"].to_numpy(float), y, b0)
         out[s] = Scorer().fit(X[tr], y[tr]) if tr.sum() >= MIN_TRAIN else None
     return out
+
+
+def score_segment(final, S, strats, env):
+    """B / C scores by the models fit on A: {s: score}, {s: mean pred pnl}."""
+    sc, pm = {}, {}
+    for s in strats:
+        if final.get(s) is None or not len(S):
+            sc[s], pm[s] = np.full(len(S), np.nan), np.full(len(S), np.nan)
+            continue
+        _, m, a = final[s].parts(S[features_for(s, env)].to_numpy(float))
+        sc[s], pm[s] = rr_score(m, a), m
+    return sc, pm
 
 
 # --------------------------------------------------------------------------- rules and statistics
@@ -448,20 +504,26 @@ def max_drawdown(pnl):
     return float(np.max(np.maximum.accumulate(c) - c))
 
 
-def perf(f, days, caph_ok=True, shares_ok=True):
-    """Units of a rule frame or a single strategy's frame over `days` (UTC day numbers)."""
+def perf(f, days, ok=None):
+    """Units of a rule frame over `days` (UTC day numbers). ok: {quantity: column present in the
+    table?}; an absent quantity is reported as NaN, not 0."""
+    ok = ok or {}
+    has = {q: ok.get(q, True) for q in QTYS}
     nd = len(days)
     f = f[f["day"].isin(days)].sort_values("start", kind="stable")
     tr = f[f["traded"].to_numpy(bool)]
     pnl = tr["pnl"].to_numpy(float)
     win, loss = pnl[pnl > 0], pnl[pnl < 0]
     sh = f["shares"].sum()
+
+    def per_day(q, scale=1.0):
+        return f[q].sum() / (scale * nd) if nd and has[q] else np.nan
+
     out = dict(days=nd, windows=len(f), traded=len(tr), win=float((pnl > 0).mean()) if len(tr) else np.nan,
                avg_win=float(win.mean()) if len(win) else np.nan, avg_loss=float(loss.mean()) if len(loss) else np.nan,
-               per_share=float(f["pnl"].sum() / sh) if shares_ok and sh > 0 else np.nan,
-               trades=f["trades"].sum() / nd if nd else np.nan, shares=sh / nd if nd and shares_ok else np.nan,
-               cost=f["cost"].sum() / nd if nd else np.nan, pnl_day=f["pnl"].sum() / nd if nd else np.nan,
-               cap=f["caph"].sum() / (24 * nd) if nd and caph_ok else np.nan, mdd=max_drawdown(f["pnl"].to_numpy()))
+               per_share=float(f["pnl"].sum() / sh) if has["shares"] and sh > 0 else np.nan,
+               trades=per_day("trades"), shares=per_day("shares"), cost=per_day("cost"), pnl_day=per_day("pnl"),
+               cap=per_day("caph", 24.0), mdd=max_drawdown(f["pnl"].to_numpy()))
     out["ratio"] = out["avg_win"] / -out["avg_loss"] if np.isfinite(out["avg_win"]) and np.isfinite(
         out["avg_loss"]) else np.nan
     out.update({f"d_{k}": v for k, v in day_t(daily(f, days).to_numpy()).items()})
@@ -485,8 +547,22 @@ def days_of(W, mask=None):
 
 
 # --------------------------------------------------------------------------- freeze and evaluation
-def fingerprint(A, strats, env):
-    """sha256 of what the freeze depends on: A's starts, features and labels."""
+def fingerprint(S, strats, env):
+    """sha256 of what a judgement depends on: the rows' starts, features and labels."""
+    if not len(S):
+        return "empty"
+    h = hashlib.sha256()
+    cols = sorted(set(env) | {f"hot{n}_{s}" for s in strats for n in TRAIL} | {f"{q}_{s}" for s in strats
+                                                                               for q in QTYS})
+    cols = [c for c in cols if c in S]
+    h.update(json.dumps([list(strats), list(env), cols]).encode())
+    h.update(np.round(S["start"].to_numpy(float), 3).tobytes())
+    h.update(np.round(S[cols].to_numpy(float), 6).tobytes())
+    return h.hexdigest()
+
+
+def a_fingerprint(A, strats, env):
+    """The freeze's fingerprint: A's starts, features and pnl labels."""
     if not len(A):
         return "empty"
     h = hashlib.sha256()
@@ -523,18 +599,19 @@ def freeze(A, path, strats, env, preds=None, log=print):
     always = {s: day_t(daily(rule_frame(A, {s: np.ones(len(A), bool)}), alld).to_numpy()) for s in strats}
     best_s = max(strats, key=lambda s: (always[s]["mean"] if np.isfinite(always[s]["mean"]) else -np.inf, s)) \
         if strats else None
-    vr = A["rv30m"].to_numpy(float) if "rv30m" in A else np.array([])
-    vr = vr[np.isfinite(vr)]
-    cuts = [float(np.quantile(vr, 1 / 3)), float(np.quantile(vr, 2 / 3))] if len(vr) else None
+    rv = A["rv30m"].to_numpy(float) if "rv30m" in A else np.array([])
+    rv = rv[np.isfinite(rv)]
+    cuts = [float(np.quantile(rv, 1 / 3)), float(np.quantile(rv, 2 / 3))] if len(rv) else None
+    state_cols = [c for c in STATE_COLS if c in A and np.isfinite(A[c].to_numpy(float)).any()]
     spec = dict(made=pd.Timestamp.now(tz="UTC").isoformat(), design="REGIME.md", segments=SEGMENTS,
                 a_oos_from=pd.Timestamp(a_oos_from(), unit="s").strftime("%Y-%m-%d"), strategies=list(strats),
                 env_features=list(env), trailing=list(TRAIL), trailing_lag_slots=TRAIL_LAG, gap_s=GAP_S,
                 models={"ridge": {"alpha": RIDGE_ALPHA}, "hgb": HGB_PARAMS}, score="mean(ridge,hgb) pnl / "
                 "max(mean(ridge,hgb) |pnl|, |pnl pred|, 0.001)", thresholds=list(THRESHOLDS),
                 threshold=None if best is None else best["threshold"], candidates=cand, best_on_a=best_s,
-                always_on_a=always, vol_cuts=cuts, a_rows=int(len(A)), a_days=int(len(alld)),
-                a_oos_days=int(len(days)), a_fingerprint=fingerprint(A, strats, env), b_t=B_T,
-                c_min_windows=C_MIN_WINDOWS)
+                always_on_a=always, vol_cuts=cuts, state_cols=state_cols, a_rows=int(len(A)),
+                a_days=int(len(alld)), a_oos_days=int(len(days)), a_fingerprint=a_fingerprint(A, strats, env),
+                b_t=B_T, c_min_windows=C_MIN_WINDOWS)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(spec, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
     log(f"frozen threshold {spec['threshold']} best-on-A {best_s} -> {path}")
@@ -549,6 +626,11 @@ def c_complete(W):
     return bool((cnt >= C_MIN_WINDOWS).all())
 
 
+def c_log_path(frozen):
+    p = Path(frozen)
+    return p.with_name(p.stem + "-c.json")
+
+
 def rules_for(S, strats, scores, spec):
     """{rule name: opened masks} on the rows S."""
     out = {"switch": switch_open(scores, spec["threshold"]) if spec.get("threshold") is not None
@@ -561,21 +643,23 @@ def rules_for(S, strats, scores, spec):
     return out
 
 
-def evaluate(W, spec, preds=None, allow_partial_c=False, log=print):
+def evaluate(W, spec, preds=None, allow_partial_c=False, c_log=None, log=print):
     """A out of sample, B, and C (once, if B passes) of the frozen switch and its controls."""
     strats, env = spec["strategies"], spec["env_features"]
     A = W[W["segment"] == "A"].reset_index(drop=True)
-    fp_ok = spec.get("a_fingerprint") == fingerprint(A, strats, env)
+    fp_ok = spec.get("a_fingerprint") == a_fingerprint(A, strats, env)
     if preds is None or not fp_ok:
         preds = a_predictions(A, strats, env, log)
-    final = fit_final(A, strats, env)
-    caph_ok, shares_ok = has_qty(W, strats, "caph"), has_qty(W, strats, "shares")
-    res = dict(segments={}, b_pass=False, c_open=False, c_pass=None, fp_ok=fp_ok, c_complete=c_complete(W))
+    ok = {q: has_qty(W, strats, q) for q in QTYS}
+    res = dict(segments={}, b_pass=False, c_open=False, c_pass=None, fp_ok=fp_ok, c_complete=c_complete(W),
+               c_record=None, c_clean=None, ok=ok)
     oos = A["start"].to_numpy(float) >= a_oos_from()
+    final = None
     for name in ("A", "B", "C"):
         if name == "A":
             S = A[oos].reset_index(drop=True)
             scores = {s: preds[s][0][oos] for s in strats}
+            pm = {s: preds[s][2][oos] for s in strats}
         else:
             if name == "C":
                 b = res["segments"].get("B")
@@ -583,28 +667,47 @@ def evaluate(W, spec, preds=None, allow_partial_c=False, log=print):
                 if not (res["b_pass"] and fp_ok and (res["c_complete"] or allow_partial_c)):
                     break
                 res["c_open"] = True
+            if final is None:
+                final = fit_final(A, strats, env)
             S = W[W["segment"] == name].reset_index(drop=True)
-            scores = {}
-            for s in strats:
-                X = S[features_for(s, env)].to_numpy(float)
-                scores[s] = final[s].score(X) if final[s] is not None and len(S) else np.full(len(S), np.nan)
+            scores, pm = score_segment(final, S, strats, env)
         days = days_of(S)
         rules = rules_for(S, strats, scores, spec)
         frames = {k: rule_frame(S, v) for k, v in rules.items()}
-        stats = {k: perf(f, days, caph_ok, shares_ok) for k, f in frames.items()}
+        stats = {k: perf(f, days, ok) for k, f in frames.items()}
         dd = {k: daily(f, days).to_numpy() for k, f in frames.items()}
         on = [f"on_{s}" for s in strats]
         best_on = max(on, key=lambda k: (stats[k]["d_mean"] if np.isfinite(stats[k]["d_mean"]) else -np.inf, k)) \
             if on else None
         diff = day_t(dd["switch"] - dd[best_on]) if best_on else day_t([])
         sw = stats["switch"]
-        seg = dict(S=S, days=days, scores=scores, stats=stats, best_on=best_on, diff=diff, rules=rules,
+        seg = dict(S=S, days=days, scores=scores, pm=pm, stats=stats, best_on=best_on, diff=diff, rules=rules,
                    frames=frames)
         if name == "B":
             seg["pass"] = bool(sw["d_n"] and sw["d_mean"] > 0 and np.isfinite(sw["d_t"]) and sw["d_t"] >= B_T
                                and (best_on is None or sw["d_mean"] > stats[best_on]["d_mean"]))
         if name == "C":
             res["c_pass"] = bool(sw["d_n"] and sw["d_mean"] > 0)
+            now = dict(opened=pd.Timestamp.now(tz="UTC").isoformat(), frozen_made=spec.get("made"),
+                       a_fingerprint=spec.get("a_fingerprint"), c_fingerprint=fingerprint(S, strats, env),
+                       mean=sw["d_mean"], se=sw["d_se"], t=sw["d_t"], n=sw["d_n"], c_pass=res["c_pass"])
+            if c_log is not None:
+                p = Path(c_log)
+                if p.exists():
+                    rec = json.loads(p.read_text(encoding="utf-8"))
+                    res["c_record"] = rec
+                    res["c_clean"] = bool(rec.get("frozen_made") == now["frozen_made"]
+                                          and rec.get("a_fingerprint") == now["a_fingerprint"]
+                                          and rec.get("c_fingerprint") == now["c_fingerprint"])
+                    if rec.get("frozen_made") == now["frozen_made"] and rec.get("a_fingerprint") == now["a_fingerprint"]:
+                        res["c_pass"] = bool(rec["c_pass"])     # the first opening is the verdict
+                    else:
+                        res["c_pass"] = None                    # C was spent on another frozen rule
+                    log(f"C was first opened {rec.get('opened')} (pass {rec.get('c_pass')}); clean now: {res['c_clean']}")
+                else:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(json.dumps(now, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
+                    res["c_record"], res["c_clean"] = now, True
         res["segments"][name] = seg
         log(f"{name}: switch {sw['d_mean']:+.2f} $/day (t {sw['d_t']:.1f}, {sw['d_n']} days); best always-on "
             f"{best_on} {stats[best_on]['d_mean']:+.2f}" if best_on else f"{name}: switch {sw['d_mean']:+.2f} $/day")
@@ -612,22 +715,42 @@ def evaluate(W, spec, preds=None, allow_partial_c=False, log=print):
 
 
 # --------------------------------------------------------------------------- regime states
-def state_labels(W, cuts):
-    """趋势/震荡 x 波动三分位 x DVOL−RV 符号, '缺数据' when a component is NaN."""
-    vr, rv, iv = (W[c].to_numpy(float) for c in STATE_COLS)
-    ok = np.isfinite(vr) & np.isfinite(rv) & np.isfinite(iv) & (cuts is not None)
-    tr = np.where(vr > 1, "趋势", "震荡")
-    if cuts is None:
-        terc = np.full(len(W), "")
-    else:
-        terc = np.where(rv <= cuts[0], "低波", np.where(rv <= cuts[1], "中波", "高波"))
-    sg = np.where(iv > 0, "DVOL>RV", "DVOL≤RV")
-    lab = np.char.add(np.char.add(np.char.add(np.char.add(tr.astype(str), "·"), terc.astype(str)), "·"),
-                      sg.astype(str))
-    return np.where(ok, lab, "缺数据")
+def state_labels(W, cuts, cols=STATE_COLS):
+    """趋势/震荡 x 波动三分位 x DVOL−RV 符号 over the components in `cols`; '缺数据' when one is NaN."""
+    n = len(W)
+    parts, ok = [], np.ones(n, bool)
+    if "vr60" in cols:
+        vr = W["vr60"].to_numpy(float)
+        ok &= np.isfinite(vr)
+        parts.append(np.where(vr > 1, "趋势", "震荡"))
+    if "rv30m" in cols and cuts is not None:
+        rv = W["rv30m"].to_numpy(float)
+        ok &= np.isfinite(rv)
+        parts.append(np.where(rv <= cuts[0], "低波", np.where(rv <= cuts[1], "中波", "高波")))
+    if "dvol_rv" in cols:
+        iv = W["dvol_rv"].to_numpy(float)
+        ok &= np.isfinite(iv)
+        parts.append(np.where(iv > 0, "DVOL>RV", "DVOL≤RV"))
+    if not parts:
+        return np.full(n, "缺数据", dtype=object)
+    lab = pd.Series(parts[0].astype(str))
+    for p in parts[1:]:
+        lab = lab + "·" + pd.Series(p.astype(str))
+    return np.where(ok, lab.to_numpy(object), "缺数据")
 
 
-STATE_ORDER = [f"{a}·{b}·{c}" for a in ("趋势", "震荡") for b in ("低波", "中波", "高波") for c in ("DVOL>RV", "DVOL≤RV")]
+def state_order(cols, cuts):
+    lists = []
+    if "vr60" in cols:
+        lists.append(("趋势", "震荡"))
+    if "rv30m" in cols and cuts is not None:
+        lists.append(("低波", "中波", "高波"))
+    if "dvol_rv" in cols:
+        lists.append(("DVOL>RV", "DVOL≤RV"))
+    out = [""]
+    for lst in lists:
+        out = [f"{a}·{b}" if a else b for a in out for b in lst]
+    return [o for o in out if o] + ["缺数据"]
 
 
 # --------------------------------------------------------------------------- report
@@ -666,7 +789,8 @@ def _perf_cells(p):
             f"{_usd(p['cap'], False)} | {_usd(p['mdd'], False)} |")
 
 
-RULE_NAMES = {"switch": "**学习切换**", "hand": "手工趋势/震荡切换", "best_a": "A 段最好的一个一直开"}
+RULE_NAMES = {"switch": "**学习切换**", "hand": "手工趋势/震荡切换（VR60 > 1 开跟随+方向，≤ 1 开反转+做市）",
+              "best_a": "A 段最好的一个一直开"}
 
 
 def _rule_name(k, spec):
@@ -677,31 +801,54 @@ def _rule_name(k, spec):
     return RULE_NAMES.get(k, k)
 
 
+def _corr(x, y):
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    if m.sum() < 3 or np.std(x[m]) == 0 or np.std(y[m]) == 0:
+        return np.nan
+    return float(np.corrcoef(x[m], y[m])[0, 1])
+
+
 def report(W, spec, res, mapping, missing, written, paths, log=print):
     strats = spec["strategies"]
+    ok = res.get("ok", {})
     L = ["# 按状态学会何时开哪个策略（REGIME.md 的学习和判定）", ""]
     segs = res["segments"]
     n_seg = {k: int((W["segment"] == k).sum()) for k in "ABC"}
     L += [f"数据：`{paths['windows']}`，每个 5 分钟窗口一行；A {n_seg['A']:,} 个窗口，B {n_seg['B']:,} 个，"
           f"C {'%s 个' % format(n_seg['C'], ',') if res['c_open'] else '（锁箱未开，不报告）'}。"
-          f"金额都是每笔 5 份时的美元（含两腿手续费），每份盈亏用美分。", ""]
+          f"金额都是每笔 5 份时的美元（含两腿手续费），每份盈亏用美分。纸面研究，只用行情数据。", ""]
     L += [f"策略：{'、'.join(NAMES[s] for s in strats)}" + (f"；缺：{'、'.join(NAMES[s] for s in STRATS if s not in strats)}"
                                                          if len(strats) < len(STRATS) else "") + "。",
           f"环境特征（用于模型）：{', '.join(spec['env_features'])}" + (f"；表里没有：{', '.join(missing)}" if missing else "")
           + f"；另加每个策略自己过去 {TRAIL[0]}、{TRAIL[1]} 个窗口（跳过刚结束的那个）的实际盈亏。", ""]
+    nq = [q for q in QTYS if not ok.get(q, True)]
+    if nq:
+        L += [f"表里没有这些量（报告里显示为 –）：{', '.join(nq)}。", ""]
     # verdict
     b = segs.get("B")
     L += ["## 判定", ""]
+    if not res["fp_ok"]:
+        L += ["- **注意**：冻结文件是用另一份 A 段数据写的（指纹不符），B 的结果只作参考，C 不开。"]
     if b is not None:
-        sw, bo = b["stats"]["switch"], b["stats"][b["best_on"]] if b["best_on"] else None
+        sw, bo = b["stats"]["switch"], (b["stats"][b["best_on"]] if b["best_on"] else None)
         L += [f"- B（{SEGMENTS[1][1][5:]} – 08-15）：学习切换每天 {_usd(sw['d_mean'])}（t {_t(sw['d_t'])}，{sw['d_n']} 天），"
               f"最好的一直开（{NAMES.get(b['best_on'][3:], '') if b['best_on'] else '–'}）每天 "
-              f"{_usd(bo['d_mean']) if bo else '–'}；差 {_usd(b['diff']['mean'])}/天（t {_t(b['diff']['t'])}）。"
+              f"{_usd(bo['d_mean']) if bo else '–'}；差 {_usd(b['diff']['mean'])}/天（配对 t {_t(b['diff']['t'])}）。"
               f"要求：> 0、t ≥ {B_T:g}、好于最好的一直开 → **{'通过' if res['b_pass'] else '未通过'}**。"]
     if res["c_open"]:
         c = segs["C"]["stats"]["switch"]
-        L += [f"- C（08-16 – 08-29，只算一次）：每天 {_usd(c['d_mean'])}（t {_t(c['d_t'])}，{c['d_n']} 天）→ "
-              f"**{'通过' if res['c_pass'] else '未通过'}**。"]
+        rec = res.get("c_record") or {}
+        if res.get("c_pass") is None:
+            L += [f"- C（08-16 – 08-29）：锁箱已在 {str(rec.get('opened', ''))[:19]} UTC 用另一个冻结规则打开过，"
+                  f"这次的 C 不是干净的锁箱，不作判定（本次每天 {_usd(c['d_mean'])}，t {_t(c['d_t'])}）。"]
+        else:
+            first = (f"首次打开 {str(rec.get('opened', ''))[:19]} UTC：每天 {_usd(rec.get('mean'))}"
+                     f"（t {_t(rec.get('t'))}，{rec.get('n')} 天）" if rec else "")
+            same = "" if res.get("c_clean") in (None, True) else \
+                f"；C 段数据此后变了，本次每天 {_usd(c['d_mean'])}（t {_t(c['d_t'])}），以首次为准"
+            L += [f"- C（08-16 – 08-29，只算一次）：{first or '每天 ' + _usd(c['d_mean'])}{same} → "
+                  f"**{'通过' if res['c_pass'] else '未通过'}**（要求每天盈亏 > 0）。"]
     else:
         why = ("B 未通过" if not res["b_pass"] else ("A 段数据和冻结时不同（指纹不符）" if not res["fp_ok"]
                                                   else "C 段不完整（有的天少于 %d 个窗口）" % C_MIN_WINDOWS))
@@ -712,32 +859,37 @@ def report(W, spec, res, mapping, missing, written, paths, log=print):
           f"冻结文件 `{paths['frozen']}`，{'本次写入' if written else '沿用已有文件'}（{spec.get('made', '')[:19]} UTC）。"
           f"门槛 = **{spec.get('threshold')}**（预测盈亏比 = 预测每窗口盈亏 ÷ 预测每窗口 |盈亏|，岭回归和梯度提升树平均）；"
           f"A 段最好的单个策略：{NAMES.get(spec.get('best_on_a'), '–')}。", "",
-          "| 门槛 | A 样本外每天盈亏 $ | ± 标准误 | t | 盈利天占比 | 天数 | 有成交的窗口 |", "|---:|---:|---:|---:|---:|---:|---:|"]
+          "| 门槛 | A 样本外每天盈亏 $ | ± 标准误 $ | t | 盈利天占比 | 天数 | 有成交的窗口 |", "|---:|---:|---:|---:|---:|---:|---:|"]
     for c in spec.get("candidates", []):
         L += [f"| {c['threshold']:g} | {_usd(c['mean'])} | {_num(c['se'], 2)} | {_t(c['t'])} | {_pct(c['pos'])} | "
               f"{c['n']} | {c['traded']:,} |"]
     L += ["", "A 全段每个策略一直开（挑“A 段最好的一个”用）：" + "；".join(
-        f"{NAMES[s]} {_usd(v['mean'])}/天" for s, v in spec.get("always_on_a", {}).items()) + "。", ""]
+        f"{NAMES.get(s, s)} {_usd(v['mean'])}/天" for s, v in spec.get("always_on_a", {}).items()) + "。", ""]
     # switch vs controls
     L += ["## 学习切换 vs 对照（每段）", "",
-          f"A = A 段样本外的天（{spec['a_oos_from'][5:]} – 07-15，模型按周滚动）；B / C 用在全部 A 上拟合的模型。", ""]
+          f"A = A 段样本外的天（{spec['a_oos_from'][5:]} – 07-15，模型按周滚动）；B / C 用在全部 A 上拟合的模型。"
+          "几个策略同时开时，各项按窗口相加。", ""]
     for name, seg in segs.items():
         L += [f"### {name} 段", "", "| 规则 " + PERF_HEAD, "|---" + PERF_SEP]
         for k, p in seg["stats"].items():
             L += [f"| {_rule_name(k, spec)} | " + _perf_cells(p)]
-        L += [""]
-    # what the switch opened
+        d = seg["diff"]
+        L += ["", f"学习切换 − 本段最好的一直开（{NAMES.get((seg['best_on'] or '___')[3:], '–')}）：每天 "
+                  f"{_usd(d['mean'])}（± {_num(d['se'], 2)}，配对 t {_t(d['t'])}，{d['n']} 天）。", ""]
+    # what the switch opened, and how well the predictions ranked the windows
     L += ["## 学习切换打开了什么（每个策略）", "",
-          "| 段 | 策略 | 打开的窗口占比 | 打开时 利润 $/天 | 没打开时 利润 $/天 | 打开时 每份盈亏 | 没打开时 每份盈亏 |",
-          "|---|---|---:|---:|---:|---:|---:|"]
+          "预测相关 = 预测的每窗口盈亏（两种模型平均）与实际每窗口盈亏的相关系数（只算这个策略能评估的窗口）。", "",
+          "| 段 | 策略 | 打开的窗口占比 | 打开时 利润 $/天 | 没打开时 利润 $/天 | 打开时 每份盈亏 | 没打开时 每份盈亏 | 预测相关 |",
+          "|---|---|---:|---:|---:|---:|---:|---:|"]
     for name, seg in segs.items():
         S, days = seg["S"], seg["days"]
         for s in strats:
             m = seg["rules"]["switch"][s]
-            po = perf(rule_frame(S, {s: m}), days)
-            pc = perf(rule_frame(S, {s: ~m}), days)
+            po = perf(rule_frame(S, {s: m}), days, ok)
+            pc = perf(rule_frame(S, {s: ~m}), days, ok)
             L += [f"| {name} | {NAMES[s]} | {_pct(m.mean() if len(m) else np.nan)} | {_usd(po['pnl_day'])} | "
-                  f"{_usd(pc['pnl_day'])} | {_cents(po['per_share'])} | {_cents(pc['per_share'])} |"]
+                  f"{_usd(pc['pnl_day'])} | {_cents(po['per_share'])} | {_cents(pc['per_share'])} | "
+                  f"{_num(_corr(seg['pm'][s], S[f'pnl_{s}'].to_numpy(float)), 3)} |"]
     L += [""]
     # per strategy overall
     show = [k for k in ("A", "B", "C") if k in segs]
@@ -747,16 +899,19 @@ def report(W, spec, res, mapping, missing, written, paths, log=print):
     for s in strats:
         for k in show:
             S = full[k]
-            L += [f"| {NAMES[s]} | {k} | " + _perf_cells(perf(rule_frame(S, {s: np.ones(len(S), bool)}), days_of(S)))]
+            L += [f"| {NAMES[s]} | {k} | " + _perf_cells(perf(rule_frame(S, {s: np.ones(len(S), bool)}), days_of(S), ok))]
     L += [""]
     # states
     cuts = spec.get("vol_cuts")
+    cols = tuple(spec.get("state_cols", STATE_COLS))
+    dropped = [c for c in STATE_COLS if c not in cols]
     L += ["## 每个状态下的每个策略", "",
           "状态 = 趋势（过去 60 分钟方差比 VR60 > 1）或震荡（≤ 1）× 30 分钟已实现波动三分位（切点来自 A："
-          + (f"{cuts[0]:.4g}、{cuts[1]:.4g}" if cuts else "无") + "）× DVOL − 已实现波动的符号。"
-          "每天的量 = 这个状态里的总量 ÷ 该段全部天数（即这个状态每天贡献多少）。", ""]
-    labs = {k: state_labels(full[k], cuts) for k in show}
-    order = STATE_ORDER + ["缺数据"]
+          + (f"{cuts[0]:.4g}、{cuts[1]:.4g}" if cuts else "无") + "）× DVOL − 已实现波动的符号"
+          + (f"（表里整段没有 {', '.join(dropped)}，这一维去掉）" if dropped else "") + "。"
+          "每天的量 = 这个状态里的总量 ÷ 该段全部天数（即这个状态每天贡献多少）；回撤只算这个状态的窗口。", ""]
+    labs = {k: state_labels(full[k], cuts, cols) for k in show}
+    order = state_order(cols, cuts)
     L += ["### 利润 $/天 一览（行 = 状态，列 = 策略）", "",
           "| 状态 | 段 | 窗口占比 | " + " | ".join(NAMES[s] for s in strats) + " |",
           "|---|---|---:|" + "---:|" * len(strats)]
@@ -766,7 +921,7 @@ def report(W, spec, res, mapping, missing, written, paths, log=print):
             if not m.any():
                 continue
             S, days = full[k], days_of(full[k])
-            cells = [_usd(perf(rule_frame(S, {s: m}), days)["pnl_day"]) for s in strats]
+            cells = [_usd(perf(rule_frame(S, {s: m}), days, ok)["pnl_day"]) for s in strats]
             L += [f"| {st} | {k} | {_pct(m.mean())} | " + " | ".join(cells) + " |"]
     L += [""]
     for s in strats:
@@ -777,19 +932,21 @@ def report(W, spec, res, mapping, missing, written, paths, log=print):
                 if not m.any():
                     continue
                 S = full[k]
-                L += [f"| {st} | {k} | " + _perf_cells(perf(rule_frame(S, {s: m}), days_of(S)))]
+                L += [f"| {st} | {k} | " + _perf_cells(perf(rule_frame(S, {s: m}), days_of(S), ok))]
         L += [""]
     L += ["## 口径", "",
-          "- 一行 = 一个 5 分钟窗口；每个策略在这个窗口里的实际盈亏（每笔 5 份，含手续费，持有到结算的按官方结果）。",
+          "- 一行 = 一个 5 分钟窗口；每个策略在这个窗口里的实际盈亏（每笔 5 份，含手续费，持有到结算的按官方结果）。"
+          "策略在某窗口无法评估（没有可用盘口）时算没开、盈亏 $0，也不进训练。",
           "- 胜率、平均赢 / 平均亏（盈亏比）：按有成交的窗口算，一个窗口的净盈亏算一次。",
           "- 每份盈亏 = 总盈亏 ÷ 总份数。占用资金 = 资金 × 小时 的总和 ÷（24 × 天数），即时间平均占用的美元。",
           "- 最大回撤：按窗口时间顺序累计盈亏，从该段开头的 $0 起，低于此前最高点的最大跌幅（美元）。",
           "- 按天 t：每天的盈亏当一个样本，t = 平均 ÷（标准差 ÷ √天数）；没开任何策略的天算 $0。",
+          f"- 冷热特征：过去 {TRAIL[0]}、{TRAIL[1]} 个 5 分钟窗口的盈亏和，跳过刚结束的那个窗口（它在本窗口开盘时可能还没结算）。",
           f"- 模型：每个策略两个目标（盈亏、|盈亏|）× 岭回归（alpha {RIDGE_ALPHA:g}，标准化）和梯度提升树"
           f"（深 {HGB_PARAMS['max_depth']}、{HGB_PARAMS['max_leaf_nodes']} 叶、每叶 ≥ {HGB_PARAMS['min_samples_leaf']}、"
           f"学习率 {HGB_PARAMS['learning_rate']}、{HGB_PARAMS['max_iter']} 轮），两种模型取平均；训练只用在预测时刻前"
           f" ≥ {GAP_S} 秒已结束的窗口。",
-          "- 列名映射（标准名 ← 表里的列）：" + "，".join(f"{k} ← {v}" for k, v in mapping.items() if k != v) + "。"
+          ("- 列名映射（标准名 ← 表里的列）：" + "，".join(f"{k} ← {v}" for k, v in mapping.items() if k != v) + "。")
           if any(k != v for k, v in mapping.items()) else "- 列名与标准名一致。", ""]
     return "\n".join(L)
 
@@ -800,7 +957,7 @@ def run(windows=WINDOWS, out=OUT, frozen=FROZEN, allow_partial_c=False, log=prin
     W, mapping, strats, missing = load_windows(windows, log)
     if not strats:
         raise ValueError("no strategy pnl column found (tried e.g. " + ", ".join(COLMAP["pnl_H"][:4]) + ")")
-    log(f"{len(W):,} windows; strategies {strats}; missing env {missing}")
+    log(f"{len(W):,} windows; strategies {strats}; missing env {missing}; mapping {mapping}")
     W = add_trailing(W, strats)
     A = W[W["segment"] == "A"].reset_index(drop=True)
     env = env_features(A)
@@ -808,13 +965,9 @@ def run(windows=WINDOWS, out=OUT, frozen=FROZEN, allow_partial_c=False, log=prin
     spec = json.loads(Path(frozen).read_text(encoding="utf-8"))   # B / C use the file on disk only
     if spec["strategies"] != strats or spec["env_features"] != env:
         log("frozen file's strategies / features differ from this table: using the frozen ones")
-        strats = [s for s in spec["strategies"] if f"pnl_{s}" in W]
-        missing_cols = [e for e in spec["env_features"] if e not in W]
-        for e in missing_cols:
-            W[e] = np.nan
+        W = add_trailing(ensure_columns(W, spec["strategies"], spec["env_features"]), spec["strategies"])
         preds = None
-    res = evaluate(W, spec, preds if spec["strategies"] == strats and spec["env_features"] == env else None,
-                   allow_partial_c=allow_partial_c, log=log)
+    res = evaluate(W, spec, preds, allow_partial_c=allow_partial_c, c_log=c_log_path(frozen), log=log)
     text = report(W, spec, res, mapping, missing, written,
                   dict(windows=_rel(windows), frozen=_rel(frozen)), log)
     if out:

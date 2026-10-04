@@ -160,6 +160,7 @@ MODELS = ("ridge", "hgb")
 B_ALPHA, C_ALPHA = 0.05 / 3, 0.05
 TIE_MAX = 1.5               # a control's top-q may take at most 1.5 q of the rows
 BUDGET_S = 285 * 60         # stop reading archives after this (the lane has 330 min)
+FETCH_TRIES = 3
 UNITS = (5, 20)
 
 POLICIES = (["settle"] + [f"tk{h}" for h in HOLDS] + [f"mk{x}_{h}" for x in MAKER_X for h in HOLDS])
@@ -601,10 +602,14 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
             sh = np.where(sold, np.minimum(sh_e, bsx), sh_e)
             tk[h] = (pnl, hold, sold.astype(float), sh)
             L[f"pnl_tk{h}"][ix], L[f"hold_tk{h}"][ix], L[f"how_tk{h}"][ix], L[f"sh20_tk{h}"][ix] = tk[h]
-        # resting sells: live at tl; marketable on arrival -> taker at that bid
+        # resting sells: live at tl; marketable on arrival -> taker at that bid (a fresh bid of >= 5 shares,
+        # as any taker sale); never after the market's end
         tl = te + MAKER_LIVE_S
         gl = _asof(bk.T, a, b, tl)
-        bl, _, _, _, _ = _quote(bk, gl, ss)
+        bl, _, bsl, _, okl = _quote(bk, gl, ss)
+        with np.errstate(invalid="ignore"):
+            cross_ok = okl & _fresh(bk, gl, tl) & (tl < end - T_EPS) & np.isfinite(bl) & (bl > 0) & \
+                np.isfinite(bsl) & (bsl >= MIN_SHARES - 1e-12)
         for sd in (1, -1):
             sel = np.flatnonzero(ss == sd)
             if not len(sel):
@@ -614,7 +619,7 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
                 lim = np.minimum(np.round(pe[sel] + x / 100.0, 6), MAKER_CAP)
                 first = _first_hit(ev_t, ev_v, tl[sel], np.minimum(te[sel] + max(HOLDS), end[sel]), lim)
                 with np.errstate(invalid="ignore"):
-                    mkt = np.isfinite(bl[sel]) & (bl[sel] >= lim - 1e-9)
+                    mkt = cross_ok[sel] & (bl[sel] >= lim - 1e-9)
                 for h in HOLDS:
                     pol = f"mk{x}_{h}"
                     filled = ~mkt & (first <= np.minimum(te[sel] + h, end[sel]) + T_EPS)
@@ -622,7 +627,7 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
                     pnl = np.where(mkt, bl[sel] - fee(bl[sel]) - cost[sel], np.where(filled, lim - cost[sel], tp))
                     hold = np.where(mkt, MAKER_LIVE_S, np.where(filled, first - te[sel], th))
                     how = np.where(mkt, 1.0, np.where(filled, 2.0, tw))
-                    sh = np.where(mkt | filled, sh_e[sel], tsh)
+                    sh = np.where(mkt, np.minimum(sh_e[sel], bsl[sel]), np.where(filled, sh_e[sel], tsh))
                     ii = ix[sel]
                     L[f"pnl_{pol}"][ii], L[f"hold_{pol}"][ii], L[f"how_{pol}"][ii], L[f"sh20_{pol}"][ii] = \
                         pnl, hold, how, sh
@@ -648,11 +653,12 @@ def day_rows(feat, mkts, binance, prints, carry=None, factor=None, dvol=None, cl
 
 def _events(bk, a, b, sd, pr):
     """Time-sorted (times, prices) at which a resting sell of side sd's token could be hit: active,
-    uncrossed snapshots with that token's best bid, and taker BUY prints of the token."""
+    uncrossed, fresh snapshots (top of book changed <= 1 s before) with that token's best bid, and
+    taker BUY prints of the token (receipt time)."""
     T = bk.T[a:b]
     g = np.arange(a, b)
     bid, _, _, _, ok = _quote(bk, g, np.full(len(g), sd))
-    v = np.where(ok & np.isfinite(bid), bid, -np.inf)
+    v = np.where(ok & _fresh(bk, g, T) & np.isfinite(bid), bid, -np.inf)
     if pr is not None and len(pr[0]):
         T = np.concatenate([T, pr[0]])
         v = np.concatenate([v, pr[1]])
@@ -782,10 +788,10 @@ def cl_stat(pnl, cluster):
 
 def units(tr, pol, n_days):
     """Per-day units of a set of trades of policy `pol`: trades, shares (5 a trade and min(20, sizes)),
-    entry cost $, profit $, capital tied up $ (time-weighted mean over the day; median of the daily
-    peaks of concurrent positions), all per day over n_days."""
+    entry cost $, profit $, capital tied up $ (time-weighted mean over the day; median and max of the
+    daily peaks of concurrent positions, a day without a trade counting 0), all per day over n_days."""
     out = dict(days=n_days, trades=np.nan, sh5=np.nan, sh20=np.nan, cost5=np.nan, cost20=np.nan, profit5=np.nan,
-               profit20=np.nan, cap5=np.nan, cap20=np.nan, peak5=np.nan, peak20=np.nan)
+               profit20=np.nan, cap5=np.nan, cap20=np.nan, peak5=np.nan, peak20=np.nan, pmax5=np.nan, pmax20=np.nan)
     if not n_days:
         return out
     if not len(tr):
@@ -810,7 +816,9 @@ def units(tr, pol, n_days):
             amt = np.concatenate([(sh[u] * unit)[k], -(sh[u] * unit)[k]])
             o = np.lexsort((amt, ev))  # at equal times an exit is counted before an entry
             peaks.append(float(np.max(np.cumsum(amt[o]))))
+        peaks += [0.0] * max(n_days - len(peaks), 0)  # days of the segment without a trade
         out[f"peak{u}"] = float(np.median(peaks)) if peaks else 0.0
+        out[f"pmax{u}"] = float(np.max(peaks)) if peaks else 0.0
     return out
 
 
@@ -1010,7 +1018,7 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
             skipped.append(day)
             continue
         try:
-            local = cross.fetch(name, workdir / name)
+            local = _fetch(cross, name, workdir / name, log)
             feat, mk, rs = cross.read_day(local)
             hf._release()
             rs, provisional = hf.final_resolution(rs)
@@ -1049,6 +1057,19 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
     return analyze(rows, out, infos, failed, skipped, len(arcs), missing, ds=cross.DS, log=log)
 
 
+def _fetch(cross, name, dest, log=print, tries=FETCH_TRIES):
+    """cross.fetch with a few retries (a C archive that cannot be read keeps the lockbox closed)."""
+    for k in range(tries):
+        try:
+            return cross.fetch(name, dest)
+        except OSError as e:
+            if k + 1 == tries:
+                raise
+            log(f"{name}: download failed ({e!r}), retry {k + 1}")
+            Path(dest).unlink(missing_ok=True)
+            time.sleep(15 * (k + 1))
+
+
 def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds=None, log=print):
     """Segments, freeze on A, B / C, report and traded rows (separate from run() for the tests)."""
     out, frozen_path, rows_path = out_paths(out)
@@ -1057,7 +1078,8 @@ def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds
         seg = segment_of(rows["start"].to_numpy(float))
         rows = rows[seg != ""].reset_index(drop=True)
     seg = segment_of(rows["start"].to_numpy(float)) if len(rows) else np.array([], dtype=object)
-    complete_c = not any(d >= SEGMENTS[2][1] for d in list(skipped))
+    # C is opened only when every archive of C was read (none skipped for time, none failed)
+    complete_c = not any(SEGMENTS[2][1] <= d < SEGMENTS[2][2] for d in list(skipped) + list(failed))
     A = rows[seg == "A"]
     spec, fresh, _ = freeze(A, frozen_path, log)  # A only: nothing of B or C reaches the freeze
     del A
@@ -1126,11 +1148,12 @@ def _units_line(name, u, s):
         return f"| {name} | – | – | – | – | – | – | – | – |"
     return (f"| {name} | {u['days']} | {u['trades']:.1f} | {u['sh5']:,.0f} / {u['sh20']:,.0f} | "
             f"{_usd(u['cost5'])} / {_usd(u['cost20'])} | {_usd(u['profit5'])} / {_usd(u['profit20'])} | "
-            f"{_usd(u['cap5'])} / {_usd(u['cap20'])} | {_usd(u['peak5'])} / {_usd(u['peak20'])} | {_st(s)} |")
+            f"{_usd(u['cap5'])} / {_usd(u['cap20'])} | {_usd(u['peak5'])}（{_usd(u['pmax5'])}） / "
+            f"{_usd(u['peak20'])}（{_usd(u['pmax20'])}） | {_st(s)} |")
 
 
 UNITS_HEAD = ["| 段 | 天数 | 笔/天 | 份/天（每笔 5 份 / 每笔 ≤ 20 份） | 买入花费 $/天（5 / 20） | 利润 $/天（5 / 20） | "
-              "平均占用资金 $（5 / 20） | 当天峰值占用 $ 的中位（5 / 20） | 每份盈亏 ± 标准误 |",
+              "平均占用资金 $（5 / 20） | 当天峰值占用 $：中位（最大）（5 / 20） | 每份盈亏 ± 标准误 |",
               "|---|---:|---:|---:|---:|---:|---:|---:|---|"]
 
 
