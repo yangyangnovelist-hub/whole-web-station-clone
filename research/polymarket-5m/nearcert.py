@@ -296,6 +296,17 @@ def rule_check(mk):
     return mk
 
 
+def _other(bad, k=2):
+    """'reason (n, e.g. slug)' for the k most common differing signatures, '+ m more' for the rest."""
+    if not len(bad):
+        return "–"
+    vc = bad["rule"].value_counts()
+    out = [f"{why} ({n}, e.g. {bad.loc[bad['rule'] == why, 'slug'].iloc[0][:60]})" for why, n in vc.iloc[:k].items()]
+    if len(vc) > k:
+        out.append(f"+ {len(vc) - k} more ({int(vc.iloc[k:].sum())})")
+    return "; ".join(out)
+
+
 def rule_table(mk, period_col="month"):
     """kind x month: events, markets, markets with the 2026 rule, other signatures (count) and a sample
     slug of each differing one."""
@@ -304,8 +315,7 @@ def rule_table(mk, period_col="month"):
         bad = g[g["rule"] != ""]
         rows.append({"kind": k, "month": mo, "events": g["event_slug"].nunique(), "markets": len(g),
                      "ok": int((g["rule"] == "").sum()),
-                     "other": "; ".join(f"{why} ({n}, e.g. {bad.loc[bad['rule'] == why, 'slug'].iloc[0]})"
-                                        for why, n in bad["rule"].value_counts().items()) or "–"})
+                     "other": _other(bad)})
     return pd.DataFrame(rows)
 
 
@@ -431,7 +441,8 @@ def tables(mk, spot, trades, first=FIRST, last=LAST):
     pt = _call(rs.post_tstar, trades, mk, first=first, last=last)
     w = pt[pt["win"] & (pt["price"] < 1)].copy()
     return {"cp": cp, "near": near, "near_kind": near_kind, "j": j, "mon": mon, "lag": rs.lag_table(w, mk),
-            "dd": _call(rs.daily_dollars, w, first=first, last=last), "ymon": yield_month(w)}
+            "dd": _call(rs.daily_dollars, w, first=first, last=last), "ymon": yield_month(w), "robust": robustness(j),
+            "ytop": yield_top(w)}
 
 
 # ===================================================================== near-certain (resolved.py's tables)
@@ -490,6 +501,26 @@ def near_tables(cp, trades, mk):
     near, near_kind, j = rs.near_table(cp, trades, mk)
     mon = month_table(cp, j, mk) if len(cp) else pd.DataFrame()
     return near, near_kind, j, mon
+
+
+def robustness(j, bucket=TEST, kinds=BINANCE_KINDS, top=10):
+    """Descriptions only (not the verdict): the bucket's pooled pnl with markets equally weighted (t of
+    the per-market means), without the `top` markets with the most shares, and clustered by ET day of
+    the checkpoint (strikes of one day share one BTC path)."""
+    s = j[(j["bucket"] == bucket) & j["kind"].isin(kinds)] if len(j) else j
+    if not len(s):
+        return {}
+    g = s.assign(w=s["pnl"] * s["size"]).groupby("cid").agg(w=("w", "sum"), sh=("size", "sum"))
+    per = g["w"] / g["sh"]
+    n = len(per)
+    eq_t = per.mean() / (per.std(ddof=1) / math.sqrt(n)) if n > 1 and per.std(ddof=1) > 0 else NAN
+    rest = s[~s["cid"].isin(set(g["sh"].sort_values(ascending=False).index[:top]))]
+    mu_x, _, t_x, G_x = rs.clustered_mean(rest["pnl"], rest["size"], rest["cid"])
+    day = rs.et_day(pd.Series(s["t"].to_numpy(np.int64), index=s.index)).to_numpy()
+    mu_d, _, t_d, G_d = rs.clustered_mean(s["pnl"], s["size"], day)
+    return {"eq": per.mean(), "eq_t": eq_t, "eq_med": per.median(), "n": n,
+            "top_share": g["sh"].sort_values(ascending=False).iloc[:top].sum() / g["sh"].sum(),
+            "ex_top": mu_x, "ex_top_t": t_x, "day_t": t_d, "days": G_d}
 
 
 def verdict(near, min_markets=MIN_MARKETS, min_t=MIN_T):
@@ -562,6 +593,18 @@ def yield_month(w, kinds=BINANCE_KINDS, L=5):
     return piv.fillna(0.0).reset_index()
 
 
+def yield_top(w, kinds=BINANCE_KINDS, L=5):
+    """Markets by profit $ of winning-token trades at p < 1, dt >= L, before closedTime (Binance kinds)."""
+    s = w[(w["dt"] >= L) & w["kind"].isin(kinds)]
+    if "after_close" in s:
+        s = s[~s["after_close"]]
+    if not len(s):
+        return pd.DataFrame()
+    return s.groupby(["slug", "kind"]).agg(trades=("size", "size"), notional=("notional", "sum"),
+                                           profit=("profit", "sum"), pmin=("price", "min")) \
+        .sort_values("profit", ascending=False).reset_index()
+
+
 def report(ctx, out_md):
     mk, cov, missing = ctx["mk"], ctx["cov"], ctx["missing"]
     L = ["# “九成五以上”一边的历史独立段检验（NEARCERT.md 检验 1）\n"]
@@ -587,6 +630,13 @@ def report(ctx, out_md):
     if len(mon):
         L.append("\n按月（检查时点所在 ET 月份，币安结算类型、各时点合并）：\n")
         L.append(near_md(mon, "month"))
+    rb = ctx.get("robust") or {}
+    if rb:
+        L.append(f"\n稳健性（描述，不是判定口径）：[0.95, 0.99) 按市场等权每份 {rb['eq']:+.5f}（t {rb['eq_t']:.2f}，中位数 "
+                 f"{rb['eq_med']:+.5f}，{rb['n']} 个市场）；份数最多的 10 个市场占 {rb['top_share']:.0%}，去掉后每份 {rb['ex_top']:+.5f}"
+                 f"（t {rb['ex_top_t']:.2f}）；按 ET 日聚类 t {rb['day_t']:.2f}（{rb['days']} 天）。有成交且输的市场只有 {int(r0['losses']) if r0 is not None else 0} 个，"
+                 f"t 主要反映价格离散；时点上模型预期输 {r0['exp_fail'] if r0 is not None else NAN:.1f} 个、实际 "
+                 f"{int(r0['loss_pts']) if r0 is not None else 0} 个，尾部要靠前向检验。")
     L.append("\n对照 resolved.md（2026-03-14–09-30，同一代码，币安结算合并）：[0.95, 0.99) 每份 +0.01611，t 7.18，"
              "244 个有成交市场（吃单 +0.01497；卖方主动 +0.06211，t 5.14，97 个市场）；≥ 0.99 每份 −0.00548，t −0.59，1438 个市场。")
     # ---------------------------------------------------------------- coverage
@@ -604,8 +654,11 @@ def report(ctx, out_md):
     for k, v in missing.items():
         if v:
             L.append(f"\n- {k} 缺的日期（{len(v)}）：{', '.join(v[:12])}{' …' if len(v) > 12 else ''}")
-    exc = mk["excluded"].value_counts().drop("", errors="ignore")
-    L.append(f"\n- 排除合计：{ {k: int(v) for k, v in exc.items()} }；共 {len(mk):,} 个市场。")
+    ex = mk[mk["excluded"] != ""]
+    head = ex["excluded"].str.replace(r"^(rule: [a-z_]+)=.*$", r"\1", regex=True)
+    exc = ex.groupby([ex["kind"], head]).size()
+    L.append("\n- 排除：" + "；".join(f"{k} {why} {n}" for (k, why), n in exc.items()) + f"；共 {len(mk):,} 个市场。"
+             + "hit_daily 2026-03-05 才开始；updown_4h 2025-10-15 才开始（冬令时按 ET 零点起算，另查了 01:00 UTC 起的 slug）。")
     notes = ctx["notes"]
     L.append(f"- 搜索：public-search {notes.get('search_pages')} 页、{notes.get('search_hit_slugs')} 个 hit slug；"
              f"标题解析不了的 hit 市场 {len(notes.get('hit_window_unparsed') or [])} 个"
@@ -640,17 +693,30 @@ def report(ctx, out_md):
         L.append(rs.md_table(rr, ["kind", "months", "events", "markets", "ok", "sig"],
                              ["类型", "月数", "事件", "市场", "合 2026 规则", "最常见签名"]))
         rbad = ref[ref["rule"] != ""]
+        if (rbad["rule"] == "cmp=twap>=start").any():
+            L.append("\n（2026 样本里 08–09 月的 4 小时涨跌已改为 Chainlink TWAP；本段的 4 小时都是“结束价 ≥ 开始价”，且只作对照。）")
         if len(rbad):
             L.append(f"\n2026 样本里签名不同的 {len(rbad)} 个：" + "；".join(f"{r.slug}: {r.rule}" for r in rbad.head(6).itertuples()))
-    L.append("\n本段（每类每月）：\n")
+    L.append("\n本段（每个市场都查；按类型汇总，“不同的月”= 有签名不同的市场的月份）：\n")
     rt = ctx["rule_tab"]
-    L.append(rs.md_table(rt, ["kind", "month", "events", "markets", "ok", "other"],
-                         ["类型", "月", "事件", "市场", "合 2026 规则", "其他签名（数量，例）"]))
+    rk = rt.groupby("kind").agg(first=("month", "min"), last=("month", "max"), months=("month", "nunique"),
+                                events=("events", "sum"), markets=("markets", "sum"), ok=("ok", "sum")).reset_index()
+    rk["span"] = [f"{a}..{b}（{n}）" for a, b, n in zip(rk["first"], rk["last"], rk["months"])]
+    bad_m = rt[rt["ok"] < rt["markets"]].groupby("kind")["month"].agg(lambda x: ", ".join(x))
+    rk["bad_months"] = [bad_m.get(k, "–") for k in rk["kind"]]
+    rk["other"] = [_other(mk[(mk["kind"] == k) & (mk["rule"] != "")]) for k in rk["kind"]]
+    L.append(rs.md_table(rk, ["kind", "span", "events", "markets", "ok", "bad_months", "other"],
+                         ["类型", "月份（个数）", "事件", "市场", "合 2026 规则", "不同的月", "其他签名（数量，例）"]))
     sig_by_kind = mk.groupby("kind")["sig"].agg(lambda s: s.value_counts().index[0])
     L.append("\n本段最常见签名：" + "；".join(f"{k}: `{v}`" for k, v in sig_by_kind.items()))
     xk = ctx["excluded_kinds"]
-    L.append("\n剔除的类型：" + ("；".join(f"**{k}**（{v}）" for k, v in xk.items()) if xk else
-                              "无（本段存在的类型全部和 2026 规则相同）") + "。")
+    n_feb6 = int(((mk["kind"] == "hit_monthly") & mk["rule"].str.startswith("window=february 6")).sum())
+    L.append("\n剔除的类型：" + ("；".join(f"**{k}**（{int((mk['kind'] == k).sum())} 个市场；{v}）" for k, v in xk.items())
+                                 if xk else "无（本段存在的类型全部和 2026 规则相同）") + "。"
+             + ("hit_other = 月度系列在 2025 年 12 月没有开月度事件，而是“What price will Bitcoin hit in 2025?”（年度，窗口从 "
+                "2024-12-30 20:00 ET 或市场创建起到 2025-12-31 23:59 ET），resolved.py 没有这种窗口。" if "hit_other" in xk else "")
+             + (f"另外 2026-02 月度事件里 {n_feb6} 个市场的窗口是“2 月 6 日 11:00 ET 起”（不是整月），按市场剔除。"
+                if n_feb6 else ""))
     absent = [k for k in KINDS if k not in set(mk["kind"])]
     if absent:
         L.append(f"本段不存在的类型：{', '.join(absent)}。")
@@ -672,6 +738,11 @@ def report(ctx, out_md):
                  f"卖方主动：名义$ 平均 {dd['sell_notional'].mean():,.1f}、中位数 {dd['sell_notional'].median():,.1f}。"
                  f"resolved.md（2026-03-14–09-30，201 天，同一口径）：名义平均 $1,315.6、中位数 $23.6，≥ $50 的天 91；"
                  f"收益平均 $38.66；卖方主动平均 $759.7、中位数 $8.8。")
+        yt = ctx.get("ytop")
+        if yt is not None and len(yt):
+            tot = yt["profit"].sum()
+            L.append(f"\n收益集中（T*+5 秒、结算前、币安结算）：共 ${tot:,.0f}，最多的 10 个市场占 {yt['profit'].head(10).sum() / tot:.0%}；"
+                     + "；".join(f"{r.slug} ${r.profit:,.0f}（最低价 {r.pmin:.3f}）" for r in yt.head(3).itertuples()) + "。")
         ym = ctx["ymon"]
         if len(ym):
             y2 = ym.copy()
