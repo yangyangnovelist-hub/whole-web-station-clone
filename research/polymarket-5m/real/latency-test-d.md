@@ -2,7 +2,7 @@
 
 事先写死（9 月 30 日 13:40 UTC，数据还没看过）：2026-09-30 14:00 UTC 起开始的 5m 市场；剩 240–15 秒时，与至少一秒前（不早于 5 秒）相比涨跌超过 2σ 的每一笔 coinbase 成交都是候选；以那一刻交易所显示的 Up 中间价为原来的概率，这次涨跌让结算 TWAP 的期望整体移动，算出新的公平价；0.3 秒后按卖一买顺势一方，只在 公平价 − 卖一 − taker 费 ≥ 12¢ 时成交（相当于在触发时下一张成交不了就取消的限价单），每个市场取第一笔，持有到结算；按触发时间取前 1,200 笔判定一次，EV > 0 且精确 p < 0.025 才算通过。数据处理同检验 C。
 
-录制段 20 个，成交 546 笔。
+录制段 21 个，成交 578 笔。
 
 录制段备注（跳过的和断线检查）：
 
@@ -21,9 +21,10 @@
 - btc 37164037946: 133 candidates dropped because the CLOB socket closed between the quote and the order (61 disconnects in the recording; test C counts its judged lag only)
 - btc 37179397738: 127 candidates dropped because the CLOB socket closed between the quote and the order (70 disconnects in the recording; test C counts its judged lag only)
 - btc 37194238626: 379 candidates dropped because the CLOB socket closed between the quote and the order (78 disconnects in the recording; test C counts its judged lag only)
+- btc 37230483105: 590 candidates dropped because the CLOB socket closed between the quote and the order (179 disconnects in the recording; test C counts its judged lag only)
 
 | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |
 |---|---|---|---|---|---|
-| 546 | 38.3% | 0.401 | -3.13¢ | 1.0000 | 95 |
+| 578 | 39.1% | 0.402 | -2.42¢ | 1.0000 | 97 |
 
-检验 D（前 1,200 笔）：目前 546 笔，不到 1,200 笔，不判定。
+检验 D（前 1,200 笔）：目前 578 笔，不到 1,200 笔，不判定。
