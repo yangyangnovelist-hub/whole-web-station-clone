@@ -4,3 +4,4 @@ requested: 2026-10-04 structural arbitrage (monotone / nested / neg-risk / box b
 requested: 2026-10-04T15:12Z first 5.5 h ladder recording (run 37192254446) is uploaded
 requested: 2026-10-04T20:27Z refresh (ladder_arb.py, nearcert_fwd.py, calib_fwd.py on the new ladder recordings)
 requested: 2026-10-05T02:16:06Z refresh (first recording with markets ending after 10-05 00:00: run 37232438077)
+requested: 2026-10-05T08:11:25Z refresh (run 37255755566)
