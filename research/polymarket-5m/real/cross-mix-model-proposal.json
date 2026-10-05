@@ -1,0 +1,14 @@
+{
+ "format": "polymarket-mix-model-proposal-v1",
+ "frozen_file": "cross-mix-frozen.json",
+ "frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
+ "a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "frozen_a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "frozen_a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "canonical_a_fingerprint": "b8d735ecc4c9d630b6bcda355af9bd4a9ce3c005a3da08b039f5693c882a7be2",
+ "canonical_a_fingerprint_version": "mix-a-v2-exact-model-rows",
+ "a_identity_match": "legacy_v1_rounded",
+ "training_rows": 162591,
+ "training_matrix_sha256": "06d0abf5844cdd66504903db0882a7dd78531a436d9d58384f88034fbe474598"
+}
