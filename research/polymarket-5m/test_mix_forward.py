@@ -89,9 +89,13 @@ def test_aggregate_spot_adapter_preserves_the_frozen_mix_tape_and_rejects_regres
     ]
     with gzip.open(path, "wt") as stream:
         stream.writelines(json.dumps(row) + "\n" for row in payload)
-    rows = list(F.iter_aggregate_spot_events(tmp_path))
+    profile = {}
+    rows = list(F.iter_aggregate_spot_events(tmp_path, profile=profile))
     assert [row["kind"] for row in rows] == ["spot_connection", "spot_trade", "spot_trade", "spot_disconnect"]
     assert rows[1]["source_ts_ms"] == 100_000 and rows[1]["recv_ms"] == 100_100
+    assert profile == {"records": 2, "first_receive_ms": 100_100.0,
+                       "last_receive_ms": 100_300.0, "duration_s": 0.2,
+                       "max_gap_ms": 200.0, "longest_contiguous_s": 0.2}
 
     payload[1]["receive_ts"] = 99.0
     with gzip.open(path, "wt") as stream:
@@ -105,7 +109,7 @@ def test_strict_control_replay_fills_five_direct_shares_and_scores_afterward():
     due = signal_ms + 500.0
     clob = [
         clob_event("clob_connection", 0, signal_ms - 1_000, source_ts_ms=None, token_count=2),
-        snapshot(1, signal_ms - 900, signal_ms - 920, "up", ((0.32, 20.0),)),
+        snapshot(1, signal_ms - 900, signal_ms - 920, "up", ((0.32, 20.0),), bids=((0.31, 20.0),)),
         snapshot(2, signal_ms - 899, signal_ms - 919, "down", ((0.69, 20.0),), bids=((0.68, 20.0),)),
         snapshot(3, due - 5, due - 20, "up", ((0.40, 20.0),)),
         snapshot(4, due - 4, due - 19, "down", ((0.60, 20.0),), bids=((0.59, 20.0),)),
@@ -123,6 +127,11 @@ def test_strict_control_replay_fills_five_direct_shares_and_scores_afterward():
     assert row["all_in_cost"] == pytest.approx(row["fill_price"] + fee)
     assert row["pnl_per_share"] == pytest.approx(1.0 - row["all_in_cost"])
     assert row["winner"] == "Up" and row["won"] is True
+    direct = row["model_features_direct"]
+    assert list(direct) == list(F.DIRECT_MODEL_FEATURES)
+    assert direct["jump_bp"] == pytest.approx(row["jump_bp"])
+    assert direct["ask"] == pytest.approx(0.32)
+    assert direct["dmid2"] is None and direct["dmid10"] is None
 
 
 def test_control_replay_requires_only_the_bought_token_ask():
@@ -259,6 +268,201 @@ def test_clob_update_at_exact_match_time_is_seen_even_if_spot_arrives_first():
     assert rows[0]["filled"] and rows[0]["fill_price"] == pytest.approx(0.30)
 
 
+def _mix_feature_manifest(hours=5.0):
+    return {
+        "schema": "polymarket-5m-strict-replay-v2",
+        "started_ms": 1_800_000_000_000.0,
+        "ended_ms": 1_800_000_000_000.0 + hours * 3_600_000.0,
+        "counts": {"markets": 10, "spot_trade": 10_000, "clob_snapshot": 20},
+        "markets_with_both_token_snapshots": 10,
+    }
+
+
+def _mix_signal_profile(hours=5.0, records=10_000):
+    return {"records": records, "first_receive_ms": 1_800_000_000_000.0,
+            "last_receive_ms": 1_800_000_000_000.0 + hours * 3_600_000.0,
+            "duration_s": hours * 3_600.0, "max_gap_ms": 100.0,
+            "longest_contiguous_s": hours * 3_600.0}
+
+
+def test_model_feature_audit_covers_the_frozen_schema_and_blocks_absent_inputs():
+    audit = F.audit_model_features(_mix_feature_manifest(), _mix_signal_profile())
+    assert audit["feature_order"] == M.FEATURES
+    assert list(audit["features"]) == M.FEATURES
+    assert audit["full_model_forward_executable"] is False
+    for name in F.DIRECT_MODEL_FEATURES:
+        assert audit["features"][name]["status"] == "implemented_and_causal"
+    for name in F.TREND_MODEL_FEATURES:
+        assert audit["features"][name]["status"] == "builder_missing"
+        assert name in audit["blocking_features"]
+    for name in ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15", "dvol_rv"):
+        assert audit["features"][name]["status"] == "absent_source"
+        assert name in audit["blocking_features"]
+
+    short = F.audit_model_features(_mix_feature_manifest(hours=5), _mix_signal_profile(hours=0.05))
+    assert short["features"]["jump_bp"]["status"] == "implemented_and_causal"
+    assert short["features"]["jump_z"]["status"] == "insufficient_pre_roll"
+    no_tape = F.audit_model_features(_mix_feature_manifest(), None)
+    assert no_tape["features"]["jump_bp"]["status"] == "absent_source"
+    assert no_tape["features"]["h_edge"]["status"] == "absent_source"
+    sparse_profile = _mix_signal_profile(hours=5, records=2)
+    sparse_profile.update(max_gap_ms=18_000_000.0, longest_contiguous_s=0.0)
+    sparse = F.audit_model_features(_mix_feature_manifest(), sparse_profile)
+    assert sparse["features"]["jump_z"]["status"] == "insufficient_pre_roll"
+
+
+def test_direct_model_features_are_receipt_causal_and_side_relative():
+    receive_ms = (SLOT + 100) * 1000.0
+    history = F._BookHistory()
+
+    def state(at_ms, up_bid, up_ask, down_bid, down_ask):
+        return F._BookState(
+            at_ms, 3, True, True, at_ms - 10, at_ms - 10, at_ms, at_ms,
+            ((up_bid, 15.0),), ((down_bid, 8.0),),
+            ((up_ask, 5.0),), ((down_ask, 12.0),),
+        )
+
+    history.push(state(receive_ms - 10_050, 0.29, 0.31, 0.69, 0.71))
+    history.push(state(receive_ms - 2_050, 0.34, 0.36, 0.64, 0.66))
+    history.push(state(receive_ms - 50, 0.39, 0.41, 0.59, 0.61))
+    candidate = F.ControlCandidate(
+        SLOT, receive_ms, receive_ms - 100, 1, 0.0005, 0.0001, 5.0, "jump",
+        receipt_move_2s=0.0002,
+    )
+    values = F.direct_model_features(candidate, history, side=1, epoch=3, twap_window_s=60)
+    assert list(values) == list(F.DIRECT_MODEL_FEATURES)
+    assert values["jump_bp"] == pytest.approx(5.0)
+    assert values["jump_abs_bp"] == pytest.approx(5.0)
+    assert values["jump_z"] == pytest.approx(5.0)
+    assert values["dir"] == 1.0 and values["is_jump"] == 1.0
+    assert values["dmid2"] == pytest.approx(0.05)
+    assert values["dmid10"] == pytest.approx(0.10)
+    assert values["spread"] == pytest.approx(0.02)
+    assert values["imb"] == pytest.approx(0.5)
+    assert values["ask"] == pytest.approx(0.41)
+    assert values["ask_fee"] == pytest.approx(float(M.fee(0.41)))
+    assert values["tau"] == pytest.approx(200.0)
+    assert math.isfinite(values["h_edge"])
+    down = F.direct_model_features(candidate, history, side=-1, epoch=3, twap_window_s=60)
+    assert down["jump_bp"] == pytest.approx(-5.0)
+    assert down["dir"] == -1.0 and down["ask"] == pytest.approx(0.61)
+    assert down["imb"] == pytest.approx(-0.2)
+    assert math.isfinite(down["h_edge"])
+
+    # A quote received after the decision is never visible to the feature builder.
+    history.push(state(receive_ms + 1, 0.49, 0.51, 0.49, 0.51))
+    unchanged = F.direct_model_features(candidate, history, side=1, epoch=3, twap_window_s=60)
+    assert unchanged == values
+
+
+def test_direct_model_features_preserve_partial_missing_values():
+    receive_ms = (SLOT + 100) * 1000.0
+    history = F._BookHistory()
+    history.push(F._BookState(
+        receive_ms - 2_050, 3, True, True, receive_ms - 2_060, receive_ms - 2_060,
+        receive_ms - 2_050, receive_ms - 2_050,
+        ((0.34, 15.0),), ((0.64, 8.0),), ((0.36, 5.0),), ((0.66, 12.0),),
+    ))
+    history.push(F._BookState(
+        receive_ms - 50, 3, True, True, receive_ms - 60, receive_ms - 60,
+        receive_ms - 50, receive_ms - 50,
+        ((0.39, 15.0),), ((0.59, 8.0),), ((0.41, 5.0),), ((0.61, 12.0),),
+    ))
+    candidate = F.ControlCandidate(SLOT, receive_ms, receive_ms - 100, 1, 0.0005, 0.0001,
+                                   5.0, "jump", receipt_move_2s=0.0002)
+    values = F.direct_model_features(candidate, history, side=1, epoch=3, twap_window_s=60)
+    assert list(values) == list(F.DIRECT_MODEL_FEATURES)
+    assert values["ask"] == pytest.approx(0.41)
+    assert values["dmid2"] == pytest.approx(0.05)
+    assert math.isnan(values["dmid10"])
+
+
+def test_scorer_exposes_historical_audit_only_api():
+    class Model:
+        def predict(self, row):
+            return np.asarray([row[0, 0]])
+
+    scorer = F.FrozenMixScorer(("jump_bp",), ({"id": "R", "cut": 0.0},), {"R": Model()})
+    assert not hasattr(scorer, "score") and not hasattr(scorer, "score_forward")
+    assert scorer.score_historical_audit_only({"jump_bp": 2.0}) == {"R": 2.0}
+
+
+def test_archive_replay_exposes_the_machine_readable_model_feature_gate(tmp_path, monkeypatch):
+    manifest = _mix_feature_manifest()
+    monkeypatch.setattr(F.archive, "validate_standard_artifact",
+                        lambda _: {"manifest": manifest, "counts": manifest["counts"]})
+    monkeypatch.setattr(F.archive, "iter_market_mappings", lambda _: iter(()))
+    monkeypatch.setattr(F.archive, "iter_outcomes", lambda _: iter(()))
+    monkeypatch.setattr(F.archive, "iter_normalized_events", lambda *args, **kwargs: iter(()))
+    def empty_tape(_, profile=None):
+        profile.update(_mix_signal_profile())
+        return iter(())
+    monkeypatch.setattr(F, "iter_aggregate_spot_events", empty_tape)
+    monkeypatch.setattr(F, "replay_normalized", lambda *args, **kwargs: ([], F.Counter()))
+    result = F.replay_archive(tmp_path)
+    gate = result["model_feature_audit"]
+    assert gate["feature_order"] == M.FEATURES
+    assert not gate["full_model_forward_executable"]
+    assert gate["missing_policy"] == "fail_closed_no_imputation_no_posthoc_fetch"
+
+
+def test_signal_features_include_clob_updates_at_the_same_receipt_time():
+    source, signal_ms = quiet_then_jump_events()
+    due = signal_ms + 500.0
+    clob = [
+        clob_event("clob_connection", 0, signal_ms - 1_000, source_ts_ms=None, token_count=2),
+        snapshot(1, signal_ms - 900, signal_ms - 920, "up", ((0.32, 20.0),), bids=((0.31, 20.0),)),
+        snapshot(2, signal_ms - 899, signal_ms - 919, "down", ((0.68, 20.0),), bids=((0.67, 20.0),)),
+        snapshot(3, signal_ms, signal_ms - 10, "up", ((0.42, 20.0),), bids=((0.41, 20.0),)),
+        snapshot(4, due - 5, due - 20, "up", ((0.43, 20.0),), bids=((0.42, 20.0),)),
+        clob_event("clob_error", 5, due + 2_000, source_ts_ms=None, error="closed"),
+    ]
+    cfg = F.ControlConfig(fill_latencies_ms=(500.0,), sigma_window_s=20,
+                          sigma_min_observations=10)
+    rows, _ = F.replay_normalized(source, clob, [mapping()], {"m1": "Up"}, cfg)
+    assert len(rows) == 1
+    assert rows[0]["model_features_direct"]["ask"] == pytest.approx(0.42)
+
+
+def test_h_edge_uses_last_spot_price_in_the_trigger_receipt_group():
+    def run(extra_same_time_trade):
+        source, signal_ms = quiet_then_jump_events()
+        if extra_same_time_trade:
+            trigger = source[-2]
+            source.insert(-1, source_event(
+                "spot_trade", trigger["seq"] + 1, signal_ms,
+                source_ts_ms=float(trigger["source_ts_ms"]) + 0.1,
+                stream="spot", stream_sequence=trigger["stream_sequence"] + 1,
+                connection_epoch=1, price=float(trigger["price"]) * math.exp(-0.002), size=1.0,
+            ))
+            source[-1]["seq"] += 1
+            source[-1]["stream_sequence"] += 1
+        due = signal_ms + 500.0
+        clob = [
+            clob_event("clob_connection", 0, signal_ms - 11_000, source_ts_ms=None, token_count=2),
+            snapshot(1, signal_ms - 10_050, signal_ms - 10_060, "up", ((0.31, 20.0),),
+                     bids=((0.29, 20.0),)),
+            snapshot(2, signal_ms - 2_050, signal_ms - 2_060, "up", ((0.36, 20.0),),
+                     bids=((0.34, 20.0),)),
+            snapshot(3, signal_ms - 50, signal_ms - 60, "up", ((0.41, 20.0),),
+                     bids=((0.39, 20.0),)),
+            snapshot(4, due - 5, due - 20, "up", ((0.43, 20.0),), bids=((0.42, 20.0),)),
+            clob_event("clob_error", 5, due + 2_000, source_ts_ms=None, error="closed"),
+        ]
+        cfg = F.ControlConfig(fill_latencies_ms=(500.0,), sigma_window_s=20,
+                              sigma_min_observations=10)
+        rows, _ = F.replay_normalized(source, clob, [mapping()], {"m1": "Up"}, cfg)
+        assert len(rows) == 1
+        return rows[0]
+
+    first_only = run(False)
+    with_later_trade = run(True)
+    assert with_later_trade["jump_bp"] == pytest.approx(first_only["jump_bp"])
+    assert with_later_trade["jump_z"] == pytest.approx(first_only["jump_z"])
+    assert (with_later_trade["model_features_direct"]["h_edge"] <
+            first_only["model_features_direct"]["h_edge"])
+
+
 def test_frozen_scorer_rejects_missing_features_and_tampering(tmp_path, monkeypatch):
     import joblib
 
@@ -283,10 +487,10 @@ def test_frozen_scorer_rejects_missing_features_and_tampering(tmp_path, monkeypa
     M.export_model_bundle(A, spec, frozen)
     scorer = F.load_scorer(frozen)
     feature_row = {name: float(A.iloc[0][name]) for name in M.FEATURES}
-    scores = scorer.score(feature_row)
+    scores = scorer.score_historical_audit_only(feature_row)
     assert set(scores) == {rule["id"] for rule in spec["rules"]}
     with pytest.raises(ValueError, match="missing MIX features"):
-        scorer.score({"jump_z": 1.0})
+        scorer.score_historical_audit_only({"jump_z": 1.0})
 
     _, manifest_path = M.model_bundle_paths(frozen)
     original_manifest_bytes = manifest_path.read_bytes()
@@ -355,7 +559,8 @@ def test_frozen_scorer_loads_a_legacy_migration_and_rejects_contract_tampering(t
     manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
 
     scorer = F.load_scorer(frozen)
-    assert set(scorer.score({name: float(A.iloc[0][name]) for name in M.FEATURES})) == {"R1"}
+    assert set(scorer.score_historical_audit_only(
+        {name: float(A.iloc[0][name]) for name in M.FEATURES})) == {"R1"}
 
     _, manifest_path = M.model_bundle_paths(frozen)
     changed = copy.deepcopy(manifest)

@@ -1,7 +1,7 @@
 {
   "schema": "polymarket-mix-control-forward-v1",
   "strategy_id": "mix-r1-jump-z-settle-control",
-  "made": "2026-10-04T22:04:00Z",
+  "made": "2026-10-05T01:41:16Z",
   "holdout_start_utc": "2026-10-05T13:00:00Z",
   "historical_frozen_file": "../real/cross-mix-frozen.json",
   "historical_frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
@@ -42,6 +42,6 @@
   "family_tests": 100,
   "alpha": 0.01,
   "orders": "paper only",
-  "runner_sha256": "cb43ae9aad92d4c54689cd73dad3aae67e64e0d8e4c2b70a91682d2a40ab5be1",
-  "protocol_sha256": "2c420a2ecfdc0b86a2a9e4c99db81493b39d396eb84eeeb42c3c4a197cab5b7f"
+  "runner_sha256": "91fbbe4c918bfea9646a83d3a94eccbebdb348203888f41bc849b2f03f04f244",
+  "protocol_sha256": "e7ad9799bd3b9488ab1a6991e8d4d1b6110531fdbfbebf76038f5de83cdfc787"
 }

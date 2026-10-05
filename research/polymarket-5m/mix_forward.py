@@ -11,16 +11,19 @@ import os
 import platform
 from bisect import bisect_right, insort_right
 from collections import Counter, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 import numpy as np
+from scipy.stats import norm
 
+import binary as binary_model
 import h_replay_archive as archive
 import h_replay_run as hrun
 import mix_hf as mix
+import pm_outcomes
 
 
 CONTROL_CUT = 5.834074974060059
@@ -31,6 +34,96 @@ FAMILY_TESTS = 100
 ALPHA = 0.01
 FREEZE_SCHEMA = "polymarket-mix-control-forward-v1"
 STRATEGY_ID = "mix-r1-jump-z-settle-control"
+DIRECT_MODEL_FEATURES = tuple(mix.FEATURES[:13])
+TREND_MODEL_FEATURES = ("trend_agree", "trend_side", "vr60")
+ABSENT_MODEL_FEATURES = ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15", "dvol_rv")
+
+
+def audit_model_features(manifest: Mapping[str, Any],
+                         signal_tape_profile: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    """Describe whether each frozen MIX input can be rebuilt without future or external data."""
+    if tuple(mix.FEATURES) != DIRECT_MODEL_FEATURES + TREND_MODEL_FEATURES + ABSENT_MODEL_FEATURES:
+        raise ValueError("MIX feature contract no longer covers the frozen feature order")
+    counts = manifest.get("counts") or {}
+    start, end = manifest.get("started_ms"), manifest.get("ended_ms")
+    strict_duration_s = ((float(end) - float(start)) / 1_000.0
+                         if start is not None and end is not None and float(end) >= float(start) else None)
+    tape_records = int((signal_tape_profile or {}).get("records", 0))
+    tape_pre_roll_s = ((signal_tape_profile or {}).get("longest_contiguous_s")
+                       if tape_records > 0 else None)
+    tape_pre_roll_s = float(tape_pre_roll_s) if tape_pre_roll_s is not None else None
+    books = (int(counts.get("clob_snapshot", 0)) > 0 and
+             int(manifest.get("markets_with_both_token_snapshots", 0)) > 0)
+    markets = int(counts.get("markets", 0)) > 0
+    requirements: dict[str, tuple[tuple[str, ...], float, int]] = {
+        "jump_bp": (("aggregate_trade_tape",), 5.0, 2),
+        "jump_abs_bp": (("aggregate_trade_tape",), 5.0, 2),
+        "jump_z": (("aggregate_trade_tape",), 600.0, 300),
+        "dir": (("aggregate_trade_tape",), 5.0, 2),
+        "is_jump": (("aggregate_trade_tape",), 5.0, 2),
+        "h_edge": (("aggregate_trade_tape", "dual_token_l2", "market_mapping"), 600.0, 300),
+        "dmid2": (("dual_token_l2",), 3.0, 0),
+        "dmid10": (("dual_token_l2",), 11.0, 0),
+        "imb": (("dual_token_l2",), 0.0, 0),
+        "spread": (("dual_token_l2",), 0.0, 0),
+        "ask": (("dual_token_l2",), 0.0, 0),
+        "ask_fee": (("dual_token_l2",), 0.0, 0),
+        "tau": (("market_mapping",), 0.0, 0),
+        "trend_agree": (("aggregate_trade_tape",), 14_460.0, 0),
+        "trend_side": (("aggregate_trade_tape",), 14_460.0, 0),
+        "vr60": (("aggregate_trade_tape",), 3_660.0, 0),
+    }
+    available = {"aggregate_trade_tape": tape_records > 0,
+                 "dual_token_l2": books, "market_mapping": markets}
+    features: dict[str, dict[str, Any]] = {}
+    for name in mix.FEATURES:
+        if name in ABSENT_MODEL_FEATURES:
+            source = ("walk_forward_factor_prediction" if name.startswith("f_")
+                      else "closed_deribit_dvol_hourly_candle")
+            features[name] = {
+                "status": "absent_source", "inputs": [source], "required_pre_roll_s": None,
+                "reason": f"standard strict artifact does not record {source}",
+            }
+            continue
+        inputs, pre_roll, minimum_tape_records = requirements[name]
+        missing = [item for item in inputs if not available[item]]
+        durations = ([tape_pre_roll_s] if "aggregate_trade_tape" in inputs else []) + \
+                    ([strict_duration_s] if "dual_token_l2" in inputs else [])
+        usable_pre_roll = (min(float(value) for value in durations if value is not None)
+                           if durations and all(value is not None for value in durations) else
+                           None if durations else math.inf)
+        if missing:
+            status, reason = "absent_source", "missing " + ", ".join(missing)
+        elif name in TREND_MODEL_FEATURES:
+            status, reason = "builder_missing", "receipt-causal per-row trend builder is not implemented"
+        elif (usable_pre_roll is None or usable_pre_roll + 1e-9 < pre_roll or
+              tape_records < minimum_tape_records):
+            status = "insufficient_pre_roll"
+            if usable_pre_roll is None:
+                reason = "required input pre-roll unavailable"
+            elif tape_records < minimum_tape_records:
+                reason = (f"aggregate tape has {tape_records} records; feature requires "
+                          f"at least {minimum_tape_records}")
+            else:
+                reason = (f"input has {usable_pre_roll:.3f}s contiguous pre-roll; feature requires "
+                          f"{pre_roll:.3f}s")
+        else:
+            status = "implemented_and_causal"
+            reason = "built per row from inputs observed at or before the decision"
+        features[name] = {"status": status, "inputs": list(inputs),
+                          "required_pre_roll_s": pre_roll,
+                          "required_tape_records": minimum_tape_records, "reason": reason}
+    blocking = [name for name in mix.FEATURES
+                if features[name]["status"] != "implemented_and_causal"]
+    return {
+        "feature_order": list(mix.FEATURES), "features": features,
+        "strict_recording_duration_s": strict_duration_s,
+        "aggregate_trade_tape": dict(signal_tape_profile or {}),
+        "status_counts": dict(Counter(row["status"] for row in features.values())),
+        "blocking_features": blocking,
+        "full_model_forward_executable": not blocking,
+        "missing_policy": "fail_closed_no_imputation_no_posthoc_fetch",
+    }
 
 
 def sha256_file(path: str | Path) -> str:
@@ -110,15 +203,16 @@ class FrozenMixScorer:
     rules: tuple[dict[str, Any], ...]
     models: Mapping[str, Any]
 
-    def score(self, values: Mapping[str, float]) -> dict[str, float]:
+    def score_historical_audit_only(self, values: Mapping[str, float]) -> dict[str, float]:
+        """Reproduce frozen historical scores; never an executable forward decision API."""
         missing = [name for name in self.features if name not in values]
         if missing:
             raise ValueError("missing MIX features: " + ", ".join(missing))
         row = np.asarray([[float(values[name]) for name in self.features]], dtype=float)
         return {str(rule["id"]): float(self.models[str(rule["id"])].predict(row)[0]) for rule in self.rules}
 
-    def selected(self, values: Mapping[str, float]) -> dict[str, float]:
-        scores = self.score(values)
+    def selected_historical_audit_only(self, values: Mapping[str, float]) -> dict[str, float]:
+        scores = self.score_historical_audit_only(values)
         return {str(rule["id"]): scores[str(rule["id"])] for rule in self.rules
                 if scores[str(rule["id"])] >= float(rule["cut"])}
 
@@ -319,6 +413,8 @@ class ControlCandidate:
     sigma: float
     z: float
     kind: str
+    receipt_move_2s: float = math.nan
+    direct_features: tuple[tuple[str, float], ...] = ()
 
 
 class ReceiptJumpTrigger:
@@ -329,6 +425,7 @@ class ReceiptJumpTrigger:
         self.grid = ReceiptSigma(self.config.sigma_window_s, self.config.sigma_min_observations,
                                  self.config.forward_fill_s)
         self.source_rows: list[tuple[float, int, float]] = []
+        self.receipt_rows: list[tuple[float, int, float]] = []
         self.order = 0
         self.last_received: Optional[tuple[float, float, float, float]] = None
         self.last_kept: dict[int, float] = {}
@@ -346,8 +443,21 @@ class ReceiptJumpTrigger:
             return None
         return reference_price
 
+    def _receipt_price(self, receive_s: float) -> Optional[float]:
+        index = bisect_right(self.receipt_rows, (receive_s + 1e-6, math.inf, math.inf)) - 1
+        if index < 0:
+            return None
+        timestamp, _, value = self.receipt_rows[index]
+        return value if receive_s - timestamp <= mix.PRICE_MAX_AGE_S + 1e-6 else None
+
+    def receipt_move_2s(self, receive_ms: float) -> float:
+        receive_s = receive_ms / 1_000.0
+        current = self._receipt_price(receive_s)
+        prior = self._receipt_price(receive_s - mix.H_ANCHOR_S)
+        return current - prior if current is not None and prior is not None else math.nan
+
     def _candidate(self, receive_s: float, source_s: float, move: float, sigma: float, kind: str,
-                   slot: Optional[int] = None) -> Optional[ControlCandidate]:
+                   slot: Optional[int] = None, receipt_move_2s: float = math.nan) -> Optional[ControlCandidate]:
         if not (math.isfinite(move) and math.isfinite(sigma) and sigma > 0 and move != 0):
             return None
         slot = int(receive_s // 300) * 300 if slot is None else int(slot)
@@ -356,7 +466,7 @@ class ReceiptJumpTrigger:
             return None
         direction = 1 if move > 0 else -1
         return ControlCandidate(slot, receive_s * 1_000.0, source_s * 1_000.0, direction, move, sigma,
-                                abs(move) / sigma, kind)
+                                abs(move) / sigma, kind, receipt_move_2s)
 
     def update(self, receive_ms: float, source_ms: float, price: float) -> Optional[ControlCandidate]:
         if not (math.isfinite(price) and price > 0):
@@ -365,13 +475,20 @@ class ReceiptJumpTrigger:
         self.grid.update(receive_s, log_price)
         reference = self._reference(source_s)
         move = log_price - reference if reference is not None else math.nan
+        receipt_reference = self._receipt_price(receive_s - mix.H_ANCHOR_S)
+        receipt_move_2s = log_price - receipt_reference if receipt_reference is not None else math.nan
         insort_right(self.source_rows, (source_s, self.order, log_price))
+        self.receipt_rows.append((receive_s, self.order, log_price))
         self.order += 1
         if self.source_rows:
             latest = self.source_rows[-1][0]
             cut = bisect_right(self.source_rows, (latest - 30.0, -1, -math.inf))
             if cut:
                 del self.source_rows[:cut]
+        if self.receipt_rows:
+            cut = bisect_right(self.receipt_rows, (receive_s - 30.0, -1, -math.inf))
+            if cut:
+                del self.receipt_rows[:cut]
         self.last_received = (receive_s, source_s, log_price, move)
         if not math.isfinite(move) or abs(move) * 1e4 < self.config.jump_bp - 1e-9:
             return None
@@ -383,15 +500,19 @@ class ReceiptJumpTrigger:
         if not (self.config.tau_lo_s - 1e-6 <= tau <= self.config.tau_hi_s + 1e-6):
             return None
         self.last_kept[slot] = receive_s
-        return self._candidate(receive_s, source_s, move, self.grid.sigma(receive_s), "jump", slot)
+        return self._candidate(receive_s, source_s, move, self.grid.sigma(receive_s), "jump", slot,
+                               receipt_move_2s)
 
     def fixed(self, receive_ms: float, slot: int) -> Optional[ControlCandidate]:
         receive_s = receive_ms / 1_000.0
         sigma = self.grid.sigma(receive_s)
         if self.last_received is None or receive_s - self.last_received[0] > mix.PRICE_MAX_AGE_S + 1e-6:
             return None
-        _, source_s, _, move = self.last_received
-        return self._candidate(receive_s, source_s, move, sigma, "fixed", slot)
+        _, source_s, log_price, move = self.last_received
+        receipt_reference = self._receipt_price(receive_s - mix.H_ANCHOR_S)
+        receipt_move_2s = log_price - receipt_reference if receipt_reference is not None else math.nan
+        return self._candidate(receive_s, source_s, move, sigma, "fixed", slot,
+                               receipt_move_2s)
 
 
 @dataclass(frozen=True)
@@ -404,6 +525,8 @@ class _BookState:
     down_source_ms: float
     up_last_change_ms: float
     down_last_change_ms: float
+    up_bids: tuple[tuple[float, float], ...]
+    down_bids: tuple[tuple[float, float], ...]
     up_asks: tuple[tuple[float, float], ...]
     down_asks: tuple[tuple[float, float], ...]
 
@@ -419,6 +542,7 @@ class _BookHistory:
         self.states.append(_BookState(receive_ms, state.epoch, state.up_ready, state.down_ready,
                                       state.up_source_ms, state.down_source_ms,
                                       state.up_last_change_ms, state.down_last_change_ms,
+                                      state.up_bids, state.down_bids,
                                       state.up_asks, state.down_asks))
         cutoff = receive_ms - 10_000.0
         index = bisect_right(self.receives, cutoff) - 1
@@ -436,8 +560,75 @@ def _direct_asks(market: hrun.DirectMarketBook, direction: str) -> tuple[tuple[f
     return tuple(sorted((float(price), float(size)) for price, size in token.asks.items() if size > 0))
 
 
+def _direct_bids(market: hrun.DirectMarketBook, direction: str) -> tuple[tuple[float, float], ...]:
+    token = market.up if direction == "Up" else market.down
+    return tuple(sorted(((float(price), float(size)) for price, size in token.bids.items() if size > 0),
+                        reverse=True))
+
+
 def _token_uncrossed(token: hrun.TokenBook) -> bool:
     return bool(token.asks and (not token.bids or max(token.bids) < min(token.asks)))
+
+
+def _feature_quote(history: _BookHistory, at_ms: float, side: int,
+                   epoch: int) -> Optional[tuple[float, float, float, float]]:
+    state = history.at(at_ms)
+    if state is None or state.epoch != epoch or at_ms - state.receive_ms > 1_000.0 + 1e-6:
+        return None
+    ready = state.up_ready if side > 0 else state.down_ready
+    bids = state.up_bids if side > 0 else state.down_bids
+    asks = state.up_asks if side > 0 else state.down_asks
+    if not ready or not bids or not asks:
+        return None
+    bid, bid_size = bids[0]
+    ask, ask_size = asks[0]
+    if not (math.isfinite(bid) and math.isfinite(ask) and bid < ask):
+        return None
+    return bid, ask, bid_size, ask_size
+
+
+def direct_model_features(candidate: ControlCandidate, history: _BookHistory, side: int, epoch: int,
+                          twap_window_s: Optional[int] = None) -> dict[str, float]:
+    """Build the 13 frozen receipt-causal features that need no external factor/DVOL source."""
+    side = 1 if side > 0 else -1
+    current = _feature_quote(history, candidate.receive_ms, side, epoch)
+    lag2 = _feature_quote(history, candidate.receive_ms - 2_000.0, side, epoch)
+    lag10 = _feature_quote(history, candidate.receive_ms - 10_000.0, side, epoch)
+    prior_up = _feature_quote(history, candidate.receive_ms - 2_000.0, 1, epoch)
+    bid, ask, bid_size, ask_size = current or (math.nan, math.nan, math.nan, math.nan)
+    mid = (bid + ask) / 2.0
+    lag2_mid = ((lag2[0] + lag2[1]) / 2.0) if lag2 is not None else math.nan
+    lag10_mid = ((lag10[0] + lag10[1]) / 2.0) if lag10 is not None else math.nan
+    prior = (float(np.clip((prior_up[0] + prior_up[1]) / 2.0, 0.005, 0.995))
+             if prior_up is not None else math.nan)
+    tau = candidate.slot + 300.0 - candidate.receive_ms / 1_000.0
+    elapsed = candidate.receive_ms / 1_000.0 - candidate.slot
+    if twap_window_s is None:
+        twap_window_s = int(pm_outcomes.rule_window("5m", np.asarray([candidate.slot]))[0])
+    factor = (float(binary_model.twap_std_factor(elapsed, binary_model.WINDOW_S,
+                                                  max(int(twap_window_s), 1)))
+              if twap_window_s > 0 else math.sqrt(max(binary_model.WINDOW_S - elapsed, 1.0)))
+    scale = factor * candidate.sigma
+    fair_up = (float(norm.cdf(norm.ppf(prior) + candidate.receipt_move_2s / scale))
+               if math.isfinite(candidate.receipt_move_2s) and scale > 0 else math.nan)
+    fair = fair_up if side > 0 else 1.0 - fair_up
+    denominator = bid_size + ask_size
+    values = {
+        "jump_bp": side * candidate.move * 1e4,
+        "jump_abs_bp": abs(candidate.move) * 1e4,
+        "jump_z": side * candidate.move / candidate.sigma,
+        "dir": float(np.sign(side * candidate.move)),
+        "is_jump": 1.0 if candidate.kind == "jump" else 0.0,
+        "h_edge": fair - ask,
+        "dmid2": mid - lag2_mid,
+        "dmid10": mid - lag10_mid,
+        "imb": (bid_size - ask_size) / denominator if denominator > 0 else math.nan,
+        "spread": ask - bid,
+        "ask": ask,
+        "ask_fee": float(mix.fee(ask)),
+        "tau": tau,
+    }
+    return {name: float(values[name]) for name in DIRECT_MODEL_FEATURES}
 
 
 def _fill_best(levels: tuple[tuple[float, float], ...], shares: float, limit: float,
@@ -474,6 +665,8 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
     connected = False
     active_epoch = 0
     watermark = -math.inf
+    group_receive_ms: Optional[float] = None
+    deferred_candidates: list[Optional[ControlCandidate]] = []
 
     timers = sorted((int(row["slot"] + 300 - tau) * 1_000.0, int(row["slot"]))
                     for row in mapping_rows for tau in config.fixed_taus_s)
@@ -535,6 +728,10 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
             "won": won,
             "pnl_per_share": pnl_per_share,
             "pnl": pnl_per_share * config.shares if pnl_per_share is not None else None,
+            "model_features_direct": {
+                name: (value if math.isfinite(value) else None)
+                for name, value in candidate.direct_features
+            },
             "day": datetime.fromtimestamp(candidate.receive_ms / 1_000.0, timezone.utc).date().isoformat(),
         })
 
@@ -556,6 +753,13 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
             counters["below_z_cut"] += 1
             return
         counters["selected"] += 1
+        market = markets.get(candidate.slot)
+        if market is not None:
+            values = direct_model_features(candidate, histories[market.market_id], candidate.direction,
+                                           active_epoch)
+        else:
+            values = {name: math.nan for name in DIRECT_MODEL_FEATURES}
+        candidate = replace(candidate, direct_features=tuple(values.items()))
         if not connected:
             for latency in config.fill_latencies_ms:
                 evaluate(candidate, float(latency), active_epoch, "clob_disconnected")
@@ -565,22 +769,33 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                                     float(latency), active_epoch))
             sequence += 1
 
+    def finish_receive_group() -> None:
+        for candidate in deferred_candidates:
+            if candidate is not None:
+                candidate = replace(candidate, receipt_move_2s=trigger.receipt_move_2s(candidate.receive_ms))
+            select(candidate)
+        deferred_candidates.clear()
+        drain()
+
     for _, _, _, event in heapq.merge(decorated_base, decorated_timers, key=lambda item: item[:3]):
+        event_receive_ms = float(event["recv_ms"])
+        if group_receive_ms is not None and event_receive_ms > group_receive_ms + 1e-6:
+            finish_receive_group()
+        group_receive_ms = event_receive_ms
+        watermark = max(watermark, event_receive_ms)
         kind = str(event["kind"])
         if kind == "fixed_timer":
-            select(trigger.fixed(float(event["recv_ms"]), int(event["slot"])))
+            deferred_candidates.append(trigger.fixed(event_receive_ms, int(event["slot"])))
             continue
         if kind == "spot_connection" or kind == "spot_disconnect":
             trigger.reset()
             counters[kind] += 1
-            watermark = max(watermark, float(event["recv_ms"]))
-            drain(inclusive=False)
             continue
         if kind == "spot_trade":
             counters["spot_trades"] += 1
-            select(trigger.update(float(event["recv_ms"]), float(event["source_ts_ms"]), float(event["price"])))
-            watermark = max(watermark, float(event["recv_ms"]))
-            drain(inclusive=False)
+            deferred_candidates.append(
+                trigger.update(event_receive_ms, float(event["source_ts_ms"]), float(event["price"]))
+            )
             continue
         if kind != "clob_batch":
             continue
@@ -598,7 +813,7 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                         last_change_ms[(market.market_id, direction)] = float(event["recv_ms"])
                     histories[market.market_id].push(_BookState(
                         float(event["recv_ms"]), active_epoch, False, False, -math.inf, -math.inf,
-                        float(event["recv_ms"]), float(event["recv_ms"]), (), ()
+                        float(event["recv_ms"]), float(event["recv_ms"]), (), (), (), ()
                     ))
                 continue
             if change_kind == "clob_error":
@@ -611,7 +826,7 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                         last_change_ms[(market.market_id, direction)] = float(event["recv_ms"])
                     histories[market.market_id].push(_BookState(
                         float(event["recv_ms"]), active_epoch, False, False, -math.inf, -math.inf,
-                        float(event["recv_ms"]), float(event["recv_ms"]), (), ()
+                        float(event["recv_ms"]), float(event["recv_ms"]), (), (), (), ()
                     ))
                 continue
             if not connected:
@@ -631,6 +846,7 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
         for market in touched.values():
             up_ready = _token_uncrossed(market.up)
             down_ready = _token_uncrossed(market.down)
+            up_bids, down_bids = _direct_bids(market, "Up"), _direct_bids(market, "Down")
             up_asks, down_asks = _direct_asks(market, "Up"), _direct_asks(market, "Down")
             def top(token: hrun.TokenBook) -> tuple[Optional[float], Optional[float], float, float]:
                 bid = max(token.bids) if token.bids else None
@@ -648,26 +864,35 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                 float(event["recv_ms"]), active_epoch, up_ready, down_ready,
                 market.up.source_ms, market.down.source_ms,
                 last_change_ms[(market.market_id, "Up")], last_change_ms[(market.market_id, "Down")],
+                up_bids, down_bids,
                 up_asks, down_asks
             ))
-        watermark = max(watermark, float(event["recv_ms"]))
-        drain()
-    drain()
+    finish_receive_group()
     while pending:
         _, _, candidate, latency, epoch = heapq.heappop(pending)
         evaluate(candidate, latency, epoch, "book_horizon_incomplete")
     return rows, counters
 
 
-def iter_aggregate_spot_events(archive_dir: str | Path) -> Iterable[dict[str, Any]]:
-    """Yield the aggregate-trade tape used by frozen MIX, preserving its receipt order."""
+def _aggregate_spot_path(archive_dir: str | Path) -> Optional[Path]:
     root = Path(archive_dir)
     candidates = (root / "latency" / "binance_trades.jsonl.gz",
                   root.parent / "latency" / "binance_trades.jsonl.gz")
-    path = next((candidate for candidate in candidates if candidate.exists()), None)
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def iter_aggregate_spot_events(archive_dir: str | Path,
+                               profile: Optional[dict[str, Any]] = None) -> Iterable[dict[str, Any]]:
+    """Yield the aggregate-trade tape used by frozen MIX, preserving its receipt order."""
+    path = _aggregate_spot_path(archive_dir)
     if path is None:
-        raise FileNotFoundError(f"MIX aggregate trade tape missing under {root}")
+        raise FileNotFoundError(f"MIX aggregate trade tape missing under {Path(archive_dir)}")
     previous_receive = -math.inf
+    first_receive: Optional[float] = None
+    segment_start: Optional[float] = None
+    max_gap = 0.0
+    longest = 0.0
+    records = 0
     sequence = 0
     opened = False
     with gzip.open(path, "rt", encoding="utf-8") as stream:
@@ -690,13 +915,35 @@ def iter_aggregate_spot_events(archive_dir: str | Path) -> Iterable[dict[str, An
                        "source_ts_ms": None, "stream": "mix_aggregate"}
                 sequence += 1
                 opened = True
+            if first_receive is None:
+                first_receive = receive_ms
+                segment_start = receive_ms
+            elif math.isfinite(previous_receive):
+                gap = receive_ms - previous_receive
+                max_gap = max(max_gap, gap)
+                if gap > mix.GAP_FILL_S * 1_000.0 + 1e-6:
+                    longest = max(longest, previous_receive - float(segment_start))
+                    segment_start = receive_ms
             yield {"kind": "spot_trade", "seq": sequence, "recv_ms": receive_ms,
                    "source_ts_ms": source_ms, "price": price, "size": 0.0,
                    "stream": "mix_aggregate"}
             sequence += 1
             previous_receive = receive_ms
+            records += 1
     if not opened:
         raise ValueError(f"MIX aggregate trade tape is empty: {path}")
+    if segment_start is not None:
+        longest = max(longest, previous_receive - segment_start)
+    if profile is not None:
+        profile.clear()
+        profile.update({
+            "records": records,
+            "first_receive_ms": first_receive,
+            "last_receive_ms": previous_receive,
+            "duration_s": (previous_receive - float(first_receive)) / 1_000.0,
+            "max_gap_ms": max_gap,
+            "longest_contiguous_s": longest / 1_000.0,
+        })
     yield {"kind": "spot_disconnect", "seq": sequence, "recv_ms": previous_receive + 1e-3,
            "source_ts_ms": None, "stream": "mix_aggregate"}
 
@@ -944,7 +1191,8 @@ def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
     checked = archive.validate_standard_artifact(standard)
     mappings = list(archive.iter_market_mappings(standard / "market_registry.csv.gz"))
     outcomes = {row["market_id"]: row["winner"] for row in archive.iter_outcomes(standard / "market_outcomes.csv.gz")}
-    source = iter_aggregate_spot_events(archive_dir)
+    signal_tape_profile: dict[str, Any] = {}
+    source = iter_aggregate_spot_events(archive_dir, profile=signal_tape_profile)
     clob = archive.iter_normalized_events(standard / "clob_events.jsonl.gz", family="clob")
     rows, counters = replay_normalized(source, clob, mappings, outcomes, config)
     if rows_out is not None:
@@ -955,9 +1203,13 @@ def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
                 stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
     result = summarize(rows, counters)
     result["verdict"] = verdict(rows)
+    result["model_feature_audit"] = audit_model_features(
+        checked["manifest"], signal_tape_profile
+    )
     result["dataset"] = {"archive": archive_dir.name, "manifest": checked["manifest"],
                          "paper_gate_eligible": checked["manifest"].get("collector_region") == "eu-west-1",
-                         "signal_tape": "aggregate_trade_receipt_clock"}
+                         "signal_tape": "aggregate_trade_receipt_clock",
+                         "signal_tape_profile": signal_tape_profile}
     result["protocol"] = {"rule": "jump_z_settle_control", "z_cut": (config or ControlConfig()).z_cut,
                           "primary_latency_ms": PRIMARY_LATENCY_MS,
                           "book_clock": "local_receipt", "depth": "single_best_ask_at_least_five",
