@@ -169,6 +169,9 @@ def test_strict_control_replay_fills_five_direct_shares_and_scores_afterward():
     assert direct["jump_bp"] == pytest.approx(row["jump_bp"])
     assert direct["ask"] == pytest.approx(0.32)
     assert direct["dmid2"] is None and direct["dmid10"] is None
+    assert row["model_features_trend"] == {
+        "trend_agree": None, "trend_side": None, "vr60": None,
+    }
 
 
 def test_control_replay_requires_only_the_bought_token_ask():
@@ -330,8 +333,8 @@ def test_model_feature_audit_covers_the_frozen_schema_and_blocks_absent_inputs()
     for name in F.DIRECT_MODEL_FEATURES:
         assert audit["features"][name]["status"] == "implemented_and_causal"
     for name in F.TREND_MODEL_FEATURES:
-        assert audit["features"][name]["status"] == "builder_missing"
-        assert name in audit["blocking_features"]
+        assert audit["features"][name]["status"] == "implemented_and_causal"
+        assert name not in audit["blocking_features"]
     for name in ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15", "dvol_rv"):
         assert audit["features"][name]["status"] == "absent_source"
         assert name in audit["blocking_features"]
@@ -339,6 +342,16 @@ def test_model_feature_audit_covers_the_frozen_schema_and_blocks_absent_inputs()
     short = F.audit_model_features(_mix_feature_manifest(hours=5), _mix_signal_profile(hours=0.05))
     assert short["features"]["jump_bp"]["status"] == "implemented_and_causal"
     assert short["features"]["jump_z"]["status"] == "insufficient_pre_roll"
+    for name in F.TREND_MODEL_FEATURES:
+        assert short["features"][name]["status"] == "insufficient_pre_roll"
+    exact_hours = M.MIGRATION_KLINE_PRE_ROLL_S / 3_600.0
+    exact = F.audit_model_features(_mix_feature_manifest(hours=5), _mix_signal_profile(hours=exact_hours))
+    almost = F.audit_model_features(
+        _mix_feature_manifest(hours=5),
+        _mix_signal_profile(hours=(M.MIGRATION_KLINE_PRE_ROLL_S - 0.001) / 3_600.0),
+    )
+    assert exact["features"]["trend_agree"]["status"] == "implemented_and_causal"
+    assert almost["features"]["trend_agree"]["status"] == "insufficient_pre_roll"
     no_tape = F.audit_model_features(_mix_feature_manifest(), None)
     assert no_tape["features"]["jump_bp"]["status"] == "absent_source"
     assert no_tape["features"]["h_edge"]["status"] == "absent_source"
@@ -412,6 +425,34 @@ def test_direct_model_features_preserve_partial_missing_values():
     assert values["ask"] == pytest.approx(0.41)
     assert values["dmid2"] == pytest.approx(0.05)
     assert math.isnan(values["dmid10"])
+
+
+def test_receipt_trend_features_match_the_frozen_closed_minute_definition():
+    trend = F.ReceiptTrend()
+    first_minute = SLOT - (M.MIGRATION_KLINE_PRE_ROLL_S // 60) * 60
+    price = 60_000.0
+    closes = {}
+    receive_ms = 0.0
+    source_ms = 0.0
+    for index, minute in enumerate(range(first_minute, SLOT + 60, 60)):
+        # Non-constant returns keep the frozen variance-ratio feature finite.
+        price *= math.exp((1.0 + (index % 7)) * 1e-5)
+        source_ms = (minute + 59.0) * 1_000.0
+        receive_ms = source_ms + 100.0
+        trend.update(receive_ms, source_ms, price)
+        closes[minute] = price
+
+    candidate = F.ControlCandidate(
+        SLOT, receive_ms, source_ms, 1, 0.0005, 0.0001, 5.0, "jump",
+    )
+    values = trend.features(candidate, side=1)
+    expected_ret4h, expected_vr60 = F.j2.trend_features(
+        closes, np.asarray([source_ms / 1_000.0 - M.KLINE_GUARD_S]),
+    )
+    assert list(values) == list(F.TREND_MODEL_FEATURES)
+    assert values["trend_agree"] == np.sign(candidate.move) * np.sign(expected_ret4h[0])
+    assert values["trend_side"] == np.sign(expected_ret4h[0])
+    assert values["vr60"] == pytest.approx(expected_vr60[0], rel=1e-12, abs=1e-12)
 
 
 def test_scorer_exposes_historical_audit_only_api():

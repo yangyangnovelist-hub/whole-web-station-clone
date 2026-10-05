@@ -22,6 +22,7 @@ from scipy.stats import norm
 import binary as binary_model
 import h_replay_archive as archive
 import h_replay_run as hrun
+import jump2s as j2
 import mix_hf as mix
 import pm_outcomes
 
@@ -69,9 +70,9 @@ def audit_model_features(manifest: Mapping[str, Any],
         "ask": (("dual_token_l2",), 0.0, 0),
         "ask_fee": (("dual_token_l2",), 0.0, 0),
         "tau": (("market_mapping",), 0.0, 0),
-        "trend_agree": (("aggregate_trade_tape",), 14_460.0, 0),
-        "trend_side": (("aggregate_trade_tape",), 14_460.0, 0),
-        "vr60": (("aggregate_trade_tape",), 3_660.0, 0),
+        "trend_agree": (("aggregate_trade_tape",), float(mix.MIGRATION_KLINE_PRE_ROLL_S), 0),
+        "trend_side": (("aggregate_trade_tape",), float(mix.MIGRATION_KLINE_PRE_ROLL_S), 0),
+        "vr60": (("aggregate_trade_tape",), float((j2.VR_N + 2) * 60), 0),
     }
     available = {"aggregate_trade_tape": tape_records > 0,
                  "dual_token_l2": books, "market_mapping": markets}
@@ -94,8 +95,6 @@ def audit_model_features(manifest: Mapping[str, Any],
                            None if durations else math.inf)
         if missing:
             status, reason = "absent_source", "missing " + ", ".join(missing)
-        elif name in TREND_MODEL_FEATURES:
-            status, reason = "builder_missing", "receipt-causal per-row trend builder is not implemented"
         elif (usable_pre_roll is None or usable_pre_roll + 1e-9 < pre_roll or
               tape_records < minimum_tape_records):
             status = "insufficient_pre_roll"
@@ -329,6 +328,45 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
     return FrozenMixScorer(tuple(manifest["features"]), tuple(manifest["rules"]), payload["models"])
 
 
+class ReceiptTrend:
+    """Closed-minute trend inputs built only from trades received so far."""
+
+    def __init__(self) -> None:
+        self.closes: dict[int, tuple[float, float]] = {}
+        self.latest_source_ms = -math.inf
+        self.latest_receive_ms = -math.inf
+
+    def reset(self) -> None:
+        self.__init__()
+
+    def update(self, receive_ms: float, source_ms: float, price: float) -> None:
+        if receive_ms + 1e-9 < self.latest_receive_ms:
+            raise ValueError("MIX trend receipt time regressed")
+        self.latest_receive_ms = receive_ms
+        self.latest_source_ms = max(self.latest_source_ms, source_ms)
+        minute = int(math.floor(source_ms / 60_000.0) * 60)
+        previous = self.closes.get(minute)
+        if previous is None or source_ms >= previous[0]:
+            self.closes[minute] = (source_ms, price)
+
+    def features(self, candidate: "ControlCandidate", side: int) -> dict[str, float]:
+        if not math.isfinite(self.latest_source_ms):
+            ret4h = vr60 = math.nan
+        else:
+            closes = {minute: value[1] for minute, value in self.closes.items()}
+            ret, vr = j2.trend_features(
+                closes, np.asarray([self.latest_source_ms / 1_000.0 - mix.KLINE_GUARD_S]),
+            )
+            ret4h, vr60 = float(ret[0]), float(vr[0])
+        return {
+            "trend_agree": (float(np.sign(candidate.move) * np.sign(ret4h))
+                            if math.isfinite(ret4h) and math.isfinite(candidate.move) else math.nan),
+            "trend_side": (float(np.sign((1 if side > 0 else -1) * ret4h))
+                           if math.isfinite(ret4h) else math.nan),
+            "vr60": vr60,
+        }
+
+
 @dataclass(frozen=True)
 class ControlConfig:
     jump_bp: float = 2.0
@@ -430,6 +468,7 @@ class ControlCandidate:
     kind: str
     receipt_move_2s: float = math.nan
     direct_features: tuple[tuple[str, float], ...] = ()
+    trend_features: tuple[tuple[str, float], ...] = ()
 
 
 class ReceiptJumpTrigger:
@@ -673,6 +712,7 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
     book_signatures: dict[tuple[str, str], tuple[Any, ...]] = {}
     last_change_ms: dict[tuple[str, str], float] = {}
     trigger = ReceiptJumpTrigger(config)
+    trend = ReceiptTrend()
     counters: Counter = Counter()
     rows: list[dict[str, Any]] = []
     pending: list[tuple[float, int, ControlCandidate, float, int]] = []
@@ -747,6 +787,10 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                 name: (value if math.isfinite(value) else None)
                 for name, value in candidate.direct_features
             },
+            "model_features_trend": {
+                name: (value if math.isfinite(value) else None)
+                for name, value in candidate.trend_features
+            },
             "day": datetime.fromtimestamp(candidate.receive_ms / 1_000.0, timezone.utc).date().isoformat(),
         })
 
@@ -774,7 +818,9 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                                            active_epoch)
         else:
             values = {name: math.nan for name in DIRECT_MODEL_FEATURES}
-        candidate = replace(candidate, direct_features=tuple(values.items()))
+        trend_values = trend.features(candidate, candidate.direction)
+        candidate = replace(candidate, direct_features=tuple(values.items()),
+                            trend_features=tuple(trend_values.items()))
         if not connected:
             for latency in config.fill_latencies_ms:
                 evaluate(candidate, float(latency), active_epoch, "clob_disconnected")
@@ -804,10 +850,12 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
             continue
         if kind == "spot_connection" or kind == "spot_disconnect":
             trigger.reset()
+            trend.reset()
             counters[kind] += 1
             continue
         if kind == "spot_trade":
             counters["spot_trades"] += 1
+            trend.update(event_receive_ms, float(event["source_ts_ms"]), float(event["price"]))
             deferred_candidates.append(
                 trigger.update(event_receive_ms, float(event["source_ts_ms"]), float(event["price"]))
             )
