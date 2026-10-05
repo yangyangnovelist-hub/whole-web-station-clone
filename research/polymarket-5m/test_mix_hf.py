@@ -1,7 +1,10 @@
 """mix_hf.py (MIX.md on the Hugging Face books) on synthetic archives and rows; no network."""
+import copy
+import gzip
 import io
 import json
 import tarfile
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import cross
+import jump2s as j2
 import jump2s_hf as hf
 import mix_hf as M
 
@@ -413,10 +417,175 @@ def synth_rows(seed=0, flip_bc=False):
 
 
 def approve_legacy_bundle(A, spec, frozen):
-    proposal = M.model_bundle_proposal(A, spec, frozen)
+    provenance = synthetic_migration_provenance()
+    proposal = M.model_bundle_proposal(A, spec, frozen, provenance)
     approval = {**proposal, "format": M.MODEL_APPROVAL_FORMAT, "approved": "test fixture"}
     M._atomic_json(M.model_approval_path(frozen), approval)
-    return approval
+    return provenance
+
+
+def synthetic_migration_provenance(tag="base"):
+    digest = lambda text: __import__("hashlib").sha256(text.encode()).hexdigest()
+    archive = {"name": "market_parquet_2026-05-25.tar.gz", "size": 123, "sha256": digest("archive-" + tag)}
+    a0, a1 = M.ts("2026-05-25"), M.ts("2026-07-16")
+    plan = M.migration_kline_plan(("2026-05-25", "2026-07-16"))
+    kline_files = ([{"kind": "monthly", "name": f"BTCUSDT-1m-{value}.zip",
+                     "sha256": digest(f"monthly-{value}-{tag}")} for value in plan["months"]]
+                   + [{"kind": "daily", "name": f"BTCUSDT-1m-{value}.zip",
+                       "sha256": digest(f"daily-{value}-{tag}")} for value in plan["days"]])
+    runner = M.migration_runner_identity()
+    return {
+        "format": M.MIGRATION_PROVENANCE_FORMAT,
+        "a_start": "2026-05-25",
+        "a_end": "2026-07-16",
+        "manifest_sha256": digest("manifest-" + tag),
+        "archive_coverage": {"required": 1, "read": 1},
+        "archives": [archive],
+        "archives_sha256": M._canonical_json_sha256([archive]),
+        "inputs": {
+            "factor": {"source": M.MIGRATION_FACTOR_FILE,
+                       "columns": ["ridge_5m", "hgb_5m", "ridge_15m", "hgb_15m"],
+                       "bound_start": a0, "bound_end": a1, "step_s": 300,
+                       "rows": (a1 - a0) // 300, "first": a0, "last": a1 - 300,
+                       "sha256": digest("factor-" + tag),
+                       "file": {"name": M.MIGRATION_FACTOR_FILE, "sha256": digest("factor-file-" + tag)}},
+            "dvol": {"source": M.MIGRATION_DVOL_FILE, "columns": ["dvol"],
+                      "bound_start": a0 - M.MIGRATION_DVOL_PRE_ROLL_S, "bound_end": a1, "step_s": 3600,
+                      "rows": (a1 - a0 + M.MIGRATION_DVOL_PRE_ROLL_S) // 3600,
+                      "first": a0 - M.MIGRATION_DVOL_PRE_ROLL_S, "last": a1 - 3600,
+                      "sha256": digest("dvol-" + tag),
+                      "file": {"name": M.MIGRATION_DVOL_FILE, "sha256": digest("dvol-file-" + tag)}},
+            "klines": {"source": "BTCUSDT-1m A-only source plan", "columns": ["close"],
+                        "bound_start": a0 - M.MIGRATION_KLINE_PRE_ROLL_S, "bound_end": a1, "step_s": 60,
+                        "rows": (a1 - a0 + M.MIGRATION_KLINE_PRE_ROLL_S) // 60,
+                        "first": a0 - M.MIGRATION_KLINE_PRE_ROLL_S, "last": a1 - 60,
+                        "sha256": digest("klines-" + tag), "files": kline_files},
+        },
+        "runner": runner,
+    }
+
+
+def test_migration_input_readers_open_only_committed_A_files(tmp_path):
+    a0, a1 = M.ts("2026-05-25"), M.ts("2026-07-16")
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    # The old A+B+C files are deliberately invalid: the migration must never open them.
+    (inputs / "factor_preds_5m.csv.gz").write_bytes(b"MUST NOT OPEN")
+    (inputs / "dvol_1h.csv.gz").write_bytes(b"MUST NOT OPEN")
+    with gzip.open(inputs / M.MIGRATION_FACTOR_FILE, "wt", newline="") as fh:
+        fh.write("T,ridge_5m,hgb_5m,ridge_15m,hgb_15m\n")
+        for t in range(a0, a1, 300):
+            fh.write(f"{t},0.51,0.52,0.53,0.54\n")
+    with gzip.open(inputs / M.MIGRATION_DVOL_FILE, "wt", newline="") as fh:
+        fh.write("hour,dvol\n")
+        for t in range(a0 - 3600, a1, 3600):
+            fh.write(f"{t},42.5\n")
+
+    factor, dvol = M.load_migration_inputs(inputs, ("2026-05-25", "2026-07-16"))
+    assert factor.index.min() == a0 and factor.index.max() == a1 - 300
+    assert dvol["hour"].min() == a0 - 3600 and dvol["hour"].max() == a1 - 3600
+    assert len(factor) == (a1 - a0) // 300
+    assert len(dvol) == (a1 - (a0 - 3600)) // 3600
+
+
+def test_migration_input_reader_rejects_non_A_rows_and_schema_drift(tmp_path):
+    a0, a1 = M.ts("2026-05-25"), M.ts("2026-07-16")
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    with gzip.open(inputs / M.MIGRATION_FACTOR_FILE, "wt", newline="") as fh:
+        fh.write("T,hgb_5m,ridge_5m,ridge_15m,hgb_15m\n")
+    with gzip.open(inputs / M.MIGRATION_DVOL_FILE, "wt", newline="") as fh:
+        fh.write("hour,dvol\n")
+        fh.write(f"{a1},42.5\n")
+    with pytest.raises(ValueError, match="schema"):
+        M.load_migration_inputs(inputs, ("2026-05-25", "2026-07-16"))
+
+
+def test_bounded_kline_reader_stops_before_B_close_value(tmp_path):
+    zpath = tmp_path / "BTCUSDT-1m-2026-07.zip"
+    with zipfile.ZipFile(zpath, "w") as archive:
+        archive.writestr("BTCUSDT-1m-2026-07.csv", "\n".join([
+            "open_time,open,high,low,close,volume",
+            "1000000,1,1,1,10.0,1",
+            "1060000,1,1,1,11.0,1",
+            "1120000,1,1,1,B_MUST_NOT_BE_PARSED,1",
+        ]))
+    got = j2.load_minute_klines([zpath], start_s=1000, end_s=1120)
+    assert got.to_dict() == {1000: 10.0, 1060: 11.0}
+
+    bad = tmp_path / "bad.zip"
+    with zipfile.ZipFile(bad, "w") as archive:
+        archive.writestr("bad.csv", "1000000,1,1,1,10,1\nnot-a-header,1,1,1,11,1\n")
+    with pytest.raises(ValueError, match="timestamp"):
+        j2.load_minute_klines([bad], start_s=1000, end_s=1200)
+
+    duplicate = tmp_path / "duplicate.zip"
+    with zipfile.ZipFile(duplicate, "w") as archive:
+        archive.writestr("duplicate.csv", "1000000,1,1,1,10,1\n1000000,1,1,1,11,1\n")
+    with pytest.raises(ValueError, match="strictly monotonic"):
+        j2.load_minute_klines([duplicate], start_s=1000, end_s=1200)
+
+
+def test_migration_kline_plan_never_opens_the_partial_july_month():
+    plan = M.migration_kline_plan(("2026-05-25", "2026-07-16"))
+    assert plan["months"] == ("2026-05", "2026-06")
+    assert plan["days"][0] == "2026-07-01" and plan["days"][-1] == "2026-07-15"
+    assert len(plan["days"]) == 15 and "2026-07" not in plan["months"]
+
+
+def test_hf_klines_supports_month_and_daily_sources_without_july_month(tmp_path, monkeypatch):
+    urls = []
+
+    def download(url, dest):
+        urls.append(url)
+        with zipfile.ZipFile(dest, "w") as archive:
+            archive.writestr(dest.stem + ".csv", "1000000,1,1,1,10.0,1\n")
+        return dest
+
+    monkeypatch.setattr(hf, "download", download)
+    got, missing = hf.klines(tmp_path, months=("2026-05",), days=("2026-07-15",))
+    assert not missing and got.to_dict() == {1000: 10.0}
+    assert any("monthly/klines" in url and "2026-05" in url for url in urls)
+    assert any("daily/klines" in url and "2026-07-15" in url for url in urls)
+    assert not any("monthly/klines" in url and "2026-07" in url for url in urls)
+
+
+def test_migration_provenance_binds_complete_A_and_every_bounded_input():
+    digest = lambda text: __import__("hashlib").sha256(text.encode()).hexdigest()
+    name = "market_parquet_2026-05-25.tar.gz"
+    manifest = f"{name}  {digest('archive')}  123\n".encode()
+    arcs = [(name, 123)]
+    factor = pd.DataFrame({"ridge_5m": [0.51], "hgb_5m": [0.52],
+                           "ridge_15m": [0.53], "hgb_15m": [0.54]},
+                          index=pd.Index([M.ts("2026-05-25")], name="T"))
+    dvol = pd.DataFrame({"hour": [M.ts("2026-05-25") - 3600], "dvol": [42.5]})
+    klines = pd.Series([60000.0], index=[M.ts("2026-05-25") - 300 * 60])
+
+    sources = {
+        "factor": {"name": M.MIGRATION_FACTOR_FILE, "sha256": digest("factor-file")},
+        "dvol": {"name": M.MIGRATION_DVOL_FILE, "sha256": digest("dvol-file")},
+        "klines": [{"kind": "monthly", "name": "BTCUSDT-1m-2026-05.zip", "sha256": digest("kline-file")}],
+    }
+    got = M.build_migration_provenance(
+        manifest, arcs, [name], factor, dvol, klines,
+        ("2026-05-25", "2026-07-16"), sources,
+    )
+    assert got["archive_coverage"] == {"required": 1, "read": 1}
+    assert got["archives"][0] == {"name": name, "size": 123, "sha256": digest("archive")}
+    assert got["manifest_sha256"] == __import__("hashlib").sha256(manifest).hexdigest()
+    assert set(got["inputs"]) == {"factor", "dvol", "klines"}
+    changed = factor.copy()
+    changed.iloc[0, 0] += 0.001
+    changed_got = M.build_migration_provenance(
+        manifest, arcs, [name], changed, dvol, klines,
+        ("2026-05-25", "2026-07-16"), sources,
+    )
+    assert changed_got["inputs"]["factor"]["sha256"] != got["inputs"]["factor"]["sha256"]
+    with pytest.raises(ValueError, match="complete A archive set"):
+        M.build_migration_provenance(
+            manifest, arcs, [], factor, dvol, klines,
+            ("2026-05-25", "2026-07-16"), sources,
+        )
 
 
 @pytest.fixture
@@ -653,10 +822,13 @@ def test_legacy_freeze_migrates_once_to_an_exact_A_identity_without_rewriting_it
     assert M.spec_problems(spec, A) == ["A 段数据与冻结时不同（指纹不符）"]
     with pytest.raises(ValueError, match="explicit one-time migration"):
         M.export_model_bundle(A, spec, frozen)
+    provenance = synthetic_migration_provenance()
     with pytest.raises(ValueError, match="approval"):
-        M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
-    approve_legacy_bundle(A, spec, frozen)
-    manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
+        M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True,
+                              migration_provenance=provenance)
+    provenance = approve_legacy_bundle(A, spec, frozen)
+    manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True,
+                                     migration_provenance=provenance)
     model_path, _ = M.model_bundle_paths(frozen)
     anchor_path = M.model_anchor_path(frozen)
     payload = joblib.load(model_path)
@@ -685,12 +857,14 @@ def test_legacy_freeze_migrates_once_to_an_exact_A_identity_without_rewriting_it
     assert M.legacy_a_fingerprint(changed) == spec["a_fingerprint"]
     assert M.fingerprint(changed) != manifest["canonical_a_fingerprint"]
     with pytest.raises(ValueError, match="approved exact A"):
-        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True)
+        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True,
+                              migration_provenance=provenance)
 
     for path in (*M.model_bundle_paths(frozen), M.model_anchor_path(frozen)):
         path.unlink()
     with pytest.raises(ValueError, match="approved exact A"):
-        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True)
+        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True,
+                              migration_provenance=provenance)
 
 
 def test_legacy_freeze_rejects_data_outside_its_rounded_identity(tmp_path, fast_models):
@@ -703,11 +877,12 @@ def test_legacy_freeze_rejects_data_outside_its_rounded_identity(tmp_path, fast_
     frozen.write_text(json.dumps(spec), encoding="utf-8")
     changed = A.copy()
     changed.loc[0, "jump_bp"] += np.float32(0.1)
-    approve_legacy_bundle(A, spec, frozen)
+    provenance = approve_legacy_bundle(A, spec, frozen)
 
     assert M.spec_problems(spec, changed) == ["A 段数据与冻结时不同（指纹不符）"]
     with pytest.raises(ValueError, match="A fingerprint"):
-        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True)
+        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True,
+                              migration_provenance=provenance)
 
 
 def test_bundle_only_migration_accepts_only_complete_A_and_never_evaluates_B_or_C(tmp_path, monkeypatch,
@@ -723,27 +898,31 @@ def test_bundle_only_migration_accepts_only_complete_A_and_never_evaluates_B_or_
     frozen.write_text(json.dumps(spec), encoding="utf-8")
     monkeypatch.setattr(M, "evaluate", lambda *args, **kwargs: pytest.fail("bundle migration evaluated B/C"))
 
-    proposal = M.write_bundle_proposal(A, out, full_a=True, log=lambda _: None)
+    provenance = synthetic_migration_provenance()
+    proposal = M.write_bundle_proposal(A, out, full_a=True, provenance=provenance, log=lambda _: None)
     assert proposal["canonical_a_fingerprint"] == M.fingerprint(A)
     assert M.model_proposal_path(frozen).exists()
     assert not M.model_anchor_path(frozen).exists()
     with pytest.raises(ValueError, match="approval"):
-        M.export_bundle_only(A, out, full_a=True, log=lambda _: None)
-    approve_legacy_bundle(A, spec, frozen)
-    manifest = M.export_bundle_only(A, out, full_a=True, log=lambda _: None)
+        M.export_bundle_only(A, out, full_a=True, provenance=provenance, log=lambda _: None)
+    provenance = approve_legacy_bundle(A, spec, frozen)
+    with pytest.raises(ValueError, match="approved exact A"):
+        M.export_bundle_only(A, out, full_a=True,
+                             provenance=synthetic_migration_provenance("drift"), log=lambda _: None)
+    manifest = M.export_bundle_only(A, out, full_a=True, provenance=provenance, log=lambda _: None)
     assert manifest["a_identity_match"] == "legacy_v1_rounded"
     assert M.model_anchor_path(frozen).exists()
     assert not out.exists()
 
     with pytest.raises(ValueError, match="complete A"):
-        M.export_bundle_only(A, out, full_a=False, log=lambda _: None)
+        M.export_bundle_only(A, out, full_a=False, provenance=provenance, log=lambda _: None)
     with pytest.raises(ValueError, match="only A rows"):
-        M.export_bundle_only(rows, out, full_a=True, log=lambda _: None)
+        M.export_bundle_only(rows, out, full_a=True, provenance=provenance, log=lambda _: None)
 
     with pytest.raises(ValueError, match="complete A"):
-        M.write_bundle_proposal(A, out, full_a=False, log=lambda _: None)
+        M.write_bundle_proposal(A, out, full_a=False, provenance=provenance, log=lambda _: None)
     with pytest.raises(ValueError, match="only A rows"):
-        M.write_bundle_proposal(rows, out, full_a=True, log=lambda _: None)
+        M.write_bundle_proposal(rows, out, full_a=True, provenance=provenance, log=lambda _: None)
 
 
 def test_bundle_only_archive_selection_cannot_read_B_or_C():
@@ -759,6 +938,43 @@ def test_bundle_only_archive_selection_cannot_read_B_or_C():
         M.select_archives(every, names=[every[0][0]], bundle_proposal=True)
     with pytest.raises(ValueError, match="mutually exclusive"):
         M.select_archives(every, bundle_only=True, bundle_proposal=True)
+
+
+def test_legacy_approval_rejects_each_provenance_component_drift(tmp_path, fast_models):
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    spec.pop("a_fingerprint_version")
+    spec["a_fingerprint"] = M.legacy_a_fingerprint(A)
+    frozen.write_text(json.dumps(spec), encoding="utf-8")
+    base = synthetic_migration_provenance()
+    proposal = M.model_bundle_proposal(A, spec, frozen, base)
+    M._atomic_json(M.model_approval_path(frozen), {**proposal, "format": M.MODEL_APPROVAL_FORMAT})
+
+    mutations = []
+    for path in (("manifest_sha256",), ("inputs", "factor", "sha256"),
+                 ("inputs", "dvol", "sha256"), ("inputs", "klines", "sha256"),
+                 ("inputs", "klines", "files", 0, "sha256")):
+        changed = copy.deepcopy(base)
+        target = changed
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = "f" * 64
+        mutations.append(changed)
+    archive_changed = copy.deepcopy(base)
+    archive_changed["archives"][0]["size"] += 1
+    archive_changed["archives_sha256"] = M._canonical_json_sha256(archive_changed["archives"])
+    mutations.append(archive_changed)
+    runner_changed = copy.deepcopy(base)
+    runner_changed["runner"]["runtime"]["numpy"] = "0.invalid"
+    runner_changed["runner"]["sha256"] = M._canonical_json_sha256(
+        {"files": runner_changed["runner"]["files"], "runtime": runner_changed["runner"]["runtime"]})
+    mutations.append(runner_changed)
+
+    for changed in mutations:
+        with pytest.raises(ValueError):
+            M.validate_model_approval(A, spec, frozen, changed)
 
 
 def test_exported_bundle_is_identical_when_A_rows_are_reordered(tmp_path, fast_models):
@@ -1032,6 +1248,37 @@ def test_migration_preflight_rejects_segment_drift_before_loading_or_fetching_an
 
     with pytest.raises(ValueError, match="设定与现在的代码不同"):
         M.run(tmp_path / "wd", out, bundle_proposal=True, log=lambda _: None)
+
+
+def test_migration_run_uses_only_bounded_A_auxiliary_loaders(tmp_path, monkeypatch):
+    out = tmp_path / "real" / "cross-mix-hf.md"
+    frozen = M.out_paths(out)[1]
+    frozen.parent.mkdir(parents=True)
+    frozen.write_bytes((M.HERE / "real" / "cross-mix-frozen.json").read_bytes())
+    monkeypatch.setattr(M, "CANONICAL_STUDY_FROZEN", frozen)
+    seen = {}
+
+    def bounded_klines(workdir, months, days, start_s, end_s):
+        seen.update(months=months, days=days, start_s=start_s, end_s=end_s)
+        index = np.arange(start_s, end_s, 60, dtype=np.int64)
+        return pd.Series(np.ones(len(index)), index=index), []
+
+    def bounded_inputs(inputs, bounds):
+        seen["bounds"] = bounds
+        raise RuntimeError("bounded A loader reached")
+
+    monkeypatch.setattr(hf, "klines", bounded_klines)
+    monkeypatch.setattr(M, "load_migration_inputs", bounded_inputs)
+    monkeypatch.setattr(M, "load_inputs", lambda *_: pytest.fail("unbounded inputs were loaded"))
+    with pytest.raises(RuntimeError, match="bounded A loader reached"):
+        M.run(tmp_path / "wd", out, bundle_proposal=True, log=lambda _: None)
+    assert seen == {
+        "months": ("2026-05", "2026-06"),
+        "days": tuple(f"2026-07-{day:02d}" for day in range(1, 16)),
+        "start_s": M.ts("2026-05-25") - M.MIGRATION_KLINE_PRE_ROLL_S,
+        "end_s": M.ts("2026-07-16"),
+        "bounds": ("2026-05-25", "2026-07-16"),
+    }
 
 
 def test_cross_mix_default_output_is_committed_by_the_lane(monkeypatch):

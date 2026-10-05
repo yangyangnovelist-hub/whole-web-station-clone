@@ -182,6 +182,8 @@ Where MIX.md and the task are silent, the conservative choice made here:
 """
 from __future__ import annotations
 
+import csv
+import gzip
 import hashlib
 import json
 import math
@@ -200,6 +202,8 @@ import jump2s_hf as hf
 
 HERE = Path(__file__).resolve().parent
 INPUTS = HERE / "real" / "mix-inputs"
+MIGRATION_FACTOR_FILE = "factor_preds_5m_A.csv.gz"
+MIGRATION_DVOL_FILE = "dvol_1h_A.csv.gz"
 CANONICAL_STUDY_FROZEN = HERE / "real" / "cross-mix-frozen.json"
 
 # --------------------------------------------------------------------------- MIX.md constants
@@ -223,6 +227,9 @@ RV_N, RV_MIN = 1800, 900
 KLINE_GUARD_S = 60.0        # a 1 m kline counts once it closed >= 60 s before the latest exchange time received (disorder: 9.6 s 08-28, 38 s 08-19)
 GAP_FILL_S = hf.GAP_FILL_S
 CARRY_S = 1800
+MIGRATION_DVOL_PRE_ROLL_S = 3600
+# Closed-minute lookup plus the 60 s receipt guard need two extra minutes beyond the 240-minute return.
+MIGRATION_KLINE_PRE_ROLL_S = (max(j2.RET4H_MIN, j2.VR_N + j2.VR_Q) + 2) * 60
 SEC_YEAR = 365 * 86400
 T_EPS = 1e-6
 DAY = 86400
@@ -315,11 +322,15 @@ def build_inputs(cache=None, out_dir=INPUTS, start="2026-05-20", end="2026-09-01
             pc, _ = F.walk_forward(X, up, T, F.HMIN[h], m, blk, alpha=R["alpha"][h], factory=factory)
             cols[f"{m}_{h}"] = np.where(T < c0, ab, pc)
     p = pd.DataFrame(cols, index=pd.Index(T, name="T"))
-    p = p[(p.index >= ts(start)) & (p.index < ts(end))].dropna(how="all")
+    p = p[(p.index >= ts(start)) & (p.index < ts(end))].dropna(how="all").sort_index()
+    if not p.index.is_unique or not p.index.is_monotonic_increasing:
+        raise ValueError("factor input timestamps are not unique and sorted")
     p.round(5).to_csv(out_dir / "factor_preds_5m.csv.gz")
     d = pd.read_csv(cache / "dvol_1h.csv")
     d = pd.DataFrame({"hour": d["t"].to_numpy(np.int64) // 1000, "dvol": d["close"].to_numpy(float)})
-    d = d[(d["hour"] >= ts(start) - 7 * DAY) & (d["hour"] < ts(end))]
+    d = d[(d["hour"] >= ts(start) - 7 * DAY) & (d["hour"] < ts(end))].sort_values("hour")
+    if d["hour"].duplicated().any() or not d["hour"].is_monotonic_increasing:
+        raise ValueError("DVOL input timestamps are not unique and sorted")
     d.to_csv(out_dir / "dvol_1h.csv.gz", index=False)
     return p, d
 
@@ -334,6 +345,105 @@ def load_inputs(inputs=INPUTS):
     if (inputs / "dvol_1h.csv.gz").exists():
         dv = pd.read_csv(inputs / "dvol_1h.csv.gz").sort_values("hour")
     return fp, dv
+
+
+def _a_only_numeric_csv(path, expected_columns, start_s, end_s):
+    """Read a physically A-only numeric CSV and reject any schema, order or boundary drift."""
+    path = Path(path)
+    if not path.exists():
+        raise ValueError(f"missing migration input: {path}")
+    opener = gzip.open if path.suffix == ".gz" else open
+    rows = []
+    with opener(path, "rt", encoding="utf-8", newline="") as fh:
+        reader = csv.reader(fh)
+        try:
+            columns = next(reader)
+        except StopIteration as error:
+            raise ValueError(f"empty migration input: {path}") from error
+        if columns != list(expected_columns):
+            raise ValueError(f"migration input schema differs: {path}")
+        last = -np.inf
+        for raw in reader:
+            if not raw:
+                continue
+            if len(raw) != len(columns):
+                raise ValueError(f"malformed migration input row: {path}")
+            try:
+                stamp = int(raw[0])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"invalid migration timestamp in {path}") from error
+            if stamp <= last:
+                raise ValueError(f"migration input is not strictly time sorted: {path}")
+            last = stamp
+            if not start_s <= stamp < end_s:
+                raise ValueError(f"migration input contains a non-A row: {path}")
+            try:
+                rows.append([stamp, *(float(value) for value in raw[1:])])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"invalid migration value in {path}") from error
+    return pd.DataFrame(rows, columns=columns)
+
+
+def load_migration_inputs(inputs, a_bounds):
+    """Load dedicated frozen-A files; no opened file contains B/C values."""
+    inputs = Path(inputs)
+    a0, a1 = (ts(value) for value in a_bounds)
+    raw_factor = _a_only_numeric_csv(
+        inputs / MIGRATION_FACTOR_FILE,
+        ("T", "ridge_5m", "hgb_5m", "ridge_15m", "hgb_15m"), a0, a1,
+    )
+    raw_dvol = _a_only_numeric_csv(
+        inputs / MIGRATION_DVOL_FILE, ("hour", "dvol"), a0 - MIGRATION_DVOL_PRE_ROLL_S, a1,
+    )
+    factor = raw_factor.set_index("T")
+    factor.index = factor.index.astype(np.int64)
+    factor.index.name = "T"
+    dvol = raw_dvol.assign(hour=raw_dvol["hour"].astype(np.int64)).sort_values("hour").reset_index(drop=True)
+    want_factor = np.arange(a0, a1, 300, dtype=np.int64)
+    want_dvol = np.arange(a0 - MIGRATION_DVOL_PRE_ROLL_S, a1, 3600, dtype=np.int64)
+    if not np.array_equal(factor.index.to_numpy(np.int64), want_factor):
+        raise ValueError("A-only factor input is incomplete")
+    if not np.array_equal(dvol["hour"].to_numpy(np.int64), want_dvol):
+        raise ValueError("A-only DVOL input is incomplete")
+    return factor, dvol
+
+
+def migration_kline_plan(a_bounds):
+    """Use complete pre-A/A months, then daily files in the partial boundary month (never B)."""
+    start = pd.Timestamp(a_bounds[0], tz="UTC") - pd.Timedelta(seconds=MIGRATION_KLINE_PRE_ROLL_S)
+    end = pd.Timestamp(a_bounds[1], tz="UTC")
+    months, days = [], []
+    cursor = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while cursor < end:
+        next_month = cursor + pd.offsets.MonthBegin(1)
+        if next_month <= end:
+            months.append(f"{cursor.year:04d}-{cursor.month:02d}")
+        else:
+            day = max(cursor, start.normalize())
+            while day < end:
+                days.append(day.strftime("%Y-%m-%d"))
+                day += pd.Timedelta(days=1)
+        cursor = next_month
+    return {"months": tuple(months), "days": tuple(days)}
+
+
+def migration_input_sources(inputs):
+    inputs = Path(inputs)
+    return {
+        "factor": {"name": MIGRATION_FACTOR_FILE, "sha256": _sha256(inputs / MIGRATION_FACTOR_FILE)},
+        "dvol": {"name": MIGRATION_DVOL_FILE, "sha256": _sha256(inputs / MIGRATION_DVOL_FILE)},
+    }
+
+
+def migration_kline_sources(workdir, plan):
+    workdir = Path(workdir)
+    out = []
+    for kind in ("months", "days"):
+        source_kind = "monthly" if kind == "months" else "daily"
+        for value in plan[kind]:
+            path = workdir / f"BTCUSDT-1m-{value}.zip"
+            out.append({"kind": source_kind, "name": path.name, "sha256": _sha256(path)})
+    return out
 
 
 def dvol_at(dv, t):
@@ -968,8 +1078,9 @@ A_FINGERPRINT_V1_ROUNDED = "mix-a-v1-rounded-all-rows"
 A_FINGERPRINT_V2_EXACT = "mix-a-v2-exact-model-rows"
 MODEL_BUNDLE_FORMAT = "polymarket-mix-models-v2"
 MODEL_ANCHOR_FORMAT = "polymarket-mix-model-anchor-v1"
-MODEL_PROPOSAL_FORMAT = "polymarket-mix-model-proposal-v1"
-MODEL_APPROVAL_FORMAT = "polymarket-mix-model-approval-v1"
+MODEL_PROPOSAL_FORMAT = "polymarket-mix-model-proposal-v2"
+MODEL_APPROVAL_FORMAT = "polymarket-mix-model-approval-v2"
+MIGRATION_PROVENANCE_FORMAT = "polymarket-mix-migration-provenance-v1"
 
 
 def model_bundle_paths(frozen_path):
@@ -1011,6 +1122,108 @@ def _atomic_json(path, value):
     os.replace(tmp, path)
 
 
+def _canonical_json_sha256(value):
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _is_sha256(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _validated_migration_provenance(provenance, spec):
+    if not isinstance(provenance, dict) or provenance.get("format") != MIGRATION_PROVENANCE_FORMAT:
+        raise ValueError("complete A migration provenance is required")
+    expected_top = {"format", "a_start", "a_end", "manifest_sha256", "archive_coverage", "archives",
+                    "archives_sha256", "inputs", "runner"}
+    if set(provenance) != expected_top:
+        raise ValueError("migration provenance schema differs")
+    a_bounds = tuple((spec.get("segments") or [[None, None, None]])[0][1:3])
+    if (provenance.get("a_start"), provenance.get("a_end")) != a_bounds:
+        raise ValueError("migration provenance A bounds differ from the freeze")
+    if not _is_sha256(provenance.get("manifest_sha256")):
+        raise ValueError("migration manifest provenance is invalid")
+    a0, a1 = (ts(value) for value in a_bounds)
+    coverage = provenance.get("archive_coverage") or {}
+    archives = provenance.get("archives") or []
+    if set(coverage) != {"required", "read"}:
+        raise ValueError("migration archive coverage schema differs")
+    if coverage.get("required") != coverage.get("read") or coverage.get("required") != len(archives):
+        raise ValueError("migration provenance lacks the complete A archive set")
+    names = []
+    for archive in archives:
+        if set(archive) != {"name", "size", "sha256"}:
+            raise ValueError("migration archive provenance schema differs")
+        match = re.fullmatch(r"market_parquet_(\d{4}-\d{2}-\d{2})\.tar\.gz", str(archive.get("name")))
+        if (not match or not a_bounds[0] <= match.group(1) < a_bounds[1]
+                or not isinstance(archive.get("size"), int) or archive["size"] <= 0
+                or not _is_sha256(archive.get("sha256"))):
+            raise ValueError("migration archive provenance is invalid")
+        names.append(archive["name"])
+    if names != sorted(names) or len(names) != len(set(names)):
+        raise ValueError("migration archive provenance is not unique and sorted")
+    if provenance.get("archives_sha256") != _canonical_json_sha256(archives):
+        raise ValueError("migration archive provenance hash mismatch")
+    inputs = provenance.get("inputs") or {}
+    if set(inputs) != {"factor", "dvol", "klines"}:
+        raise ValueError("migration auxiliary-input provenance is incomplete")
+    expected_inputs = {
+        "factor": {"source": MIGRATION_FACTOR_FILE,
+                   "columns": ["ridge_5m", "hgb_5m", "ridge_15m", "hgb_15m"],
+                   "bound_start": a0, "bound_end": a1, "step_s": 300,
+                   "rows": (a1 - a0) // 300, "first": a0, "last": a1 - 300,
+                   "physical": ("file", {"name": MIGRATION_FACTOR_FILE})},
+        "dvol": {"source": MIGRATION_DVOL_FILE, "columns": ["dvol"],
+                  "bound_start": a0 - MIGRATION_DVOL_PRE_ROLL_S, "bound_end": a1, "step_s": 3600,
+                  "rows": (a1 - a0 + MIGRATION_DVOL_PRE_ROLL_S) // 3600,
+                  "first": a0 - MIGRATION_DVOL_PRE_ROLL_S, "last": a1 - 3600,
+                  "physical": ("file", {"name": MIGRATION_DVOL_FILE})},
+        "klines": {"source": "BTCUSDT-1m A-only source plan", "columns": ["close"],
+                    "bound_start": a0 - MIGRATION_KLINE_PRE_ROLL_S, "bound_end": a1, "step_s": 60,
+                    "rows": (a1 - a0 + MIGRATION_KLINE_PRE_ROLL_S) // 60,
+                    "first": a0 - MIGRATION_KLINE_PRE_ROLL_S, "last": a1 - 60,
+                    "physical": ("files", None)},
+    }
+    plan = migration_kline_plan(a_bounds)
+    expected_kline_files = ([{"kind": "monthly", "name": f"BTCUSDT-1m-{value}.zip"}
+                             for value in plan["months"]]
+                            + [{"kind": "daily", "name": f"BTCUSDT-1m-{value}.zip"}
+                               for value in plan["days"]])
+    expected_inputs["klines"]["physical"] = ("files", expected_kline_files)
+    for name, expected in expected_inputs.items():
+        value = inputs[name]
+        physical_key, physical_expected = expected.pop("physical")
+        required_keys = set(expected) | {"sha256", physical_key}
+        if set(value) != required_keys or any(value.get(key) != item for key, item in expected.items()):
+            raise ValueError(f"migration {name} provenance schema differs")
+        if not _is_sha256(value.get("sha256")):
+            raise ValueError(f"migration {name} logical hash is invalid")
+        physical = value[physical_key]
+        if physical_key == "file":
+            if (set(physical or {}) != {"name", "sha256"}
+                    or physical.get("name") != physical_expected["name"]
+                    or not _is_sha256(physical.get("sha256"))):
+                raise ValueError(f"migration {name} source file is invalid")
+        else:
+            stripped = [{k: item.get(k) for k in ("kind", "name")} for item in physical or []]
+            if (stripped != physical_expected or any(set(item) != {"kind", "name", "sha256"}
+                                                     or not _is_sha256(item.get("sha256"))
+                                                     for item in physical or [])):
+                raise ValueError("migration kline source plan differs")
+    runner = provenance.get("runner") or {}
+    required_files = {"binary.py", "cross.py", "jump2s.py", "jump2s_hf.py", "mix_hf.py", "pm_outcomes.py"}
+    required_runtime = {"python", "numpy", "pandas", "scipy", "pyarrow", "sklearn", "joblib"}
+    if (set(runner) != {"files", "runtime", "sha256"}
+            or set(runner.get("files") or {}) != required_files
+            or set(runner.get("runtime") or {}) != required_runtime
+            or any(not _is_sha256(value) for value in runner["files"].values())
+            or runner.get("sha256") != _canonical_json_sha256(
+                {"files": runner["files"], "runtime": runner["runtime"]})
+            or runner != migration_runner_identity()):
+        raise ValueError("migration runner provenance is incomplete")
+    return json.loads(json.dumps(provenance, ensure_ascii=False, sort_keys=True))
+
+
 def _bundle_a_hashes(models, rules, train, X):
     prediction_sha, selected_keys_sha = {}, {}
     for rule in rules:
@@ -1034,7 +1247,7 @@ def _a_identity_fields(identity):
     }
 
 
-def model_bundle_proposal(A, spec, frozen_path):
+def model_bundle_proposal(A, spec, frozen_path, provenance):
     """Deterministic exact-A record for human/code review before a legacy fitted-model migration."""
     frozen_path = Path(frozen_path)
     segments = set(segment_of(A["start"].to_numpy(float))) if len(A) else set()
@@ -1044,6 +1257,7 @@ def model_bundle_proposal(A, spec, frozen_path):
     if not identity["matches"]:
         raise ValueError("A fingerprint differs from the frozen study")
     train, training_matrix = _canonical_training_data(A)
+    provenance = _validated_migration_provenance(provenance, spec)
     return {
         "format": MODEL_PROPOSAL_FORMAT,
         "frozen_file": frozen_path.name,
@@ -1051,12 +1265,14 @@ def model_bundle_proposal(A, spec, frozen_path):
         **_a_identity_fields(identity),
         "training_rows": int(len(train)),
         "training_matrix_sha256": hashlib.sha256(training_matrix.tobytes()).hexdigest(),
+        "provenance": provenance,
+        "provenance_sha256": _canonical_json_sha256(provenance),
     }
 
 
-def validate_model_approval(A, spec, frozen_path):
+def validate_model_approval(A, spec, frozen_path, provenance):
     """Require a separately committed exact-A approval; proposals never authorize themselves."""
-    proposal = model_bundle_proposal(A, spec, frozen_path)
+    proposal = model_bundle_proposal(A, spec, frozen_path, provenance)
     path = model_approval_path(frozen_path)
     if not path.exists():
         raise ValueError(f"MIX legacy model approval is missing: {path}")
@@ -1069,7 +1285,7 @@ def validate_model_approval(A, spec, frozen_path):
 
 
 def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=None, anchor_path=None, *,
-                        allow_legacy_migration=False):
+                        allow_legacy_migration=False, migration_provenance=None):
     """Fit the frozen rules on A only and write an immutable, hash-verified inference bundle."""
     import joblib
     import sklearn
@@ -1088,14 +1304,15 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
     if not identity["matches"]:
         raise ValueError("A fingerprint differs from the frozen study")
     identity_fields = _a_identity_fields(identity)
-    approval_binding = {}
+    approval_binding, migration_binding = {}, {}
     if (identity["frozen_a_fingerprint_version"] == A_FINGERPRINT_V1_ROUNDED
             and not allow_legacy_migration):
         raise ValueError("legacy A identity requires an explicit one-time migration")
     if identity["frozen_a_fingerprint_version"] == A_FINGERPRINT_V1_ROUNDED:
-        validate_model_approval(A, spec, frozen_path)
+        approval = validate_model_approval(A, spec, frozen_path, migration_provenance)
         approval_path = model_approval_path(frozen_path)
         approval_binding = {"approval_file": approval_path.name, "approval_sha256": _sha256(approval_path)}
+        migration_binding = {"migration_provenance_sha256": approval["provenance_sha256"]}
     frozen_sha = _sha256(frozen_path)
     train, training_matrix = _canonical_training_data(A)
     X = training_matrix[:, :len(FEATURES)]
@@ -1118,6 +1335,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
             "manifest_file": manifest_path.name,
             "manifest_sha256": _sha256(manifest_path),
             **approval_binding,
+            **migration_binding,
             "training_rows": int(len(train)),
             "training_matrix_sha256": training_matrix_sha,
         }
@@ -1134,6 +1352,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
             "rules": frozen_rules,
             "training_rows": int(len(train)),
             "training_matrix_sha256": training_matrix_sha,
+            **migration_binding,
         }
         bad = [key for key, value in expected.items() if manifest.get(key) != value]
         if bad or manifest.get("model_sha256") != _sha256(model_path):
@@ -1151,6 +1370,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
             "features": list(FEATURES),
             "rules": frozen_rules,
             "training_matrix_sha256": training_matrix_sha,
+            **migration_binding,
             **audit,
         }
         bad = [key for key, value in audit.items() if manifest.get(key) != value]
@@ -1176,6 +1396,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
         "rules": frozen_rules,
         "versions": versions,
         "training_matrix_sha256": training_matrix_sha,
+        **migration_binding,
         "a_prediction_sha256": prediction_sha,
         "selected_row_keys_sha256": selected_keys_sha,
         "models": models,
@@ -1196,6 +1417,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
         "rules": frozen_rules,
         "training_rows": int(len(train)),
         "training_matrix_sha256": training_matrix_sha,
+        **migration_binding,
         "a_prediction_sha256": prediction_sha,
         "selected_row_keys_sha256": selected_keys_sha,
         "versions": versions,
@@ -1212,6 +1434,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
         "manifest_file": manifest_path.name,
         "manifest_sha256": _sha256(manifest_path),
         **approval_binding,
+        **migration_binding,
         "training_rows": int(len(train)),
         "training_matrix_sha256": training_matrix_sha,
     }
@@ -1713,7 +1936,7 @@ def select_archives(every, days=None, names=None, bundle_only=False, bundle_prop
     return arcs
 
 
-def export_bundle_only(rows, out, full_a=False, log=print):
+def export_bundle_only(rows, out, full_a=False, provenance=None, log=print):
     """One-time legacy migration using complete A only; never score B or C and never rewrite the freeze."""
     if not full_a:
         raise ValueError("bundle migration requires complete A coverage")
@@ -1732,12 +1955,13 @@ def export_bundle_only(rows, out, full_a=False, log=print):
     identity = a_identity(spec, rows)
     if not identity["matches"]:
         raise ValueError("A fingerprint differs from the frozen study")
-    manifest = export_model_bundle(rows, spec, frozen_path, allow_legacy_migration=True)
+    manifest = export_model_bundle(rows, spec, frozen_path, allow_legacy_migration=True,
+                                   migration_provenance=provenance)
     log(f"A-only model bundle anchored at {model_anchor_path(frozen_path)}")
     return manifest
 
 
-def write_bundle_proposal(rows, out, full_a=False, log=print):
+def write_bundle_proposal(rows, out, full_a=False, provenance=None, log=print):
     """Write the deterministic exact-A proposal only; this file cannot authorize model fitting."""
     if not full_a:
         raise ValueError("bundle proposal requires complete A coverage")
@@ -1753,7 +1977,7 @@ def write_bundle_proposal(rows, out, full_a=False, log=print):
     problems = spec_setting_problems(spec)
     if problems:
         raise ValueError("frozen study cannot propose a migration: " + "; ".join(problems))
-    proposal = model_bundle_proposal(rows, spec, frozen_path)
+    proposal = model_bundle_proposal(rows, spec, frozen_path, provenance)
     path = model_proposal_path(frozen_path)
     if path.exists() and json.loads(path.read_text(encoding="utf-8")) != proposal:
         raise ValueError("existing MIX model proposal differs from canonical A")
@@ -1785,16 +2009,33 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
     shards = workdir / "mix-shards"
     shards.mkdir(parents=True, exist_ok=True)
     t_start = time.time()
-    kl, missing = hf.klines(workdir)
+    migration = bundle_only or bundle_proposal
+    if migration:
+        a0_s, a1_s = (ts(value) for value in migration_a_bounds)
+        kline_plan = migration_kline_plan(migration_a_bounds)
+        kl, missing = hf.klines(workdir, months=kline_plan["months"], days=kline_plan["days"],
+                                start_s=a0_s - MIGRATION_KLINE_PRE_ROLL_S, end_s=a1_s)
+        if missing:
+            raise ValueError("A-only migration requires complete bounded klines")
+        want_klines = np.arange(a0_s - MIGRATION_KLINE_PRE_ROLL_S, a1_s, 60, dtype=np.int64)
+        if not np.array_equal(np.asarray(kl.index, dtype=np.int64), want_klines):
+            raise ValueError("A-only kline input is incomplete")
+        fp, dv = load_migration_inputs(inputs, migration_a_bounds)
+        migration_sources = migration_input_sources(inputs)
+        migration_sources["klines"] = migration_kline_sources(workdir, kline_plan)
+    else:
+        kl, missing = hf.klines(workdir)
+        fp, dv = load_inputs(inputs)
+        migration_sources = None
     log(f"klines: {len(kl):,} minutes, missing months {missing or 'none'}")
-    fp, dv = load_inputs(inputs)
     log(f"inputs: {len(fp):,} factor windows, {len(dv):,} DVOL hours")
-    manifest = cross.fetch("MANIFEST.txt").decode()
+    manifest_raw = cross.fetch("MANIFEST.txt")
+    manifest = manifest_raw.decode()
     sha = manifest_sha(manifest)
     every = [a for a in cross.archives(manifest) if ARCHIVE_DAYS[0] <= a[0][15:25] < ARCHIVE_DAYS[1]]
     arcs = select_archives(every, days=days, names=names, bundle_only=bundle_only,
                            bundle_proposal=bundle_proposal, migration_a_bounds=migration_a_bounds)
-    infos, failed, skipped, carry, own = [], [], [], None, []
+    infos, failed, skipped, carry, own, read_archives = [], [], [], None, [], []
     files = []
     for name, size in arcs:
         day = name[15:25]
@@ -1830,6 +2071,7 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
             rows.to_parquet(f, index=False)
             files.append(f)
             infos.append(info)
+            read_archives.append(name)
             log(f"{name}: {info['markets']} markets, {info['jump']:,} jump / {info['fixed']:,} fixed / "
                 f"{info['random']:,} random points, {info['rows']:,} rows ({info['no_entry']:,} without entry) "
                 f"({time.time() - t_start:.0f} s)")
@@ -1841,10 +2083,13 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
     cov = coverage([a[0][15:25] for a in every], [i["day"] for i in infos])
     log("coverage: " + ", ".join(f"{k} {v[0]}/{v[1]}" for k, v in cov.items()))
     full_a = cov["A"][0] == cov["A"][1] > 0
+    provenance = (build_migration_provenance(manifest_raw, arcs, read_archives, fp, dv, kl,
+                                              migration_a_bounds, migration_sources)
+                  if migration and full_a else None)
     if bundle_proposal:
-        return write_bundle_proposal(rows, out, full_a=full_a, log=log)
+        return write_bundle_proposal(rows, out, full_a=full_a, provenance=provenance, log=log)
     if bundle_only:
-        return export_bundle_only(rows, out, full_a=full_a, log=log)
+        return export_bundle_only(rows, out, full_a=full_a, provenance=provenance, log=log)
     complete = all(v[0] == v[1] for v in cov.values())
     return analyze(rows, out, infos, failed, skipped, len(arcs), missing, ds=cross.DS, log=log, full_a=full_a,
                    complete=complete, trial_frozen=workdir / TRIAL_FROZEN, coverage=cov)
@@ -1885,6 +2130,82 @@ def _sha256(path):
         while chunk := f.read(1 << 22):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _bounded_input_identity(keys, values, columns, source, bound_start, bound_end, **extra):
+    keys = np.asarray(keys, dtype=np.dtype("<i8"))
+    values = _canonical_float64(values)
+    if not len(keys) or values.shape[0] != len(keys):
+        raise ValueError(f"empty or malformed migration input: {source}")
+    schema = {"source": source, "columns": list(columns), "bound_start": int(bound_start),
+              "bound_end": int(bound_end), **extra}
+    h = hashlib.sha256()
+    h.update(json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    h.update(keys.tobytes())
+    h.update(values.tobytes())
+    return {**schema, "rows": int(len(keys)), "first": int(keys[0]), "last": int(keys[-1]),
+            "sha256": h.hexdigest()}
+
+
+def migration_runner_identity():
+    import joblib
+    import pyarrow
+    import scipy
+    import sklearn
+
+    names = ("binary.py", "cross.py", "jump2s.py", "jump2s_hf.py", "mix_hf.py", "pm_outcomes.py")
+    files = {name: _sha256(HERE / name) for name in names}
+    runtime = {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__,
+               "scipy": scipy.__version__, "pyarrow": pyarrow.__version__, "sklearn": sklearn.__version__,
+               "joblib": joblib.__version__}
+    return {"files": files, "runtime": runtime,
+            "sha256": _canonical_json_sha256({"files": files, "runtime": runtime})}
+
+
+def build_migration_provenance(manifest_raw, selected_archives, read_archives, factor, dvol, klines,
+                               a_bounds, sources):
+    """Bind a proposal to complete A archives, bounded auxiliary values and the exact runner."""
+    raw = manifest_raw.encode("utf-8") if isinstance(manifest_raw, str) else bytes(manifest_raw)
+    manifest = raw.decode("utf-8")
+    digests = manifest_sha(manifest)
+    archives = []
+    for name, size in selected_archives:
+        digest = digests.get(name, "")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError(f"A archive lacks a manifest sha256: {name}")
+        archives.append({"name": str(name), "size": int(size), "sha256": digest})
+    required_names = [item["name"] for item in archives]
+    if list(read_archives) != required_names or len(set(required_names)) != len(required_names):
+        raise ValueError("migration provenance lacks the complete A archive set")
+    if set(sources or {}) != {"factor", "dvol", "klines"}:
+        raise ValueError("migration source-file provenance is incomplete")
+    a0, a1 = (ts(value) for value in a_bounds)
+    factor_columns = [str(c) for c in factor.columns]
+    factor_id = _bounded_input_identity(
+        factor.index.to_numpy(np.int64), factor.to_numpy(float), factor_columns,
+        MIGRATION_FACTOR_FILE, a0, a1, file=sources["factor"], step_s=300,
+    )
+    dvol_id = _bounded_input_identity(
+        dvol["hour"].to_numpy(np.int64), dvol[["dvol"]].to_numpy(float), ["dvol"],
+        MIGRATION_DVOL_FILE, a0 - MIGRATION_DVOL_PRE_ROLL_S, a1,
+        file=sources["dvol"], step_s=3600,
+    )
+    kline_id = _bounded_input_identity(
+        np.asarray(klines.index, dtype=np.int64), np.asarray(klines, dtype=float).reshape(-1, 1), ["close"],
+        "BTCUSDT-1m A-only source plan", a0 - MIGRATION_KLINE_PRE_ROLL_S, a1,
+        files=list(sources["klines"]), step_s=60,
+    )
+    return {
+        "format": MIGRATION_PROVENANCE_FORMAT,
+        "a_start": str(a_bounds[0]),
+        "a_end": str(a_bounds[1]),
+        "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+        "archive_coverage": {"required": len(archives), "read": len(read_archives)},
+        "archives": archives,
+        "archives_sha256": _canonical_json_sha256(archives),
+        "inputs": {"factor": factor_id, "dvol": dvol_id, "klines": kline_id},
+        "runner": migration_runner_identity(),
+    }
 
 
 def _fetch(cross, name, dest, log=print, tries=FETCH_TRIES, size=0, sha256=""):

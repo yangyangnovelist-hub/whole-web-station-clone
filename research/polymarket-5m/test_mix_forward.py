@@ -18,6 +18,43 @@ import mix_hf as M
 SLOT = 1_800_000_000
 
 
+def migration_provenance():
+    digest = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    archive = {"name": "market_parquet_2026-05-25.tar.gz", "size": 1, "sha256": digest("archive")}
+    a0, a1 = M.ts("2026-05-25"), M.ts("2026-07-16")
+    plan = M.migration_kline_plan(("2026-05-25", "2026-07-16"))
+    kline_files = ([{"kind": "monthly", "name": f"BTCUSDT-1m-{value}.zip", "sha256": digest(value)}
+                    for value in plan["months"]]
+                   + [{"kind": "daily", "name": f"BTCUSDT-1m-{value}.zip", "sha256": digest(value)}
+                      for value in plan["days"]])
+    return {
+        "format": M.MIGRATION_PROVENANCE_FORMAT,
+        "a_start": "2026-05-25", "a_end": "2026-07-16",
+        "manifest_sha256": digest("manifest"),
+        "archive_coverage": {"required": 1, "read": 1},
+        "archives": [archive], "archives_sha256": M._canonical_json_sha256([archive]),
+        "inputs": {
+            "factor": {"source": M.MIGRATION_FACTOR_FILE,
+                       "columns": ["ridge_5m", "hgb_5m", "ridge_15m", "hgb_15m"],
+                       "bound_start": a0, "bound_end": a1, "step_s": 300, "rows": (a1-a0)//300,
+                       "first": a0, "last": a1-300, "sha256": digest("factor"),
+                       "file": {"name": M.MIGRATION_FACTOR_FILE, "sha256": digest("factor-file")}},
+            "dvol": {"source": M.MIGRATION_DVOL_FILE, "columns": ["dvol"],
+                      "bound_start": a0-M.MIGRATION_DVOL_PRE_ROLL_S, "bound_end": a1, "step_s": 3600,
+                      "rows": (a1-a0+M.MIGRATION_DVOL_PRE_ROLL_S)//3600,
+                      "first": a0-M.MIGRATION_DVOL_PRE_ROLL_S, "last": a1-3600,
+                      "sha256": digest("dvol"),
+                      "file": {"name": M.MIGRATION_DVOL_FILE, "sha256": digest("dvol-file")}},
+            "klines": {"source": "BTCUSDT-1m A-only source plan", "columns": ["close"],
+                        "bound_start": a0-M.MIGRATION_KLINE_PRE_ROLL_S, "bound_end": a1, "step_s": 60,
+                        "rows": (a1-a0+M.MIGRATION_KLINE_PRE_ROLL_S)//60,
+                        "first": a0-M.MIGRATION_KLINE_PRE_ROLL_S, "last": a1-60,
+                        "sha256": digest("klines"), "files": kline_files},
+        },
+        "runner": M.migration_runner_identity(),
+    }
+
+
 def source_event(kind, seq, recv_ms, **extra):
     return {"kind": kind, "seq": seq, "recv_ms": recv_ms, "source_ts_ms": extra.pop("source_ts_ms", None),
             **extra}
@@ -552,11 +589,13 @@ def test_frozen_scorer_loads_a_legacy_migration_and_rejects_contract_tampering(t
     spec.pop("a_fingerprint_version")
     spec["a_fingerprint"] = M.legacy_a_fingerprint(A)
     frozen.write_text(json.dumps(spec), encoding="utf-8")
-    proposal = M.model_bundle_proposal(A, spec, frozen)
+    provenance = migration_provenance()
+    proposal = M.model_bundle_proposal(A, spec, frozen, provenance)
     M._atomic_json(M.model_approval_path(frozen), {
         **proposal, "format": M.MODEL_APPROVAL_FORMAT, "approved": "test fixture",
     })
-    manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
+    manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True,
+                                     migration_provenance=provenance)
 
     scorer = F.load_scorer(frozen)
     assert set(scorer.score_historical_audit_only(

@@ -226,13 +226,24 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
     model_path, manifest_path = mix.model_bundle_paths(frozen_path)
     anchor_path = mix.model_anchor_path(frozen_path)
     frozen_version = frozen.get("a_fingerprint_version", mix.A_FINGERPRINT_V1_ROUNDED)
-    approval_binding = {}
+    approval_binding, migration_binding, approval = {}, {}, None
     approval_path = mix.model_approval_path(frozen_path)
     if frozen_version == mix.A_FINGERPRINT_V1_ROUNDED:
         if not approval_path.exists():
             raise ValueError("MIX legacy model approval is missing")
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        provenance = approval.get("provenance")
+        provenance_sha = approval.get("provenance_sha256")
+        try:
+            provenance = mix._validated_migration_provenance(provenance, frozen)
+        except ValueError as error:
+            raise ValueError("MIX legacy model approval provenance mismatch") from error
+        if (approval.get("format") != mix.MODEL_APPROVAL_FORMAT
+                or provenance_sha != mix._canonical_json_sha256(provenance)):
+            raise ValueError("MIX legacy model approval provenance mismatch")
         approval_binding = {"approval_file": approval_path.name,
                             "approval_sha256": sha256_file(approval_path)}
+        migration_binding = {"migration_provenance_sha256": provenance_sha}
     if not anchor_path.exists():
         raise ValueError("MIX model anchor is missing")
     anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
@@ -246,6 +257,7 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
         "manifest_file": manifest_path.name,
         "manifest_sha256": sha256_file(manifest_path),
         **approval_binding,
+        **migration_binding,
     }
     if any(anchor.get(key) != value for key, value in anchor_files.items()):
         raise ValueError("MIX model anchor file hashes mismatch")
@@ -282,7 +294,6 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
     if any(anchor.get(key) != value for key, value in anchor_identity.items()):
         raise ValueError("MIX model anchor A identity mismatch")
     if frozen_version == mix.A_FINGERPRINT_V1_ROUNDED:
-        approval = json.loads(approval_path.read_text(encoding="utf-8"))
         approval_expected = {
             "format": mix.MODEL_APPROVAL_FORMAT,
             "frozen_file": frozen_path.name,
@@ -291,6 +302,7 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
             "canonical_a_fingerprint": canonical,
             "training_rows": manifest.get("training_rows"),
             "training_matrix_sha256": manifest.get("training_matrix_sha256"),
+            "provenance_sha256": provenance_sha,
         }
         if any(approval.get(key) != value for key, value in approval_expected.items()):
             raise ValueError("MIX legacy model approval differs from the fitted exact A identity")
@@ -302,12 +314,15 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
     if manifest.get("versions") != runtime:
         raise ValueError("MIX model runtime differs from the fitted bundle")
     identity_payload = {**identity_expected, "canonical_a_fingerprint": canonical}
+    if any(manifest.get(key) != value for key, value in migration_binding.items()):
+        raise ValueError("MIX migration provenance binding mismatch")
     audit_fields = ("training_matrix_sha256", "a_prediction_sha256", "selected_row_keys_sha256")
     if (payload.get("format") != mix.MODEL_BUNDLE_FORMAT or
             payload.get("frozen_sha256") != manifest.get("frozen_sha256") or
             payload.get("features") != manifest.get("features") or
             payload.get("rules") != manifest.get("rules") or
             payload.get("versions") != manifest.get("versions") or
+            any(payload.get(key) != value for key, value in migration_binding.items()) or
             any(payload.get(key) != value for key, value in identity_payload.items()) or
             any(payload.get(key) != manifest.get(key) for key in audit_fields)):
         raise ValueError("MIX model payload differs from its manifest")

@@ -106,6 +106,7 @@ import pandas as pd
 import jump2s as j2
 
 KLINE_URL = "https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-{}.zip"
+KLINE_DAILY_URL = "https://data.binance.vision/data/spot/daily/klines/BTCUSDT/1m/BTCUSDT-1m-{}.zip"
 KLINE_MONTHS = ("2026-04", "2026-05", "2026-06", "2026-07", "2026-08")
 MID_BEFORE_S = 0.5      # the decomposition's "before" mid: t0 - 0.5 s
 PRICE_MAX_AGE_S = 5.0   # a Binance price received longer ago than this is unknown
@@ -411,19 +412,21 @@ def download(url, dest):
     return dest
 
 
-def klines(workdir, months=KLINE_MONTHS):
+def klines(workdir, months=KLINE_MONTHS, days=(), start_s=None, end_s=None):
     """(minute closes from the Binance 1m kline zips, cached in workdir, [months that failed])."""
     workdir = Path(workdir)
     parts, missing = [], []
-    for m in months:
-        dest = workdir / f"BTCUSDT-1m-{m}.zip"
+    sources = [("monthly", value, KLINE_URL.format(value)) for value in months]
+    sources += [("daily", value, KLINE_DAILY_URL.format(value)) for value in days]
+    for kind, value, url in sources:
+        dest = workdir / f"BTCUSDT-1m-{value}.zip"
         try:
             if not dest.exists() or dest.stat().st_size == 0:
-                download(KLINE_URL.format(m), dest)
-            parts.append(j2.load_minute_klines([dest]))
+                download(url, dest)
+            parts.append(j2.load_minute_klines([dest], start_s=start_s, end_s=end_s))
         except Exception as e:  # keep going: the archives' own prints stand in for a missing month
-            print(f"klines {m}: {e!r}", flush=True)
-            missing.append(m)
+            print(f"klines {kind} {value}: {e!r}", flush=True)
+            missing.append(value)
             if dest.exists():
                 dest.unlink()
     s = pd.concat(parts) if parts else pd.Series(dtype=float)

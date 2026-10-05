@@ -58,6 +58,7 @@ Where JUMP2S.md is silent, the conservative choice made here:
 """
 from __future__ import annotations
 
+import csv
 import io
 import zipfile
 from pathlib import Path
@@ -269,11 +270,49 @@ def minute_closes(ts_s, price):
     return pd.Series(px[o], index=m).groupby(level=0, sort=True).last()
 
 
-def load_minute_klines(paths):
+def load_minute_klines(paths, start_s=None, end_s=None):
     """Binance 1m kline zips (data.binance.vision; a directory or a list of files) -> minute closes
-    indexed by minute open time (s). Open times in ms or us."""
+    indexed by minute open time (s). Open times in ms or us.  With bounds, rows are streamed in
+    timestamp order and parsing stops before the first row at ``end_s``; values after the bound are
+    never decoded (used by the A-only legacy migration)."""
     if isinstance(paths, (str, Path)) and Path(paths).is_dir():
         paths = sorted(Path(paths).glob("*-1m-*.zip"))
+    if start_s is not None or end_s is not None:
+        start_s = -np.inf if start_s is None else float(start_s)
+        end_s = np.inf if end_s is None else float(end_s)
+        if not start_s < end_s:
+            raise ValueError("invalid kline bounds")
+        times, closes, last = [], [], -np.inf
+        finished = False
+        for f in paths:
+            if finished:
+                break
+            with zipfile.ZipFile(f) as z, z.open(z.namelist()[0]) as raw:
+                reader = csv.reader(io.TextIOWrapper(raw, encoding="utf-8", newline=""))
+                for line_no, row in enumerate(reader):
+                    if not row:
+                        continue
+                    if len(row) < 5:
+                        raise ValueError("malformed bounded kline row")
+                    try:
+                        stamp = int(row[0])
+                    except (TypeError, ValueError) as error:
+                        if line_no == 0 and row[0].strip().lower() in ("open_time", "open time"):
+                            continue
+                        raise ValueError("invalid bounded kline timestamp") from error
+                    t = stamp // 1_000_000 if stamp > 10**14 else stamp // 1000
+                    if t <= last:
+                        raise ValueError("kline timestamps are not strictly monotonic")
+                    last = t
+                    if t >= end_s:
+                        finished = True
+                        break
+                    if t < start_s:
+                        continue
+                    times.append(t)
+                    closes.append(float(row[4]))
+        s = pd.Series(closes, index=np.asarray(times, dtype=np.int64), dtype=float)
+        return s[~s.index.duplicated(keep="last")].sort_index()
     parts = []
     for f in paths:
         with zipfile.ZipFile(f) as z:
