@@ -684,6 +684,7 @@ def write_strict_bundle(src, out, coin, markets):
             counts[event["kind"]] += 1
             times.append(float(event["recv_ms"]))
     clob_stats = clob_stats or {"explicit_order": False, "source_sequence_regressions": 0,
+                                "source_time_regressions": 0,
                                 "missing_source_ts": 0,
                                 "dropped_pre_epoch": 0, "dropped_epoch_mismatch": 0,
                                 "receive_time_regressions": 0, "open_epoch_at_eof": None}
@@ -695,33 +696,68 @@ def write_strict_bundle(src, out, coin, markets):
     missing_resolved_books = sorted(resolved_market_ids - paired_market_ids)
     recorder_complete = any(row.get("where") == "recorder-complete"
                             for row in iter_jsonl_strict(raw_files(src, "errors")))
-    source_ok = all(stats["explicit_order"] and stats["sequence_regressions"] == 0 and
-                    stats["receive_time_regressions"] == 0 and stats["epoch_mismatches"] == 0 and
-                    stats["dropped_outside_epoch"] == 0 and stats["open_epoch_at_eof"] is None
-                    for stats in source_stats.values())
-    source_ok = (source_ok and
-                 source_stats["spot"]["max_active_connections"] >= pt.SPOT_RACE_CONNECTIONS and
-                 source_stats["futures"]["max_active_connections"] >= pt.FUTURES_RACE_CONNECTIONS)
-    complete = bool(registry and outcomes and counts["spot_connection"] and counts["spot_trade"] and
-                    counts["spot_disconnect"] and counts["futures_connection"] and counts["futures_bbo"] and
-                    counts["futures_disconnect"] and
-                    counts["clob_connection"] and paired_market_ids and not missing_resolved_books and
-                    recorder_complete and source_ok and clob_stats["explicit_order"] and
-                    clob_stats["source_sequence_regressions"] == 0 and
-                    clob_stats["source_time_regressions"] == 0 and
-                    clob_stats["missing_source_ts"] == 0 and clob_stats["dropped_pre_epoch"] == 0 and
-                    clob_stats["dropped_epoch_mismatch"] == 0 and
-                    clob_stats["receive_time_regressions"] == 0 and clob_stats["open_epoch_at_eof"] is None)
-    receipt_race_ready = bool(
-        complete and counts["futures_trade_connection"] and counts["futures_trade"] and
-        counts["futures_trade_disconnect"] and counts["deribit_connection"] and
-        counts["deribit_quote"] and counts["deribit_disconnect"] and
-        source_stats["futures_trade"]["max_active_connections"] >= len(pt.BINANCE_FUTURES_TRADE_WS) and
-        source_stats["deribit"]["max_active_connections"] >= 1
+    source_stream_integrity = all(
+        stats["explicit_order"] and stats["sequence_regressions"] == 0
+        and stats["receive_time_regressions"] == 0 and stats["epoch_mismatches"] == 0
+        and stats["dropped_outside_epoch"] == 0 and stats["open_epoch_at_eof"] is None
+        for stats in source_stats.values()
     )
+    completeness_checks = {
+        "market_registry": bool(registry),
+        "market_outcomes": bool(outcomes),
+        "spot_connection": bool(counts["spot_connection"]),
+        "spot_trade": bool(counts["spot_trade"]),
+        "spot_disconnect": bool(counts["spot_disconnect"]),
+        "futures_connection": bool(counts["futures_connection"]),
+        "futures_bbo": bool(counts["futures_bbo"]),
+        "futures_disconnect": bool(counts["futures_disconnect"]),
+        "clob_connection": bool(counts["clob_connection"]),
+        "both_token_snapshots": bool(paired_market_ids),
+        "resolved_books_covered": not missing_resolved_books,
+        "recorder_complete": recorder_complete,
+        "source_stream_integrity": source_stream_integrity,
+        "spot_race_width": (
+            source_stats["spot"]["max_active_connections"] >= pt.SPOT_RACE_CONNECTIONS
+        ),
+        "futures_race_width": (
+            source_stats["futures"]["max_active_connections"] >= pt.FUTURES_RACE_CONNECTIONS
+        ),
+        "clob_explicit_order": bool(clob_stats["explicit_order"]),
+        "clob_source_sequence": clob_stats["source_sequence_regressions"] == 0,
+        "clob_source_time": clob_stats["source_time_regressions"] == 0,
+        "clob_source_timestamp": clob_stats["missing_source_ts"] == 0,
+        "clob_pre_epoch": clob_stats["dropped_pre_epoch"] == 0,
+        "clob_epoch_match": clob_stats["dropped_epoch_mismatch"] == 0,
+        "clob_receive_time": clob_stats["receive_time_regressions"] == 0,
+        "clob_closed_epoch": clob_stats["open_epoch_at_eof"] is None,
+    }
+    failure_reasons = sorted(key for key, passed in completeness_checks.items() if not passed)
+    complete = not failure_reasons
+    receipt_race_checks = {
+        "strict_complete": complete,
+        "futures_trade_connection": bool(counts["futures_trade_connection"]),
+        "futures_trade": bool(counts["futures_trade"]),
+        "futures_trade_disconnect": bool(counts["futures_trade_disconnect"]),
+        "deribit_connection": bool(counts["deribit_connection"]),
+        "deribit_quote": bool(counts["deribit_quote"]),
+        "deribit_disconnect": bool(counts["deribit_disconnect"]),
+        "futures_trade_race_width": (
+            source_stats["futures_trade"]["max_active_connections"]
+            >= len(pt.BINANCE_FUTURES_TRADE_WS)
+        ),
+        "deribit_race_width": source_stats["deribit"]["max_active_connections"] >= 1,
+    }
+    receipt_race_failure_reasons = sorted(
+        key for key, passed in receipt_race_checks.items() if not passed
+    )
+    receipt_race_ready = not receipt_race_failure_reasons
     manifest = {"schema": STRICT_SCHEMA, "coin": coin, "run_id": os.environ.get("GITHUB_RUN_ID"),
                 "collector_region": os.environ.get("POLYMARKET_COLLECTOR_REGION", "unknown"),
                 "complete": complete, "receipt_race_ready": receipt_race_ready,
+                "completeness_checks": completeness_checks,
+                "failure_reasons": failure_reasons,
+                "receipt_race_checks": receipt_race_checks,
+                "receipt_race_failure_reasons": receipt_race_failure_reasons,
                 "started_ms": min(times) if times else None,
                 "ended_ms": max(times) if times else None, "counts": counts,
                 "recorder_complete": recorder_complete, "source_integrity": source_stats,
@@ -730,6 +766,8 @@ def write_strict_bundle(src, out, coin, markets):
                 "unresolved_market_ids": unresolved_market_ids, "clob_integrity": clob_stats}
     (strict / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return {"strict_ready": complete, "receipt_race_ready": receipt_race_ready,
+            "strict_failure_reasons": failure_reasons,
+            "receipt_race_failure_reasons": receipt_race_failure_reasons,
             **{f"strict_{key}": value for key, value in counts.items()}}
 
 

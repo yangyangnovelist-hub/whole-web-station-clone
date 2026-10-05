@@ -124,6 +124,7 @@ jobs:
           from pathlib import Path
           from h_replay_archive import validate_standard_artifact
           d = Path("${{ runner.temp }}/paper/bundle-btc/strict")
+          print((d / "manifest.json").read_text(encoding="utf-8"))
           checked = validate_standard_artifact(d)
           print(json.dumps(checked["manifest"], sort_keys=True))
           PY

@@ -350,7 +350,10 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     trader.record_binance_close("deribit", "closed 1000", S0 * 1000 + 14)
     trader.rec.close()
 
-    assert rc.build(tmp_path, tmp_path / "bundle")["strict_ready"] is False
+    incomplete = rc.build(tmp_path, tmp_path / "bundle")
+    assert incomplete["strict_ready"] is False
+    assert incomplete["strict_failure_reasons"] == ["recorder_complete"]
+    assert incomplete["receipt_race_failure_reasons"] == ["strict_complete"]
     trader.record_complete(S0 * 1000 + 60)
     trader.rec.close()
     counts = rc.build(tmp_path, tmp_path / "bundle")
@@ -360,6 +363,10 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     assert manifest["schema"] == "polymarket-5m-strict-replay-v2"
     assert manifest["complete"] is True
     assert manifest["receipt_race_ready"] is True
+    assert manifest["failure_reasons"] == []
+    assert manifest["receipt_race_failure_reasons"] == []
+    assert all(manifest["completeness_checks"].values())
+    assert all(manifest["receipt_race_checks"].values())
     assert counts["receipt_race_ready"] is True
     assert manifest["counts"]["spot_bbo"] == 1
     assert manifest["counts"]["futures_bbo"] == 1
