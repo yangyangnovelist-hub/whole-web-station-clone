@@ -157,6 +157,48 @@ def test_failed_clob_check_is_not_cached_as_undelayed():
     assert any("itode" in n for n in notes)
 
 
+def test_day_extremes_uses_daily_candles_for_whole_days():
+    """A hit market started months ago: whole UTC days come from 1d candles, the partial first and
+    last days from 1m candles, and the high / low equal the brute-force 1m answer."""
+    from urllib.parse import parse_qs, urlparse
+    t0 = 1765331280  # 2025-12-10 01:48 UTC, not a day boundary
+    now = 1791167322.9  # 2026-10-05 02:28:42.9 UTC
+    m0 = t0 // 60 * 60
+
+    def one_min(o):  # deterministic synthetic 1m candle opening at o (s)
+        x = (o // 60) % 9973
+        base = 90_000 + (x * 37) % 5000
+        return [o * 1000, str(base), str(base + (x % 7) * 10 + 1), str(base - (x % 11) * 10 - 1), str(base), "1"]
+
+    calls = []
+
+    def fetch(url):
+        q = parse_qs(urlparse(url).query)
+        iv, ms, end = q["interval"][0], int(q["startTime"][0]), int(q["endTime"][0])
+        calls.append(iv)
+        step = 60 if iv == "1m" else 86_400
+        o = -(-ms // (step * 1000)) * step
+        out = []
+        while o * 1000 <= end and len(out) < 1000:
+            if iv == "1m":
+                out.append(one_min(o))
+            else:
+                ks = [one_min(t) for t in range(o, o + 86_400, 60)]
+                out.append([o * 1000, ks[0][1], str(max(float(k[2]) for k in ks)),
+                            str(min(float(k[3]) for k in ks)), ks[-1][4], "1"])
+            o += step
+        return out
+
+    hi, lo = ld.day_extremes(fetch, t0, now)
+    brute = [one_min(o) for o in range(m0, int(now) // 60 * 60 + 60, 60) if o >= t0]
+    assert hi == max(float(k[2]) for k in brute) and lo == min(float(k[3]) for k in brute)
+    assert len(calls) <= 6 and calls.count("1d") >= 1
+    # a range inside one UTC day stays on 1m candles
+    calls.clear()
+    assert ld.day_extremes(fetch, 1791160000, now)[0] is not None and set(calls) == {"1m"}
+    assert ld.day_extremes(fetch, now + 10, now) == (None, None)
+
+
 def test_fixed_limit_and_live_minimum_order_shape():
     import fill_rate as fr
     assert fr.pilot_order_shares(0.49) == 5.0

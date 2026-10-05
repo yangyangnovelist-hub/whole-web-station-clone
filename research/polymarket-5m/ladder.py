@@ -63,6 +63,7 @@ CLOB_MARKET = "https://clob.polymarket.com/clob-markets/{cid}"
 # Binance's market-data-only REST host (api.binance.com answers 451 on US runners).
 KLINE = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime={ms}&limit=1"
 KLINES = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime={ms}&endTime={end}&limit=1000"
+KLINES_1D = "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&startTime={ms}&endTime={end}&limit=1000"
 MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september",
           "october", "november", "december")
 DAILY = {"above": "bitcoin-above-on-{d}", "range": "bitcoin-price-on-{d}",
@@ -295,19 +296,37 @@ def reference(m, fetch, now):
     return None, None
 
 
-def day_extremes(fetch, start, now):
-    """(high, low) of the Binance BTCUSDT 1m candles from `start` up to `now` (the open candle so far
-    included); (None, None) before `start`."""
-    if now < start:
-        return None, None
-    hi, lo, ms, end = -np.inf, np.inf, int(start) * 1000, int(now * 1000)
+def _hilo(fetch, url, ms, end, step):
+    """(high, low) over the Binance BTCUSDT candles of `url` opening in [ms, end] (epoch ms), paged
+    by 1000; (-inf, inf) when there are none."""
+    hi, lo = -np.inf, np.inf
     while ms <= end:
-        ks = fetch(KLINES.format(ms=ms, end=end)) or []
+        ks = fetch(url.format(ms=ms, end=end)) or []
         for k in ks:
             hi, lo = max(hi, float(k[2])), min(lo, float(k[3]))
         if len(ks) < 1000:
             break
-        ms = int(ks[-1][0]) + 60_000
+        ms = int(ks[-1][0]) + step
+    return hi, lo
+
+
+def day_extremes(fetch, start, now):
+    """(high, low) of the Binance BTCUSDT 1m candles from `start` up to `now` (the open candle so far
+    included); (None, None) before `start`. Whole UTC days in between come from 1d candles (a 1d
+    candle's high / low is that of its 1m candles), so a weekly / monthly / yearly hit market costs a
+    few requests instead of one per 1000 minutes."""
+    if now < start:
+        return None, None
+    s_ms, end = int(start) * 1000, int(now * 1000)
+    d0 = -(-int(start) // 86400) * 86400 * 1000   # first UTC midnight at or after start
+    d1 = int(now // 86400) * 86400 * 1000         # last UTC midnight at or before now
+    if d1 - d0 >= 86_400_000:
+        parts = [_hilo(fetch, KLINES, s_ms, d0 - 1, 60_000),
+                 _hilo(fetch, KLINES_1D, d0, d1 - 1, 86_400_000),
+                 _hilo(fetch, KLINES, d1, end, 60_000)]
+    else:
+        parts = [_hilo(fetch, KLINES, s_ms, end, 60_000)]
+    hi, lo = max(p[0] for p in parts), min(p[1] for p in parts)
     if not np.isfinite(hi):
         raise ValueError(f"no 1m candles from {start}")
     return hi, lo
