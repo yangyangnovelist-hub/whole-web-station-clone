@@ -470,6 +470,15 @@ def _strict_binance_stream(records, source, symbol, stats):
                     raise ValueError("malformed strict Deribit quote") from exc
                 if not 0 < bid < ask:
                     raise ValueError("crossed strict Deribit quote")
+            elif source == "deribit" and kind == "dvol":
+                try:
+                    volatility = float(row["volatility"])
+                    event.update(kind="deribit_dvol", source_ts_ms=float(row["timestamp"]),
+                                 volatility=volatility, index_name=str(row["index_name"]))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("malformed strict Deribit DVOL") from exc
+                if not math.isfinite(volatility) or volatility <= 0 or event["index_name"] != "btc_usd":
+                    raise ValueError("invalid strict Deribit DVOL")
             else:
                 raise ValueError(f"unknown {source} strict source row")
         source_rank = {"spot": 0, "futures": 1, "futures_trade": 2, "deribit": 3}[source]
@@ -665,7 +674,8 @@ def write_strict_bundle(src, out, coin, markets):
               "spot_connection": 0, "spot_trade": 0, "spot_bbo": 0, "spot_disconnect": 0,
               "futures_connection": 0, "futures_bbo": 0, "futures_disconnect": 0,
               "futures_trade_connection": 0, "futures_trade": 0, "futures_trade_disconnect": 0,
-              "deribit_connection": 0, "deribit_quote": 0, "deribit_disconnect": 0,
+              "deribit_connection": 0, "deribit_quote": 0, "deribit_dvol": 0,
+              "deribit_disconnect": 0,
               "clob_connection": 0, "clob_snapshot": 0, "clob_price_change": 0, "clob_error": 0}
     times = []
     source_stats = {source: _source_stats()

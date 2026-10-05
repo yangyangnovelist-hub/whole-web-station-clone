@@ -347,6 +347,14 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
             },
         },
     }), S0 * 1000 + 13.25)
+    trader.on_deribit_quote(json.dumps({
+        "jsonrpc": "2.0", "method": "subscription", "params": {
+            "channel": "deribit_volatility_index.btc_usd", "data": {
+                "timestamp": S0 * 1000 + 10, "volatility": 58.25,
+                "index_name": "btc_usd",
+            },
+        },
+    }), S0 * 1000 + 13.5)
     trader.record_binance_close("deribit", "closed 1000", S0 * 1000 + 14)
     trader.rec.close()
 
@@ -372,6 +380,7 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
     assert manifest["counts"]["futures_bbo"] == 1
     assert manifest["counts"]["futures_trade"] == 1
     assert manifest["counts"]["deribit_quote"] == 1
+    assert manifest["counts"]["deribit_dvol"] == 1
     assert manifest["counts"]["clob_snapshot"] == 2
     assert manifest["counts"]["clob_price_change"] == 2
     assert archive.validate_standard_artifact(strict)["counts"] == manifest["counts"]
@@ -381,12 +390,14 @@ def test_strict_bundle_keeps_bookticker_dual_token_l2_and_connection_epochs(tmp_
         "spot_connection", "spot_trade", "spot_bbo", "spot_disconnect",
         "futures_connection", "futures_bbo", "futures_disconnect",
         "futures_trade_connection", "futures_trade", "futures_trade_disconnect",
-        "deribit_connection", "deribit_quote", "deribit_disconnect",
+        "deribit_connection", "deribit_quote", "deribit_dvol", "deribit_disconnect",
     ]
     assert source[2]["source_ts_ms"] is None and source[2]["bid"] == 80000.4
     assert source[5]["source_ts_ms"] == S0 * 1000 + 5
     assert source[8]["source_ts_ms"] == S0 * 1000 + 7
     assert source[11]["source_ts_ms"] == S0 * 1000 + 9
+    assert source[12]["source_ts_ms"] == S0 * 1000 + 10
+    assert source[12]["volatility"] == 58.25
 
     clob = list(archive.iter_normalized_events(strict / "clob_events.jsonl.gz", family="clob"))
     assert [row["kind"] for row in clob] == [

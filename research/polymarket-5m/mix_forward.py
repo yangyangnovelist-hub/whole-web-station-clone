@@ -37,13 +37,15 @@ FREEZE_SCHEMA = "polymarket-mix-control-forward-v1"
 STRATEGY_ID = "mix-r1-jump-z-settle-control"
 DIRECT_MODEL_FEATURES = tuple(mix.FEATURES[:13])
 TREND_MODEL_FEATURES = ("trend_agree", "trend_side", "vr60")
-ABSENT_MODEL_FEATURES = ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15", "dvol_rv")
+AUX_MODEL_FEATURES = ("dvol_rv",)
+ABSENT_MODEL_FEATURES = ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15")
 
 
 def audit_model_features(manifest: Mapping[str, Any],
                          signal_tape_profile: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     """Describe whether each frozen MIX input can be rebuilt without future or external data."""
-    if tuple(mix.FEATURES) != DIRECT_MODEL_FEATURES + TREND_MODEL_FEATURES + ABSENT_MODEL_FEATURES:
+    if tuple(mix.FEATURES) != (DIRECT_MODEL_FEATURES + TREND_MODEL_FEATURES +
+                               ABSENT_MODEL_FEATURES + AUX_MODEL_FEATURES):
         raise ValueError("MIX feature contract no longer covers the frozen feature order")
     counts = manifest.get("counts") or {}
     start, end = manifest.get("started_ms"), manifest.get("ended_ms")
@@ -73,14 +75,16 @@ def audit_model_features(manifest: Mapping[str, Any],
         "trend_agree": (("aggregate_trade_tape",), float(mix.MIGRATION_KLINE_PRE_ROLL_S), 0),
         "trend_side": (("aggregate_trade_tape",), float(mix.MIGRATION_KLINE_PRE_ROLL_S), 0),
         "vr60": (("aggregate_trade_tape",), float((j2.VR_N + 2) * 60), 0),
+        "dvol_rv": (("aggregate_trade_tape", "deribit_dvol"),
+                    float(max(mix.RV_N, mix.MIGRATION_DVOL_PRE_ROLL_S)), mix.RV_MIN),
     }
     available = {"aggregate_trade_tape": tape_records > 0,
-                 "dual_token_l2": books, "market_mapping": markets}
+                 "dual_token_l2": books, "market_mapping": markets,
+                 "deribit_dvol": int(counts.get("deribit_dvol", 0)) >= 2}
     features: dict[str, dict[str, Any]] = {}
     for name in mix.FEATURES:
         if name in ABSENT_MODEL_FEATURES:
-            source = ("walk_forward_factor_prediction" if name.startswith("f_")
-                      else "closed_deribit_dvol_hourly_candle")
+            source = "walk_forward_factor_prediction"
             features[name] = {
                 "status": "absent_source", "inputs": [source], "required_pre_roll_s": None,
                 "reason": f"standard strict artifact does not record {source}",
@@ -456,6 +460,56 @@ class ReceiptSigma:
         return math.sqrt(max(variance, 0.0))
 
 
+class ReceiptDvolRv:
+    """DVOL minus receipt-clock rv30, using only a proven-closed Deribit source hour."""
+
+    def __init__(self, window: int = mix.RV_N, minimum: int = mix.RV_MIN,
+                 forward_fill_s: int = mix.GAP_FILL_S) -> None:
+        self.window = int(window)
+        self.minimum = int(minimum)
+        self.forward_fill_s = int(forward_fill_s)
+        self.grid = ReceiptSigma(self.window, self.minimum, self.forward_fill_s)
+        self.current_hour: Optional[int] = None
+        self.current_value = math.nan
+        self.closed_value = math.nan
+        self.closed_valid_until_ms = -math.inf
+        self.latest_receive_ms = -math.inf
+
+    def reset_spot(self) -> None:
+        self.grid = ReceiptSigma(self.window, self.minimum, self.forward_fill_s)
+
+    def reset_dvol_current(self) -> None:
+        self.current_hour = None
+        self.current_value = math.nan
+
+    def update_spot(self, receive_ms: float, price: float) -> None:
+        if math.isfinite(price) and price > 0:
+            self.grid.update(receive_ms / 1_000.0, math.log(price))
+
+    def update_dvol(self, receive_ms: float, source_ms: float, volatility: float) -> None:
+        if receive_ms + 1e-9 < self.latest_receive_ms:
+            raise ValueError("MIX DVOL receipt time regressed")
+        self.latest_receive_ms = receive_ms
+        if not (math.isfinite(source_ms) and math.isfinite(volatility) and volatility > 0):
+            return
+        hour = int(math.floor(source_ms / 3_600_000.0) * 3_600)
+        if self.current_hour is None:
+            self.current_hour, self.current_value = hour, volatility
+        elif hour == self.current_hour:
+            self.current_value = volatility
+        elif hour > self.current_hour:
+            self.closed_value = self.current_value
+            self.closed_valid_until_ms = (self.current_hour + 7_200) * 1_000.0
+            self.current_hour, self.current_value = hour, volatility
+
+    def value(self, receive_ms: float) -> float:
+        rv30 = self.grid.sigma(receive_ms / 1_000.0) * math.sqrt(mix.SEC_YEAR)
+        if not (math.isfinite(self.closed_value) and math.isfinite(rv30) and
+                receive_ms <= self.closed_valid_until_ms + 1e-6):
+            return math.nan
+        return self.closed_value / 100.0 - rv30
+
+
 @dataclass(frozen=True)
 class ControlCandidate:
     slot: int
@@ -469,6 +523,7 @@ class ControlCandidate:
     receipt_move_2s: float = math.nan
     direct_features: tuple[tuple[str, float], ...] = ()
     trend_features: tuple[tuple[str, float], ...] = ()
+    aux_features: tuple[tuple[str, float], ...] = ()
 
 
 class ReceiptJumpTrigger:
@@ -713,6 +768,7 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
     last_change_ms: dict[tuple[str, str], float] = {}
     trigger = ReceiptJumpTrigger(config)
     trend = ReceiptTrend()
+    dvol_rv = ReceiptDvolRv()
     counters: Counter = Counter()
     rows: list[dict[str, Any]] = []
     pending: list[tuple[float, int, ControlCandidate, float, int]] = []
@@ -791,6 +847,10 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
                 name: (value if math.isfinite(value) else None)
                 for name, value in candidate.trend_features
             },
+            "model_features_aux": {
+                name: (value if math.isfinite(value) else None)
+                for name, value in candidate.aux_features
+            },
             "day": datetime.fromtimestamp(candidate.receive_ms / 1_000.0, timezone.utc).date().isoformat(),
         })
 
@@ -819,8 +879,10 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
         else:
             values = {name: math.nan for name in DIRECT_MODEL_FEATURES}
         trend_values = trend.features(candidate, candidate.direction)
+        aux_values = {"dvol_rv": dvol_rv.value(candidate.receive_ms)}
         candidate = replace(candidate, direct_features=tuple(values.items()),
-                            trend_features=tuple(trend_values.items()))
+                            trend_features=tuple(trend_values.items()),
+                            aux_features=tuple(aux_values.items()))
         if not connected:
             for latency in config.fill_latencies_ms:
                 evaluate(candidate, float(latency), active_epoch, "clob_disconnected")
@@ -851,14 +913,25 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
         if kind == "spot_connection" or kind == "spot_disconnect":
             trigger.reset()
             trend.reset()
+            dvol_rv.reset_spot()
             counters[kind] += 1
             continue
         if kind == "spot_trade":
             counters["spot_trades"] += 1
             trend.update(event_receive_ms, float(event["source_ts_ms"]), float(event["price"]))
+            dvol_rv.update_spot(event_receive_ms, float(event["price"]))
             deferred_candidates.append(
                 trigger.update(event_receive_ms, float(event["source_ts_ms"]), float(event["price"]))
             )
+            continue
+        if kind == "deribit_connection" or kind == "deribit_disconnect":
+            dvol_rv.reset_dvol_current()
+            counters[kind] += 1
+            continue
+        if kind == "deribit_dvol":
+            dvol_rv.update_dvol(event_receive_ms, float(event["source_ts_ms"]),
+                                float(event["volatility"]))
+            counters["deribit_dvol"] += 1
             continue
         if kind != "clob_batch":
             continue

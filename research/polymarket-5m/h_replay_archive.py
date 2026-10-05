@@ -103,7 +103,7 @@ def iter_normalized_events(path, *, family):
         "source": {"spot_connection", "spot_trade", "spot_bbo", "spot_disconnect",
                    "futures_connection", "futures_bbo", "futures_disconnect",
                    "futures_trade_connection", "futures_trade", "futures_trade_disconnect",
-                   "deribit_connection", "deribit_quote", "deribit_disconnect"},
+                   "deribit_connection", "deribit_quote", "deribit_dvol", "deribit_disconnect"},
         "clob": {"clob_connection", "clob_snapshot", "clob_price_change", "clob_error"},
     }
     if family not in kinds:
@@ -145,6 +145,12 @@ def iter_normalized_events(path, *, family):
                     source_timestamp = float(row["source_ts_ms"])
                     if not math.isfinite(source_timestamp):
                         raise ValueError(f"invalid source_ts_ms for {kind}")
+            if family == "source" and kind == "deribit_dvol":
+                volatility = float(row.get("volatility", math.nan))
+                source_timestamp = float(row.get("source_ts_ms", math.nan))
+                if (not math.isfinite(volatility) or volatility <= 0 or
+                        not math.isfinite(source_timestamp) or row.get("index_name") != "btc_usd"):
+                    raise ValueError("invalid deribit_dvol")
             if family == "source":
                 stream = str(row["stream"])
                 belongs_to_stream = kind.startswith(stream + "_") or \

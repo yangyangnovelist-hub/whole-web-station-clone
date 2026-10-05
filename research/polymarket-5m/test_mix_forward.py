@@ -172,6 +172,7 @@ def test_strict_control_replay_fills_five_direct_shares_and_scores_afterward():
     assert row["model_features_trend"] == {
         "trend_agree": None, "trend_side": None, "vr60": None,
     }
+    assert row["model_features_aux"] == {"dvol_rv": None}
 
 
 def test_control_replay_requires_only_the_bought_token_ask():
@@ -313,7 +314,8 @@ def _mix_feature_manifest(hours=5.0):
         "schema": "polymarket-5m-strict-replay-v2",
         "started_ms": 1_800_000_000_000.0,
         "ended_ms": 1_800_000_000_000.0 + hours * 3_600_000.0,
-        "counts": {"markets": 10, "spot_trade": 10_000, "clob_snapshot": 20},
+        "counts": {"markets": 10, "spot_trade": 10_000, "clob_snapshot": 20,
+                   "deribit_dvol": 100},
         "markets_with_both_token_snapshots": 10,
     }
 
@@ -335,7 +337,9 @@ def test_model_feature_audit_covers_the_frozen_schema_and_blocks_absent_inputs()
     for name in F.TREND_MODEL_FEATURES:
         assert audit["features"][name]["status"] == "implemented_and_causal"
         assert name not in audit["blocking_features"]
-    for name in ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15", "dvol_rv"):
+    assert audit["features"]["dvol_rv"]["status"] == "implemented_and_causal"
+    assert "dvol_rv" not in audit["blocking_features"]
+    for name in ("f_ridge5", "f_hgb5", "f_ridge15", "f_hgb15"):
         assert audit["features"][name]["status"] == "absent_source"
         assert name in audit["blocking_features"]
 
@@ -359,6 +363,11 @@ def test_model_feature_audit_covers_the_frozen_schema_and_blocks_absent_inputs()
     sparse_profile.update(max_gap_ms=18_000_000.0, longest_contiguous_s=0.0)
     sparse = F.audit_model_features(_mix_feature_manifest(), sparse_profile)
     assert sparse["features"]["jump_z"]["status"] == "insufficient_pre_roll"
+
+    no_dvol = _mix_feature_manifest()
+    no_dvol["counts"]["deribit_dvol"] = 0
+    missing = F.audit_model_features(no_dvol, _mix_signal_profile())
+    assert missing["features"]["dvol_rv"]["status"] == "absent_source"
 
 
 def test_direct_model_features_are_receipt_causal_and_side_relative():
@@ -453,6 +462,30 @@ def test_receipt_trend_features_match_the_frozen_closed_minute_definition():
     assert values["trend_agree"] == np.sign(candidate.move) * np.sign(expected_ret4h[0])
     assert values["trend_side"] == np.sign(expected_ret4h[0])
     assert values["vr60"] == pytest.approx(expected_vr60[0], rel=1e-12, abs=1e-12)
+
+
+def test_receipt_dvol_rv_uses_only_the_last_hour_closed_by_a_received_update():
+    feature = F.ReceiptDvolRv(window=4, minimum=3, forward_fill_s=20)
+    base_s = SLOT // 3_600 * 3_600
+    price = 60_000.0
+    for second in range(6):
+        price *= math.exp((1 if second % 2 else -1) * 1e-4)
+        feature.update_spot((base_s + 3_594 + second) * 1_000.0, price)
+
+    feature.update_dvol((base_s + 3_599.0) * 1_000.0, (base_s + 3_599.0) * 1_000.0, 60.0)
+    assert math.isnan(feature.value((base_s + 3_599.5) * 1_000.0))
+    # Seeing the first update in the next source hour proves the previous hourly close.
+    feature.update_dvol((base_s + 3_600.1) * 1_000.0, (base_s + 3_600.0) * 1_000.0, 99.0)
+    rv = feature.grid.sigma(base_s + 3_600.1) * math.sqrt(M.SEC_YEAR)
+    assert feature.value((base_s + 3_600.1) * 1_000.0) == pytest.approx(0.60 - rv)
+
+    class FiniteGrid:
+        @staticmethod
+        def sigma(timestamp_s):
+            return 0.01
+
+    feature.grid = FiniteGrid()
+    assert math.isnan(feature.value((base_s + 7_201.0) * 1_000.0))
 
 
 def test_scorer_exposes_historical_audit_only_api():

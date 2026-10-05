@@ -149,6 +149,13 @@ def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
     }})
     trader.on_deribit_quote(quote, 1_011.5)
     trader.on_deribit_quote(quote, 1_011.6)
+    dvol = json.dumps({"jsonrpc": "2.0", "method": "subscription", "params": {
+        "channel": "deribit_volatility_index.btc_usd", "data": {
+            "timestamp": 904, "volatility": 58.25, "index_name": "btc_usd",
+        },
+    }})
+    trader.on_deribit_quote(dvol, 1_011.7)
+    trader.on_deribit_quote(dvol, 1_011.8)
     trader.record_binance_close("deribit", "closed 1000", 1_012)
     trader.rec.close()
 
@@ -179,8 +186,9 @@ def test_live_recorder_keeps_bookticker_and_explicit_clob_epoch(tmp_path):
     assert futures_trades[1]["t"] == 13 and futures_trades[1]["T"] == 901
     deribit = [json.loads(line) for line in
                gzip.open(next(tmp_path.glob("raw/*/deribit-strict.jsonl.gz")), "rt")]
-    assert [row["kind"] for row in deribit] == ["connection", "quote", "disconnect"]
+    assert [row["kind"] for row in deribit] == ["connection", "quote", "dvol", "disconnect"]
     assert deribit[1]["timestamp"] == 903 and deribit[1]["bid"] == 80000.1
+    assert deribit[2]["timestamp"] == 904 and deribit[2]["volatility"] == 58.25
     assert pt.binance_stream_names(("btc",)) == (
         "btcusdt@aggTrade", "btcusdt@trade", "btcusdt@bookTicker",
     )

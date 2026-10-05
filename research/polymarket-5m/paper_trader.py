@@ -55,6 +55,7 @@ BINANCE_FUTURES_TRADE_WS = (
     "wss://fstream.binance.com/market/stream?streams=btcusdt@trade",
 )
 DERIBIT_WS = "wss://www.deribit.com/ws/api/v2"
+DERIBIT_CHANNELS = ("quote.BTC-PERPETUAL", "deribit_volatility_index.btc_usd")
 SPOT_RACE_CONNECTIONS = 3
 FUTURES_RACE_CONNECTIONS = 2
 SLUG = "{coin}-updown-5m-{start}"
@@ -515,14 +516,27 @@ class LiveTrader:
         })
 
     def on_deribit_quote(self, text, recv_ms, conn_id=0):
-        """Live BTC perpetual quote only; the venue's batched trade channel is deliberately absent."""
+        """Record timestamped BTC quote and DVOL frames from one London websocket."""
         msg = json.loads(text)
         params = msg.get("params") or {}
-        if params.get("channel") != "quote.BTC-PERPETUAL" or not isinstance(params.get("data"), dict):
+        channel, data = params.get("channel"), params.get("data")
+        if not isinstance(data, dict):
             return
-        data = params["data"]
-        required = ("timestamp", "best_bid_price", "best_ask_price")
-        if any(data.get(key) is None for key in required):
+        if channel == "deribit_volatility_index.btc_usd":
+            if any(data.get(key) is None for key in ("timestamp", "volatility")) or \
+                    data.get("index_name") != "btc_usd":
+                return
+            key = ("dvol", data["timestamp"], data["volatility"])
+            if not self._first_binance_frame("deribit", key):
+                return
+            self._binance_record("deribit", {
+                "kind": "dvol", "recv_ms": recv_ms, "timestamp": data["timestamp"],
+                "volatility": data["volatility"], "index_name": data["index_name"],
+                "conn_id": conn_id,
+            })
+            return
+        if channel != "quote.BTC-PERPETUAL" or any(
+                data.get(key) is None for key in ("timestamp", "best_bid_price", "best_ask_price")):
             return
         key = ("quote", data["timestamp"], data["best_bid_price"], data["best_ask_price"])
         if not self._first_binance_frame("deribit", key):
@@ -798,7 +812,7 @@ class LiveTrader:
                     }))
                     await ws.send(json.dumps({
                         "jsonrpc": "2.0", "id": 2, "method": "public/subscribe",
-                        "params": {"channels": ["quote.BTC-PERPETUAL"]},
+                        "params": {"channels": list(DERIBIT_CHANNELS)},
                     }))
                     try:
                         async for text in ws:
