@@ -53,6 +53,7 @@ jobs:
           PY
 
       - name: Record and paper-trade (no orders)
+        id: rec
         if: steps.cfg.outputs.enabled == 'true'
         run: |
           python paper_trader.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} \
@@ -180,7 +181,9 @@ jobs:
           retention-days: 30
 
       - name: Start the next run
-        if: success() && steps.cfg.outputs.enabled == 'true'
+        # the chain follows the recording itself: a later audit step failing (e.g. a strict replay
+        # manifest marked incomplete) keeps the job red but must not stop the paper recordings
+        if: ${{ !cancelled() && steps.cfg.outputs.enabled == 'true' && steps.rec.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run polymarket-forward.yml --ref "${{ github.ref_name }}"

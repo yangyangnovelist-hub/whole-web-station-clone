@@ -10,5 +10,5 @@
     "xrp",
     "doge"
   ],
-  "kick": "2026-09-30 21:42 restart with the Binance aggTrade feed (test F) and the recorder fixes"
+  "kick": "2026-10-05 01:20 restart: run 37230483105 recorded and uploaded, but the strict replay check failed (incomplete manifest) and skipped 'Start the next run'"
 }
