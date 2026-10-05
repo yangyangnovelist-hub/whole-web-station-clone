@@ -2,7 +2,7 @@
 
 事先写死（10 月 1 日 02:00 UTC，数据还没录）：2026-10-01 02:30 UTC 起开始的 BTC 5m 市场；规则同检验 F（币安逐笔成交 2σ 触发、0.3 秒后按卖一、公平价 − 卖一 − 手续费 ≥ 12¢、每个市场第一笔、持有到结算），另外：触发前 2 秒内 Up 中间价已经朝要买的方向动了 3¢ 或更多（或 2 秒前没有报价）就跳过这个候选。这个条件在 5 月 25 日–7 月 15 日上定（没动的 +5.5¢、已动的 +0.4¢），之后两段核对（B +7.8/+6.1¢，C +13.1/+3.1¢）。按触发时间取前 600 笔判定一次，EV > 0 且精确 p < 0.025 才算通过。数据处理同检验 C、D、F。
 
-录制段 21 个，成交 226 笔。
+录制段 22 个，成交 239 笔。
 
 录制段备注（跳过的和断线检查）：
 
@@ -23,9 +23,10 @@
 - btc 37179397738: 443 candidates dropped because the CLOB socket closed between the quote and the order (70 disconnects in the recording; test C counts its judged lag only)
 - btc 37194238626: 678 candidates dropped because the CLOB socket closed between the quote and the order (78 disconnects in the recording; test C counts its judged lag only)
 - btc 37230483105: 2881 candidates dropped because the CLOB socket closed between the quote and the order (179 disconnects in the recording; test C counts its judged lag only)
+- btc 37250413580: 2490 candidates dropped because the CLOB socket closed between the quote and the order (161 disconnects in the recording; test C counts its judged lag only)
 
 | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |
 |---|---|---|---|---|---|
-| 226 | 53.5% | 0.421 | +10.22¢ | 0.0001 | 46 |
+| 239 | 52.3% | 0.419 | +9.19¢ | 0.0008 | 48 |
 
-检验 G（前 600 笔）：目前 226 笔，不到 600 笔，不判定。
+检验 G（前 600 笔）：目前 239 笔，不到 600 笔，不判定。
