@@ -130,10 +130,35 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
     frozen_path = Path(frozen_path)
     frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
     model_path, manifest_path = mix.model_bundle_paths(frozen_path)
+    anchor_path = mix.model_anchor_path(frozen_path)
+    frozen_version = frozen.get("a_fingerprint_version", mix.A_FINGERPRINT_V1_ROUNDED)
+    approval_binding = {}
+    approval_path = mix.model_approval_path(frozen_path)
+    if frozen_version == mix.A_FINGERPRINT_V1_ROUNDED:
+        if not approval_path.exists():
+            raise ValueError("MIX legacy model approval is missing")
+        approval_binding = {"approval_file": approval_path.name,
+                            "approval_sha256": sha256_file(approval_path)}
+    if not anchor_path.exists():
+        raise ValueError("MIX model anchor is missing")
+    anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
+    frozen_sha = sha256_file(frozen_path)
+    anchor_files = {
+        "format": mix.MODEL_ANCHOR_FORMAT,
+        "frozen_file": frozen_path.name,
+        "frozen_sha256": frozen_sha,
+        "model_file": model_path.name,
+        "model_sha256": sha256_file(model_path),
+        "manifest_file": manifest_path.name,
+        "manifest_sha256": sha256_file(manifest_path),
+        **approval_binding,
+    }
+    if any(anchor.get(key) != value for key, value in anchor_files.items()):
+        raise ValueError("MIX model anchor file hashes mismatch")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("format") != mix.MODEL_BUNDLE_FORMAT:
         raise ValueError("unknown MIX model bundle format")
-    if manifest.get("frozen_sha256") != sha256_file(frozen_path):
+    if manifest.get("frozen_sha256") != frozen_sha:
         raise ValueError("MIX frozen sha256 mismatch")
     if manifest.get("features") != frozen.get("features"):
         raise ValueError("MIX feature schema differs from the frozen study")
@@ -141,8 +166,40 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
                     for rule in frozen.get("rules", [])]
     if manifest.get("rules") != frozen_rules:
         raise ValueError("MIX model rules differ from the frozen study")
-    if manifest.get("a_fingerprint") != frozen.get("a_fingerprint"):
-        raise ValueError("MIX A fingerprint mismatch")
+    match_kind = ("legacy_v1_rounded" if frozen_version == mix.A_FINGERPRINT_V1_ROUNDED
+                  else "canonical_v2_exact" if frozen_version == mix.A_FINGERPRINT_V2_EXACT else None)
+    canonical = manifest.get("canonical_a_fingerprint")
+    identity_expected = {
+        "a_fingerprint": frozen.get("a_fingerprint"),
+        "a_fingerprint_version": frozen_version,
+        "frozen_a_fingerprint": frozen.get("a_fingerprint"),
+        "frozen_a_fingerprint_version": frozen_version,
+        "canonical_a_fingerprint_version": mix.A_FINGERPRINT_V2_EXACT,
+        "a_identity_match": match_kind,
+    }
+    if (match_kind is None or any(manifest.get(key) != value for key, value in identity_expected.items())
+            or not isinstance(canonical, str) or len(canonical) != 64
+            or any(char not in "0123456789abcdef" for char in canonical)
+            or (frozen_version == mix.A_FINGERPRINT_V2_EXACT
+                and canonical != frozen.get("a_fingerprint"))):
+        raise ValueError("MIX A identity mismatch")
+    anchor_identity = {**identity_expected, "canonical_a_fingerprint": canonical,
+                       "training_matrix_sha256": manifest.get("training_matrix_sha256")}
+    if any(anchor.get(key) != value for key, value in anchor_identity.items()):
+        raise ValueError("MIX model anchor A identity mismatch")
+    if frozen_version == mix.A_FINGERPRINT_V1_ROUNDED:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        approval_expected = {
+            "format": mix.MODEL_APPROVAL_FORMAT,
+            "frozen_file": frozen_path.name,
+            "frozen_sha256": frozen_sha,
+            **identity_expected,
+            "canonical_a_fingerprint": canonical,
+            "training_rows": manifest.get("training_rows"),
+            "training_matrix_sha256": manifest.get("training_matrix_sha256"),
+        }
+        if any(approval.get(key) != value for key, value in approval_expected.items()):
+            raise ValueError("MIX legacy model approval differs from the fitted exact A identity")
     if manifest.get("model_file") != model_path.name or manifest.get("model_sha256") != sha256_file(model_path):
         raise ValueError("MIX model bundle sha256 mismatch")
     payload = joblib.load(model_path)
@@ -150,11 +207,15 @@ def load_scorer(frozen_path: str | Path) -> FrozenMixScorer:
                "joblib": joblib.__version__}
     if manifest.get("versions") != runtime:
         raise ValueError("MIX model runtime differs from the fitted bundle")
+    identity_payload = {**identity_expected, "canonical_a_fingerprint": canonical}
+    audit_fields = ("training_matrix_sha256", "a_prediction_sha256", "selected_row_keys_sha256")
     if (payload.get("format") != mix.MODEL_BUNDLE_FORMAT or
             payload.get("frozen_sha256") != manifest.get("frozen_sha256") or
             payload.get("features") != manifest.get("features") or
             payload.get("rules") != manifest.get("rules") or
-            payload.get("versions") != manifest.get("versions")):
+            payload.get("versions") != manifest.get("versions") or
+            any(payload.get(key) != value for key, value in identity_payload.items()) or
+            any(payload.get(key) != manifest.get(key) for key in audit_fields)):
         raise ValueError("MIX model payload differs from its manifest")
     return FrozenMixScorer(tuple(manifest["features"]), tuple(manifest["rules"]), payload["models"])
 

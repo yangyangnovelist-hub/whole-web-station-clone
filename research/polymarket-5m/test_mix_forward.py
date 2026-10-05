@@ -260,6 +260,8 @@ def test_clob_update_at_exact_match_time_is_seen_even_if_spot_arrives_first():
 
 
 def test_frozen_scorer_rejects_missing_features_and_tampering(tmp_path, monkeypatch):
+    import joblib
+
     monkeypatch.setattr(M, "MODELS", ("ridge",))
     monkeypatch.setattr(M, "POLICIES", ["settle"])
     monkeypatch.setattr(M, "QS", (0.2,))
@@ -287,17 +289,79 @@ def test_frozen_scorer_rejects_missing_features_and_tampering(tmp_path, monkeypa
         scorer.score({"jump_z": 1.0})
 
     _, manifest_path = M.model_bundle_paths(frozen)
-    original_manifest = json.loads(manifest_path.read_text())
+    original_manifest_bytes = manifest_path.read_bytes()
+    original_manifest = json.loads(original_manifest_bytes)
     wrong_runtime = copy.deepcopy(original_manifest)
     wrong_runtime["versions"]["sklearn"] = "0.0"
     manifest_path.write_text(json.dumps(wrong_runtime))
-    with pytest.raises(ValueError, match="runtime differs"):
+    with pytest.raises(ValueError, match="anchor"):
         F.load_scorer(frozen)
-    manifest_path.write_text(json.dumps(original_manifest))
+    manifest_path.write_bytes(original_manifest_bytes)
 
-    model_path, _ = M.model_bundle_paths(frozen)
-    model_path.write_bytes(model_path.read_bytes() + b"tampered")
-    with pytest.raises(ValueError, match="model bundle sha256"):
+    wrong_identity = copy.deepcopy(original_manifest)
+    wrong_identity["canonical_a_fingerprint"] = "0" * 64
+    manifest_path.write_text(json.dumps(wrong_identity))
+    with pytest.raises(ValueError, match="anchor"):
+        F.load_scorer(frozen)
+    manifest_path.write_bytes(original_manifest_bytes)
+
+    wrong_training_audit = copy.deepcopy(original_manifest)
+    wrong_training_audit["training_matrix_sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(wrong_training_audit))
+    with pytest.raises(ValueError, match="anchor"):
+        F.load_scorer(frozen)
+    manifest_path.write_bytes(original_manifest_bytes)
+
+    model_path, manifest_path = M.model_bundle_paths(frozen)
+    payload = joblib.load(model_path)
+    payload["training_matrix_sha256"] = "f" * 64
+    joblib.dump(payload, model_path, compress=3)
+    coordinated = copy.deepcopy(original_manifest)
+    coordinated["training_matrix_sha256"] = "f" * 64
+    coordinated["model_sha256"] = F.sha256_file(model_path)
+    manifest_path.write_text(json.dumps(coordinated), encoding="utf-8")
+    monkeypatch.setattr(joblib, "load", lambda _: pytest.fail("untrusted joblib loaded before anchor check"))
+    with pytest.raises(ValueError, match="anchor"):
+        F.load_scorer(frozen)
+
+
+def test_frozen_scorer_loads_a_legacy_migration_and_rejects_contract_tampering(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "MODELS", ("ridge",))
+    monkeypatch.setattr(M, "POLICIES", ["settle"])
+    monkeypatch.setattr(M, "QS", (0.2,))
+    rng = np.random.default_rng(17)
+    rows = []
+    for day in pd.date_range("2026-05-25", "2026-07-15", freq="D", tz="UTC"):
+        n = 60
+        start = int(day.timestamp()) + 3600
+        values = {name: rng.normal(size=n) for name in M.FEATURES}
+        pnl = 0.1 * values["jump_z"] + rng.normal(0, 0.02, n)
+        rows.append(pd.DataFrame({
+            "day": day.strftime("%Y-%m-%d"), "market": f"m{start}", "start": start,
+            "t": start + np.arange(n), "kind": "jump", "side": 1, "jdir": 1,
+            "price": 0.4, "ask_size": 10.0, "won": 1, **values,
+            "pnl_settle": pnl, "hold_settle": 10.0, "how_settle": 0, "sh20_settle": 10.0,
+        }))
+    A = M.compact(pd.concat(rows, ignore_index=True)[M.META + M.FEATURES + M.label_cols()])
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    spec.pop("a_fingerprint_version")
+    spec["a_fingerprint"] = M.legacy_a_fingerprint(A)
+    frozen.write_text(json.dumps(spec), encoding="utf-8")
+    proposal = M.model_bundle_proposal(A, spec, frozen)
+    M._atomic_json(M.model_approval_path(frozen), {
+        **proposal, "format": M.MODEL_APPROVAL_FORMAT, "approved": "test fixture",
+    })
+    manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
+
+    scorer = F.load_scorer(frozen)
+    assert set(scorer.score({name: float(A.iloc[0][name]) for name in M.FEATURES})) == {"R1"}
+
+    _, manifest_path = M.model_bundle_paths(frozen)
+    changed = copy.deepcopy(manifest)
+    changed["frozen_a_fingerprint_version"] = M.A_FINGERPRINT_V2_EXACT
+    manifest_path.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(ValueError, match="anchor"):
         F.load_scorer(frozen)
 
 
@@ -307,13 +371,20 @@ def test_scorer_rejects_feature_order_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "QS", (0.2,))
     # This test exercises the manifest gate without fitting another full synthetic study.
     frozen = tmp_path / "cross-mix-frozen.json"
-    frozen.write_text(json.dumps({"features": M.FEATURES, "rules": [], "a_fingerprint": "x"}))
+    frozen.write_text(json.dumps({"features": M.FEATURES, "rules": [], "a_fingerprint": "x",
+                                  "a_fingerprint_version": M.A_FINGERPRINT_V2_EXACT}))
     model_path, manifest_path = M.model_bundle_paths(frozen)
     model_path.write_bytes(b"not-loaded-before-hash-and-schema-pass")
-    manifest = {"format": "polymarket-mix-models-v1", "model_file": model_path.name,
+    manifest = {"format": M.MODEL_BUNDLE_FORMAT, "model_file": model_path.name,
                 "model_sha256": F.sha256_file(model_path), "frozen_sha256": F.sha256_file(frozen),
                 "a_fingerprint": "x", "features": list(reversed(M.FEATURES)), "rules": []}
     manifest_path.write_text(json.dumps(manifest))
+    M.model_anchor_path(frozen).write_text(json.dumps({
+        "format": M.MODEL_ANCHOR_FORMAT, "frozen_file": frozen.name,
+        "frozen_sha256": F.sha256_file(frozen), "model_file": model_path.name,
+        "model_sha256": F.sha256_file(model_path), "manifest_file": manifest_path.name,
+        "manifest_sha256": F.sha256_file(manifest_path),
+    }))
     with pytest.raises(ValueError, match="feature schema"):
         F.load_scorer(frozen)
 

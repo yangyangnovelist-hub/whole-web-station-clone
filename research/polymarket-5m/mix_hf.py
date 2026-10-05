@@ -200,6 +200,7 @@ import jump2s_hf as hf
 
 HERE = Path(__file__).resolve().parent
 INPUTS = HERE / "real" / "mix-inputs"
+CANONICAL_STUDY_FROZEN = HERE / "real" / "cross-mix-frozen.json"
 
 # --------------------------------------------------------------------------- MIX.md constants
 JUMP_BP = 2.0
@@ -963,7 +964,12 @@ def make_model(name):
     return HistGradientBoostingRegressor(**HGB_PARAMS)
 
 
-MODEL_BUNDLE_FORMAT = "polymarket-mix-models-v1"
+A_FINGERPRINT_V1_ROUNDED = "mix-a-v1-rounded-all-rows"
+A_FINGERPRINT_V2_EXACT = "mix-a-v2-exact-model-rows"
+MODEL_BUNDLE_FORMAT = "polymarket-mix-models-v2"
+MODEL_ANCHOR_FORMAT = "polymarket-mix-model-anchor-v1"
+MODEL_PROPOSAL_FORMAT = "polymarket-mix-model-proposal-v1"
+MODEL_APPROVAL_FORMAT = "polymarket-mix-model-approval-v1"
 
 
 def model_bundle_paths(frozen_path):
@@ -972,6 +978,30 @@ def model_bundle_paths(frozen_path):
     suffix = "frozen.json"
     prefix = frozen_path.name[:-len(suffix)] if frozen_path.name.endswith(suffix) else frozen_path.stem + "-"
     return frozen_path.with_name(prefix + "models.joblib"), frozen_path.with_name(prefix + "models.json")
+
+
+def model_anchor_path(frozen_path):
+    """Small version-controlled trust anchor for the fitted model and its manifest."""
+    frozen_path = Path(frozen_path)
+    suffix = "frozen.json"
+    prefix = frozen_path.name[:-len(suffix)] if frozen_path.name.endswith(suffix) else frozen_path.stem + "-"
+    return frozen_path.with_name(prefix + "model-anchor.json")
+
+
+def model_proposal_path(frozen_path):
+    """Machine-produced exact-A identity for review; it never authorizes fitting by itself."""
+    frozen_path = Path(frozen_path)
+    suffix = "frozen.json"
+    prefix = frozen_path.name[:-len(suffix)] if frozen_path.name.endswith(suffix) else frozen_path.stem + "-"
+    return frozen_path.with_name(prefix + "model-proposal.json")
+
+
+def model_approval_path(frozen_path):
+    """Separately committed authorization that pins the exact A identity for a legacy migration."""
+    frozen_path = Path(frozen_path)
+    suffix = "frozen.json"
+    prefix = frozen_path.name[:-len(suffix)] if frozen_path.name.endswith(suffix) else frozen_path.stem + "-"
+    return frozen_path.with_name(prefix + "model-approval.json")
 
 
 def _atomic_json(path, value):
@@ -992,7 +1022,54 @@ def _bundle_a_hashes(models, rules, train, X):
     return prediction_sha, selected_keys_sha
 
 
-def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=None):
+def _a_identity_fields(identity):
+    return {
+        "a_fingerprint": identity["frozen_a_fingerprint"],
+        "a_fingerprint_version": identity["frozen_a_fingerprint_version"],
+        "frozen_a_fingerprint": identity["frozen_a_fingerprint"],
+        "frozen_a_fingerprint_version": identity["frozen_a_fingerprint_version"],
+        "canonical_a_fingerprint": identity["canonical_a_fingerprint"],
+        "canonical_a_fingerprint_version": A_FINGERPRINT_V2_EXACT,
+        "a_identity_match": identity["match_kind"],
+    }
+
+
+def model_bundle_proposal(A, spec, frozen_path):
+    """Deterministic exact-A record for human/code review before a legacy fitted-model migration."""
+    frozen_path = Path(frozen_path)
+    segments = set(segment_of(A["start"].to_numpy(float))) if len(A) else set()
+    if segments - {"A"}:
+        raise ValueError("model proposal accepts only A rows")
+    identity = a_identity(spec, A)
+    if not identity["matches"]:
+        raise ValueError("A fingerprint differs from the frozen study")
+    train, training_matrix = _canonical_training_data(A)
+    return {
+        "format": MODEL_PROPOSAL_FORMAT,
+        "frozen_file": frozen_path.name,
+        "frozen_sha256": _sha256(frozen_path),
+        **_a_identity_fields(identity),
+        "training_rows": int(len(train)),
+        "training_matrix_sha256": hashlib.sha256(training_matrix.tobytes()).hexdigest(),
+    }
+
+
+def validate_model_approval(A, spec, frozen_path):
+    """Require a separately committed exact-A approval; proposals never authorize themselves."""
+    proposal = model_bundle_proposal(A, spec, frozen_path)
+    path = model_approval_path(frozen_path)
+    if not path.exists():
+        raise ValueError(f"MIX legacy model approval is missing: {path}")
+    approval = json.loads(path.read_text(encoding="utf-8"))
+    expected = {**proposal, "format": MODEL_APPROVAL_FORMAT}
+    bad = [key for key, value in expected.items() if approval.get(key) != value]
+    if bad:
+        raise ValueError("MIX model approval does not match the approved exact A: " + ", ".join(bad))
+    return approval
+
+
+def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=None, anchor_path=None, *,
+                        allow_legacy_migration=False):
     """Fit the frozen rules on A only and write an immutable, hash-verified inference bundle."""
     import joblib
     import sklearn
@@ -1001,11 +1078,24 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
     default_model, default_manifest = model_bundle_paths(frozen_path)
     model_path = Path(model_path or default_model)
     manifest_path = Path(manifest_path or default_manifest)
+    default_anchor = model_anchor_path(frozen_path)
+    anchor_path = Path(anchor_path or (default_anchor if (model_path == default_model and manifest_path == default_manifest)
+                                      else manifest_path.with_name(manifest_path.stem + "-anchor.json")))
     segments = set(segment_of(A["start"].to_numpy(float))) if len(A) else set()
     if segments - {"A"}:
         raise ValueError("model export accepts only A rows")
-    if fingerprint(A) != spec.get("a_fingerprint"):
+    identity = a_identity(spec, A)
+    if not identity["matches"]:
         raise ValueError("A fingerprint differs from the frozen study")
+    identity_fields = _a_identity_fields(identity)
+    approval_binding = {}
+    if (identity["frozen_a_fingerprint_version"] == A_FINGERPRINT_V1_ROUNDED
+            and not allow_legacy_migration):
+        raise ValueError("legacy A identity requires an explicit one-time migration")
+    if identity["frozen_a_fingerprint_version"] == A_FINGERPRINT_V1_ROUNDED:
+        validate_model_approval(A, spec, frozen_path)
+        approval_path = model_approval_path(frozen_path)
+        approval_binding = {"approval_file": approval_path.name, "approval_sha256": _sha256(approval_path)}
     frozen_sha = _sha256(frozen_path)
     train, training_matrix = _canonical_training_data(A)
     X = training_matrix[:, :len(FEATURES)]
@@ -1013,14 +1103,32 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
     frozen_rules = [{key: rule[key] for key in ("id", "policy", "model", "q", "cut")}
                     for rule in spec.get("rules", [])]
 
-    if model_path.exists() or manifest_path.exists():
-        if not (model_path.exists() and manifest_path.exists()):
+    artifacts = (model_path, manifest_path, anchor_path)
+    if any(path.exists() for path in artifacts):
+        if not all(path.exists() for path in artifacts):
             raise ValueError("partial MIX model bundle")
+        anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
+        anchor_expected = {
+            "format": MODEL_ANCHOR_FORMAT,
+            "frozen_file": frozen_path.name,
+            "frozen_sha256": frozen_sha,
+            **identity_fields,
+            "model_file": model_path.name,
+            "model_sha256": _sha256(model_path),
+            "manifest_file": manifest_path.name,
+            "manifest_sha256": _sha256(manifest_path),
+            **approval_binding,
+            "training_rows": int(len(train)),
+            "training_matrix_sha256": training_matrix_sha,
+        }
+        bad_anchor = [key for key, value in anchor_expected.items() if anchor.get(key) != value]
+        if bad_anchor:
+            raise ValueError("existing MIX model anchor does not match canonical A: " + ", ".join(bad_anchor))
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         expected = {
             "format": MODEL_BUNDLE_FORMAT,
             "frozen_sha256": frozen_sha,
-            "a_fingerprint": spec.get("a_fingerprint"),
+            **identity_fields,
             "features": list(FEATURES),
             "model_file": model_path.name,
             "rules": frozen_rules,
@@ -1039,7 +1147,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
         payload_expected = {
             "format": MODEL_BUNDLE_FORMAT,
             "frozen_sha256": frozen_sha,
-            "a_fingerprint": spec.get("a_fingerprint"),
+            **identity_fields,
             "features": list(FEATURES),
             "rules": frozen_rules,
             "training_matrix_sha256": training_matrix_sha,
@@ -1063,7 +1171,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
     payload = {
         "format": MODEL_BUNDLE_FORMAT,
         "frozen_sha256": frozen_sha,
-        "a_fingerprint": spec.get("a_fingerprint"),
+        **identity_fields,
         "features": list(FEATURES),
         "rules": frozen_rules,
         "versions": versions,
@@ -1083,7 +1191,7 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
         "model_sha256": _sha256(model_path),
         "frozen_file": frozen_path.name,
         "frozen_sha256": frozen_sha,
-        "a_fingerprint": spec.get("a_fingerprint"),
+        **identity_fields,
         "features": list(FEATURES),
         "rules": frozen_rules,
         "training_rows": int(len(train)),
@@ -1093,6 +1201,21 @@ def export_model_bundle(A, spec, frozen_path, model_path=None, manifest_path=Non
         "versions": versions,
     }
     _atomic_json(manifest_path, manifest)
+    anchor = {
+        "format": MODEL_ANCHOR_FORMAT,
+        "made": pd.Timestamp.now(tz="UTC").isoformat(),
+        "frozen_file": frozen_path.name,
+        "frozen_sha256": frozen_sha,
+        **identity_fields,
+        "model_file": model_path.name,
+        "model_sha256": _sha256(model_path),
+        "manifest_file": manifest_path.name,
+        "manifest_sha256": _sha256(manifest_path),
+        **approval_binding,
+        "training_rows": int(len(train)),
+        "training_matrix_sha256": training_matrix_sha,
+    }
+    _atomic_json(anchor_path, anchor)
     return manifest
 
 
@@ -1285,6 +1408,49 @@ def fingerprint(rowsA):
     return h.hexdigest()
 
 
+def legacy_a_fingerprint(rowsA):
+    """Exact v1 freeze identity: all A rows, rounded keys to 3 and values to 5 decimals.
+
+    The first committed MIX freeze predates the exact canonical identity above.  Keeping this function
+    byte-for-byte equivalent to that historical algorithm lets the old immutable freeze be verified once;
+    the exported bundle then records and enforces the exact v2 identity.
+    """
+    if not len(rowsA):
+        return "empty"
+    r = rowsA.sort_values(["market", "t", "side", "kind"], kind="stable")
+    h = hashlib.sha256()
+    h.update("\n".join(r["market"].astype(str) + "|" + r["kind"].astype(str)).encode())
+    h.update(np.round(r[["start", "t", "side"]].to_numpy(float), 3).tobytes())
+    h.update(np.round(r[FEATURES + [f"pnl_{policy}" for policy in POLICIES]].to_numpy(float), 5).tobytes())
+    return h.hexdigest()
+
+
+def a_identity(spec, rowsA):
+    """Verify A under the fingerprint contract stored by the immutable freeze and expose exact v2 identity."""
+    version = spec.get("a_fingerprint_version", A_FINGERPRINT_V1_ROUNDED)
+    frozen = spec.get("a_fingerprint")
+    canonical = fingerprint(rowsA)
+    if version == A_FINGERPRINT_V1_ROUNDED:
+        observed = legacy_a_fingerprint(rowsA)
+        match_kind = "legacy_v1_rounded"
+    elif version == A_FINGERPRINT_V2_EXACT:
+        observed = canonical
+        match_kind = "canonical_v2_exact"
+    else:
+        raise ValueError(f"unknown A fingerprint version: {version!r}")
+    row_count_matches = int(spec.get("a_rows") or 0) == int(len(canonical_a_rows(rowsA)))
+    matches = bool(frozen and observed == frozen and row_count_matches)
+    return {
+        "matches": matches,
+        "match_kind": match_kind if matches else "mismatch",
+        "frozen_a_fingerprint": frozen,
+        "frozen_a_fingerprint_version": version,
+        "observed_a_fingerprint": observed,
+        "canonical_a_fingerprint": canonical,
+        "training_rows": int(len(canonical_a_rows(rowsA))),
+    }
+
+
 def candidates(A, log=print):
     """Every (policy, model, q) on A out of sample: cut, n, mean, se; plus the A oos scores."""
     A, training_matrix = _canonical_training_data(A)
@@ -1355,7 +1521,8 @@ def freeze(A, path, log=print, full=True):
                 a_oos_from=pd.Timestamp(min(b0 for b0, _, o in a_blocks() if o), unit="s").strftime("%Y-%m-%d"),
                 features=FEATURES, policies=POLICIES, models={"ridge": {"alpha": RIDGE_ALPHA}, "hgb": HGB_PARAMS},
                 qs=QS, min_a_trades=MIN_A_TRADES, b_alpha=B_ALPHA, c_alpha=C_ALPHA, a_rows=int(len(A)),
-                a_fingerprint=fp, n_candidates=int(len(cand)), n_eligible=int(len(ok)), rules=rules,
+                a_fingerprint=fp, a_fingerprint_version=A_FINGERPRINT_V2_EXACT,
+                n_candidates=int(len(cand)), n_eligible=int(len(ok)), rules=rules,
                 candidates=json.loads(cand.to_json(orient="records")))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(spec, indent=1, ensure_ascii=False, default=float), encoding="utf-8")
@@ -1367,20 +1534,27 @@ def _norm(x):
     return json.loads(json.dumps(x, default=float))
 
 
-def spec_problems(spec, A):
-    """Why a frozen spec cannot give a verdict on the A rows A (all kinds) of this run; [] when it can."""
+def spec_setting_problems(spec):
+    """Frozen-study problems independent of the current A rows."""
     out = []
     if not spec.get("full", False):
         out.append("冻结文件来自试跑（那次没读全 A 段的日档）")
     if not spec.get("a_rows") or spec.get("a_fingerprint") == "empty":
         out.append("冻结时 A 段没有行")
-    if spec.get("a_fingerprint") != fingerprint(A):
-        out.append("A 段数据与冻结时不同（指纹不符）")
     want = dict(segments=SEGMENTS, b_alpha=B_ALPHA, c_alpha=C_ALPHA, policies=POLICIES, features=FEATURES, qs=QS,
                 min_a_trades=MIN_A_TRADES, models={"ridge": {"alpha": RIDGE_ALPHA}, "hgb": HGB_PARAMS})
     diff = [k for k, v in want.items() if _norm(spec.get(k)) != _norm(v)]
     if diff:
         out.append("冻结文件的设定与现在的代码不同（" + "、".join(diff) + "）")
+    return out
+
+
+def spec_problems(spec, A):
+    """Why a frozen spec cannot give a verdict on current A; legacy migration never unlocks B/C."""
+    out = spec_setting_problems(spec)
+    exact = spec.get("a_fingerprint_version") == A_FINGERPRINT_V2_EXACT
+    if not exact or spec.get("a_fingerprint") != fingerprint(A):
+        out.append("A 段数据与冻结时不同（指纹不符）")
     return out
 
 
@@ -1505,13 +1679,106 @@ def out_paths(out):
     return out, out.with_name(f"{prefix}frozen.json"), out.with_name(f"{prefix}rows.csv.gz")
 
 
-def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget_s=BUDGET_S, log=None):
+def migration_preflight(out):
+    """Validate the immutable study and return its frozen A date bounds before any history is read."""
+    frozen_path = out_paths(out)[1]
+    if not frozen_path.exists():
+        raise ValueError("bundle migration requires the existing immutable freeze")
+    spec = json.loads(frozen_path.read_text(encoding="utf-8"))
+    problems = spec_setting_problems(spec)
+    if problems:
+        raise ValueError("frozen study cannot migrate: " + "; ".join(problems))
+    segments = spec.get("segments") or []
+    if len(segments) != 3 or len(segments[0]) != 3 or segments[0][0] != "A":
+        raise ValueError("frozen study has invalid A segment bounds")
+    return str(segments[0][1]), str(segments[0][2])
+
+
+def select_archives(every, days=None, names=None, bundle_only=False, bundle_proposal=False,
+                    migration_a_bounds=None):
+    """Choose source archives; one-time bundle migration is structurally unable to read B or C."""
+    if bundle_only and bundle_proposal:
+        raise ValueError("bundle-only and bundle-proposal are mutually exclusive")
+    migration = bundle_only or bundle_proposal
+    if migration and (days or names):
+        raise ValueError("bundle-only cannot be combined with days or names")
+    arcs = list(every)
+    if migration:
+        a0, a1 = migration_a_bounds or (SEGMENTS[0][1], SEGMENTS[0][2])
+        return [item for item in arcs if a0 <= item[0][15:25] < a1]
+    if names:
+        return [item for item in arcs if item[0] in set(names)]
+    if days:
+        return arcs[-int(days):]
+    return arcs
+
+
+def export_bundle_only(rows, out, full_a=False, log=print):
+    """One-time legacy migration using complete A only; never score B or C and never rewrite the freeze."""
+    if not full_a:
+        raise ValueError("bundle migration requires complete A coverage")
+    if len(rows):
+        rows = rows.drop_duplicates(["market", "kind", "t", "side"]).reset_index(drop=True)
+    segments = set(segment_of(rows["start"].to_numpy(float))) if len(rows) else set()
+    if not rows.size or segments != {"A"}:
+        raise ValueError("bundle migration accepts only A rows")
+    frozen_path = out_paths(out)[1]
+    if not frozen_path.exists():
+        raise ValueError("bundle migration requires the existing immutable freeze")
+    spec = json.loads(frozen_path.read_text(encoding="utf-8"))
+    problems = spec_setting_problems(spec)
+    if problems:
+        raise ValueError("frozen study cannot migrate: " + "; ".join(problems))
+    identity = a_identity(spec, rows)
+    if not identity["matches"]:
+        raise ValueError("A fingerprint differs from the frozen study")
+    manifest = export_model_bundle(rows, spec, frozen_path, allow_legacy_migration=True)
+    log(f"A-only model bundle anchored at {model_anchor_path(frozen_path)}")
+    return manifest
+
+
+def write_bundle_proposal(rows, out, full_a=False, log=print):
+    """Write the deterministic exact-A proposal only; this file cannot authorize model fitting."""
+    if not full_a:
+        raise ValueError("bundle proposal requires complete A coverage")
+    if len(rows):
+        rows = rows.drop_duplicates(["market", "kind", "t", "side"]).reset_index(drop=True)
+    segments = set(segment_of(rows["start"].to_numpy(float))) if len(rows) else set()
+    if not rows.size or segments != {"A"}:
+        raise ValueError("bundle proposal accepts only A rows")
+    frozen_path = out_paths(out)[1]
+    if not frozen_path.exists():
+        raise ValueError("bundle proposal requires the existing immutable freeze")
+    spec = json.loads(frozen_path.read_text(encoding="utf-8"))
+    problems = spec_setting_problems(spec)
+    if problems:
+        raise ValueError("frozen study cannot propose a migration: " + "; ".join(problems))
+    proposal = model_bundle_proposal(rows, spec, frozen_path)
+    path = model_proposal_path(frozen_path)
+    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != proposal:
+        raise ValueError("existing MIX model proposal differs from canonical A")
+    _atomic_json(path, proposal)
+    log(f"A-only exact identity proposed at {path}; no model was fitted")
+    return proposal
+
+
+def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget_s=BUDGET_S, log=None,
+        bundle_only=False, bundle_proposal=False):
     """Every daily archive (the last `days`; or the archives in `names`), per-day shards in the workdir,
-    then the freeze on A, B / C, the report and the traded rows."""
+    then the freeze on A, B / C, the report and the traded rows. ``bundle_only`` reads every A archive and
+    exits after anchoring the fitted A-only model; ``bundle_proposal`` only writes the exact-A identity;
+    neither migration mode selects B or C archives."""
     import traceback
 
     import cross
     log = log or (lambda s: print(s, flush=True))
+    if bundle_only and bundle_proposal:
+        raise ValueError("bundle-only and bundle-proposal are mutually exclusive")
+    committed_frozen = out_paths(out)[1]
+    historical_freezes = {committed_frozen.resolve(), Path(CANONICAL_STUDY_FROZEN).resolve()}
+    if not (bundle_only or bundle_proposal) and any(path.exists() for path in historical_freezes):
+        raise ValueError("MIX historical study is frozen; use forward replay or the A-only migration workflow")
+    migration_a_bounds = migration_preflight(out) if (bundle_only or bundle_proposal) else None
     if dataset and dataset != cross.DS:
         cross.set_dataset(dataset)
     workdir = Path(workdir)
@@ -1525,11 +1792,8 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
     manifest = cross.fetch("MANIFEST.txt").decode()
     sha = manifest_sha(manifest)
     every = [a for a in cross.archives(manifest) if ARCHIVE_DAYS[0] <= a[0][15:25] < ARCHIVE_DAYS[1]]
-    arcs = every
-    if names:
-        arcs = [a for a in arcs if a[0] in set(names)]
-    elif days:
-        arcs = arcs[-int(days):]
+    arcs = select_archives(every, days=days, names=names, bundle_only=bundle_only,
+                           bundle_proposal=bundle_proposal, migration_a_bounds=migration_a_bounds)
     infos, failed, skipped, carry, own = [], [], [], None, []
     files = []
     for name, size in arcs:
@@ -1577,6 +1841,10 @@ def run(workdir, out, days=None, dataset=None, names=None, inputs=INPUTS, budget
     cov = coverage([a[0][15:25] for a in every], [i["day"] for i in infos])
     log("coverage: " + ", ".join(f"{k} {v[0]}/{v[1]}" for k, v in cov.items()))
     full_a = cov["A"][0] == cov["A"][1] > 0
+    if bundle_proposal:
+        return write_bundle_proposal(rows, out, full_a=full_a, log=log)
+    if bundle_only:
+        return export_bundle_only(rows, out, full_a=full_a, log=log)
     complete = all(v[0] == v[1] for v in cov.values())
     return analyze(rows, out, infos, failed, skipped, len(arcs), missing, ds=cross.DS, log=log, full_a=full_a,
                    complete=complete, trial_frozen=workdir / TRIAL_FROZEN, coverage=cov)
@@ -1655,13 +1923,16 @@ def analyze(rows, out, infos=(), failed=(), skipped=(), n_arcs=0, missing=(), ds
     C closed); complete: every A, B and C archive was read (C may open)."""
     out, frozen_path, rows_path = out_paths(out)
     lock_path = lockbox_path(frozen_path)
+    trial = not full_a
+    historical_freezes = {frozen_path.resolve(), Path(CANONICAL_STUDY_FROZEN).resolve()}
+    if any(path.exists() for path in historical_freezes):
+        raise ValueError("MIX historical study is frozen; B/C cannot be read or recomputed")
     out.parent.mkdir(parents=True, exist_ok=True)
     if len(rows):
         rows = rows.drop_duplicates(["market", "kind", "t", "side"]).reset_index(drop=True)
         seg = segment_of(rows["start"].to_numpy(float))
         rows = rows[seg != ""].reset_index(drop=True)
     seg = segment_of(rows["start"].to_numpy(float)) if len(rows) else np.array([], dtype=object)
-    trial = not full_a
     # C is opened only when every archive was read (none skipped for time, none failed)
     complete_c = bool(complete) and not trial and \
         not any(SEGMENTS[2][1] <= d < SEGMENTS[2][2] for d in list(skipped) + list(failed))

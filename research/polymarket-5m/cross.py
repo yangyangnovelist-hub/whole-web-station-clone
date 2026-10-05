@@ -2520,6 +2520,12 @@ def main(argv=None):
         if name == "jitter":
             p.add_argument("--gap-ms", type=int, default=2000, help="0: a row for every candidate print")
             p.add_argument("--shard", help="i/n: every n-th daily archive from the i-th (0-based)")
+        if name == "mix":
+            migration = p.add_mutually_exclusive_group()
+            migration.add_argument("--bundle-proposal", action="store_true",
+                                   help="read complete A only and write its exact identity; fit no model")
+            migration.add_argument("--bundle-only", action="store_true",
+                                   help="read approved complete A only and anchor the fitted model; never read B/C")
         if name in ("gated", "hourly"):
             p.add_argument("--health", action="store_true", help="only sane, recently changed book snapshots")
         if name == "gated":
@@ -2569,7 +2575,8 @@ def main(argv=None):
         jump2s_hf.run(a.workdir, a.out, a.days, dataset=DS)  # JUMP2S.md; as a script this module is not `cross`
     elif a.cmd == "mix":
         import mix_hf
-        mix_hf.run(a.workdir, a.out, a.days, dataset=DS)  # MIX.md; as a script this module is not `cross`
+        mix_hf.run(a.workdir, a.out, a.days, dataset=DS, bundle_only=a.bundle_only,
+                   bundle_proposal=a.bundle_proposal)
     elif a.cmd == "regime":
         import regime_hf
         regime_hf.run(a.workdir, a.out, a.days, dataset=DS)  # REGIME.md; as a script this module is not `cross`

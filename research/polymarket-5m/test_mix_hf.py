@@ -412,11 +412,19 @@ def synth_rows(seed=0, flip_bc=False):
     return M.compact(pd.concat(parts, ignore_index=True)[M.META + M.FEATURES + M.label_cols()])
 
 
+def approve_legacy_bundle(A, spec, frozen):
+    proposal = M.model_bundle_proposal(A, spec, frozen)
+    approval = {**proposal, "format": M.MODEL_APPROVAL_FORMAT, "approved": "test fixture"}
+    M._atomic_json(M.model_approval_path(frozen), approval)
+    return approval
+
+
 @pytest.fixture
-def fast_models(monkeypatch):
+def fast_models(monkeypatch, tmp_path):
     monkeypatch.setattr(M, "MODELS", ("ridge",))
     monkeypatch.setattr(M, "POLICIES", ["settle", "tk5", "tk10"])
     monkeypatch.setattr(M, "QS", (0.2, 0.1))
+    monkeypatch.setattr(M, "CANONICAL_STUDY_FROZEN", tmp_path / "canonical-study-not-created.json")
 
 
 def test_freeze_is_written_from_A_alone_before_B_and_C_are_read(tmp_path, monkeypatch, fast_models):
@@ -451,14 +459,12 @@ def test_freeze_is_written_from_A_alone_before_B_and_C_are_read(tmp_path, monkey
     f1.pop("made"), f2.pop("made")
     assert f1 == f2
     assert not res2[0]["b_pass"] and not res2[0]["c_open"] and "C" not in res2[0]["stats"]
-    # an existing freeze is not rewritten; with other A rows C stays closed
+    # Once a committed study has frozen, the historical path is closed rather than re-reading B/C.
     other = synth_rows(seed=1)
     before = (tmp_path / "a" / "mix-frozen.json").read_text()
-    _, spec3, res3 = M.analyze(other, tmp_path / "a" / "mix-hf.md", log=lambda s: None)
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.analyze(other, tmp_path / "a" / "mix-hf.md", log=lambda s: None)
     assert (tmp_path / "a" / "mix-frozen.json").read_text() == before
-    assert not any(o["c_open"] for o in res3)
-    text = (tmp_path / "a" / "mix-hf.md").read_text(encoding="utf-8")
-    assert "冻结文件已存在" in text and "指纹不符" in text and "这不是判定" in text
     assert (tmp_path / "a" / "mix-rows.csv.gz").exists()
     tr = pd.read_csv(tmp_path / "b" / "mix-rows.csv.gz")
     assert set(tr["segment"]) == {"A", "B"} and list(tr.columns) == M.TRADED_COLS
@@ -495,47 +501,46 @@ def test_trial_run_never_writes_the_committed_freeze_nor_opens_C(tmp_path, fast_
     assert (tmp_path / "real" / "cross-mix-lockbox.json").exists()
 
 
-def test_a_frozen_file_that_cannot_give_a_verdict_is_reported_as_such(tmp_path, fast_models):
+def test_any_existing_committed_freeze_closes_the_historical_analysis_path(tmp_path, fast_models):
     rows = synth_rows()
     out = tmp_path / "real" / "cross-mix-hf.md"
     frozen = tmp_path / "real" / "cross-mix-frozen.json"
     frozen.parent.mkdir()
     # an empty freeze written by an old trial (`mix 3`): no rules, no A rows, no "full"
     frozen.write_text(json.dumps(dict(made="2026-10-01", a_rows=0, a_fingerprint="empty", rules=[], candidates=[])))
-    _, spec, res = M.analyze(rows, out, log=lambda s: None)
-    text = out.read_text(encoding="utf-8")
-    assert spec["rules"] == [] and json.loads(frozen.read_text())["a_rows"] == 0  # not overwritten
-    assert "这不是判定" in text and "试跑" in text and "A 段没有行" in text and "指纹不符" in text
-    assert "没有一个候选规则" not in text and "冻结时 A 段 0 行" in text
-    # a full freeze whose segments differ from the code's: C stays closed
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.analyze(rows, out, log=lambda s: None)
+    assert json.loads(frozen.read_text())["a_rows"] == 0
+
+    # A first run may create the immutable study, but even deleting its lockbox cannot reopen it.
     frozen.unlink()
     M.analyze(rows, out, log=lambda s: None)
     s = json.loads(frozen.read_text())
     s["segments"] = [["A", "2026-05-25", "2026-07-16"], ["B", "2026-07-16", "2026-08-20"], ["C", "2026-08-20", "2026-08-30"]]
     frozen.write_text(json.dumps(s))
     (tmp_path / "real" / "cross-mix-lockbox.json").unlink()
-    _, _, res = M.analyze(rows, out, log=lambda s: None)
-    assert res[0]["b_pass"] and not any(o["c_open"] for o in res) and "segments" in out.read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.analyze(rows, out, log=lambda s: None)
 
 
-def test_lockbox_first_opening_is_recorded_and_not_repeated_on_other_C_rows(tmp_path, fast_models):
+def test_lockbox_first_opening_is_recorded_and_historical_rows_are_never_read_again(tmp_path, fast_models):
     rows = synth_rows()
     out = tmp_path / "real" / "cross-mix-hf.md"
     _, _, res = M.analyze(rows, out, log=lambda s: None)
     lock = tmp_path / "real" / "cross-mix-lockbox.json"
     rec = json.loads(lock.read_text())
     assert res[0]["c_open"] and rec["results"][0]["rule"] == "R1" and rec["c_fingerprint"] != "empty"
-    # the same frozen file and the same C rows: a repeat of the same computation
-    _, _, res2 = M.analyze(rows, out, log=lambda s: None)
-    assert res2[0]["c_open"] and res2[0]["stats"]["C"] == pytest.approx(res[0]["stats"]["C"])
-    assert json.loads(lock.read_text()) == rec and "重复计算" in out.read_text(encoding="utf-8")
-    # other C rows (e.g. a changed C label) with the same A: C is not read again; the first result is shown
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.analyze(rows, out, log=lambda s: None)
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.analyze(rows, out, full_a=False, trial_frozen=tmp_path / "trial.json", log=lambda s: None)
+    assert json.loads(lock.read_text()) == rec
+
     other = rows.copy()
     c = M.segment_of(other["start"].to_numpy(float)) == "C"
     other.loc[c, "pnl_settle"] = other.loc[c, "pnl_settle"] - 0.01
-    _, _, res3 = M.analyze(other, out, log=lambda s: None)
-    text = out.read_text(encoding="utf-8")
-    assert res3[0]["b_pass"] and not any(o["c_open"] for o in res3) and "锁箱已在" in text
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.analyze(other, out, log=lambda s: None)
     assert json.loads(lock.read_text()) == rec
 
 
@@ -614,6 +619,146 @@ def test_A_fingerprint_changes_below_the_old_rounding_precision():
 
     assert np.round(A.loc[0, "jump_bp"], 5) == np.round(changed.loc[0, "jump_bp"], 5)
     assert M.fingerprint(A) != M.fingerprint(changed)
+
+
+def test_legacy_A_fingerprint_reproduces_the_original_rounded_all_row_contract():
+    rows = []
+    for index, (market, start, at, side, kind) in enumerate(
+            (("m2", 2, 2.1254, 1, "jump"), ("m1", 1, 1.8754, -1, "random"))):
+        sign = 1 if index == 0 else -1
+        row = {"market": market, "start": start, "t": at, "side": side, "kind": kind}
+        row.update({name: sign * (i + 0.1234567) for i, name in enumerate(M.FEATURES)})
+        row.update({f"pnl_{policy}": sign * (i + 0.2345678)
+                    for i, policy in enumerate(M.POLICIES)})
+        rows.append(row)
+    frame = pd.DataFrame(rows)
+
+    assert M.legacy_a_fingerprint(frame) == "33a8481f4effe19692da1ad47cb8ea31da088b60a1a7171ae240618321e0b218"
+    assert M.legacy_a_fingerprint(frame) != M.legacy_a_fingerprint(frame[frame["kind"] != "random"])
+    assert M.fingerprint(frame) == M.fingerprint(frame[frame["kind"] != "random"])
+
+
+def test_legacy_freeze_migrates_once_to_an_exact_A_identity_without_rewriting_it(tmp_path, fast_models):
+    import joblib
+
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    spec.pop("a_fingerprint_version")
+    spec["a_fingerprint"] = M.legacy_a_fingerprint(A)
+    frozen.write_text(json.dumps(spec, indent=1), encoding="utf-8")
+    frozen_before = frozen.read_bytes()
+
+    assert M.spec_problems(spec, A) == ["A 段数据与冻结时不同（指纹不符）"]
+    with pytest.raises(ValueError, match="explicit one-time migration"):
+        M.export_model_bundle(A, spec, frozen)
+    with pytest.raises(ValueError, match="approval"):
+        M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
+    approve_legacy_bundle(A, spec, frozen)
+    manifest = M.export_model_bundle(A, spec, frozen, allow_legacy_migration=True)
+    model_path, _ = M.model_bundle_paths(frozen)
+    anchor_path = M.model_anchor_path(frozen)
+    payload = joblib.load(model_path)
+
+    assert frozen.read_bytes() == frozen_before
+    assert manifest["format"] == "polymarket-mix-models-v2"
+    assert manifest["frozen_a_fingerprint"] == spec["a_fingerprint"]
+    assert manifest["frozen_a_fingerprint_version"] == M.A_FINGERPRINT_V1_ROUNDED
+    assert manifest["canonical_a_fingerprint"] == M.fingerprint(A)
+    assert manifest["canonical_a_fingerprint_version"] == M.A_FINGERPRINT_V2_EXACT
+    assert manifest["a_identity_match"] == "legacy_v1_rounded"
+    anchor = json.loads(anchor_path.read_text())
+    assert anchor["format"] == "polymarket-mix-model-anchor-v1"
+    assert anchor["frozen_sha256"] == M._sha256(frozen)
+    assert anchor["canonical_a_fingerprint"] == manifest["canonical_a_fingerprint"]
+    assert anchor["model_sha256"] == M._sha256(model_path)
+    assert anchor["manifest_sha256"] == M._sha256(M.model_bundle_paths(frozen)[1])
+    for key in ("frozen_a_fingerprint", "frozen_a_fingerprint_version", "canonical_a_fingerprint",
+                "canonical_a_fingerprint_version", "a_identity_match"):
+        assert payload[key] == manifest[key]
+
+    # The legacy freeze rounded at five decimals.  The first migration pins the exact matrix, so a later
+    # below-rounding change cannot silently replace the exported model even though the old hash cannot see it.
+    changed = A.copy()
+    changed.loc[0, "jump_bp"] = np.nextafter(changed.loc[0, "jump_bp"], np.inf)
+    assert M.legacy_a_fingerprint(changed) == spec["a_fingerprint"]
+    assert M.fingerprint(changed) != manifest["canonical_a_fingerprint"]
+    with pytest.raises(ValueError, match="approved exact A"):
+        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True)
+
+    for path in (*M.model_bundle_paths(frozen), M.model_anchor_path(frozen)):
+        path.unlink()
+    with pytest.raises(ValueError, match="approved exact A"):
+        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True)
+
+
+def test_legacy_freeze_rejects_data_outside_its_rounded_identity(tmp_path, fast_models):
+    rows = synth_rows()
+    A = rows[M.segment_of(rows["start"].to_numpy(float)) == "A"].reset_index(drop=True)
+    frozen = tmp_path / "cross-mix-frozen.json"
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    spec.pop("a_fingerprint_version")
+    spec["a_fingerprint"] = M.legacy_a_fingerprint(A)
+    frozen.write_text(json.dumps(spec), encoding="utf-8")
+    changed = A.copy()
+    changed.loc[0, "jump_bp"] += np.float32(0.1)
+    approve_legacy_bundle(A, spec, frozen)
+
+    assert M.spec_problems(spec, changed) == ["A 段数据与冻结时不同（指纹不符）"]
+    with pytest.raises(ValueError, match="A fingerprint"):
+        M.export_model_bundle(changed, spec, frozen, allow_legacy_migration=True)
+
+
+def test_bundle_only_migration_accepts_only_complete_A_and_never_evaluates_B_or_C(tmp_path, monkeypatch,
+                                                                                  fast_models):
+    rows = synth_rows()
+    is_a = M.segment_of(rows["start"].to_numpy(float)) == "A"
+    A = rows[is_a].reset_index(drop=True)
+    out = tmp_path / "cross-mix-hf.md"
+    frozen = M.out_paths(out)[1]
+    spec, _, _ = M.freeze(A, frozen, log=lambda _: None)
+    spec.pop("a_fingerprint_version")
+    spec["a_fingerprint"] = M.legacy_a_fingerprint(A)
+    frozen.write_text(json.dumps(spec), encoding="utf-8")
+    monkeypatch.setattr(M, "evaluate", lambda *args, **kwargs: pytest.fail("bundle migration evaluated B/C"))
+
+    proposal = M.write_bundle_proposal(A, out, full_a=True, log=lambda _: None)
+    assert proposal["canonical_a_fingerprint"] == M.fingerprint(A)
+    assert M.model_proposal_path(frozen).exists()
+    assert not M.model_anchor_path(frozen).exists()
+    with pytest.raises(ValueError, match="approval"):
+        M.export_bundle_only(A, out, full_a=True, log=lambda _: None)
+    approve_legacy_bundle(A, spec, frozen)
+    manifest = M.export_bundle_only(A, out, full_a=True, log=lambda _: None)
+    assert manifest["a_identity_match"] == "legacy_v1_rounded"
+    assert M.model_anchor_path(frozen).exists()
+    assert not out.exists()
+
+    with pytest.raises(ValueError, match="complete A"):
+        M.export_bundle_only(A, out, full_a=False, log=lambda _: None)
+    with pytest.raises(ValueError, match="only A rows"):
+        M.export_bundle_only(rows, out, full_a=True, log=lambda _: None)
+
+    with pytest.raises(ValueError, match="complete A"):
+        M.write_bundle_proposal(A, out, full_a=False, log=lambda _: None)
+    with pytest.raises(ValueError, match="only A rows"):
+        M.write_bundle_proposal(rows, out, full_a=True, log=lambda _: None)
+
+
+def test_bundle_only_archive_selection_cannot_read_B_or_C():
+    every = [(f"market_parquet_{day}.tar.gz", 1) for day in
+             ("2026-05-25", "2026-07-15", "2026-07-16", "2026-08-16")]
+    selected = M.select_archives(every, bundle_only=True)
+    assert [name[15:25] for name, _ in selected] == ["2026-05-25", "2026-07-15"]
+    proposed = M.select_archives(every, bundle_proposal=True)
+    assert proposed == selected
+    with pytest.raises(ValueError, match="cannot be combined"):
+        M.select_archives(every, days=1, bundle_only=True)
+    with pytest.raises(ValueError, match="cannot be combined"):
+        M.select_archives(every, names=[every[0][0]], bundle_proposal=True)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        M.select_archives(every, bundle_only=True, bundle_proposal=True)
 
 
 def test_exported_bundle_is_identical_when_A_rows_are_reordered(tmp_path, fast_models):
@@ -696,9 +841,14 @@ def test_exported_model_bundle_is_A_only_immutable_and_matches_final_models(tmp_
 
     manifest = M.export_model_bundle(A, spec, frozen)
     assert model_path.exists() and manifest_path.exists()
-    assert manifest["format"] == "polymarket-mix-models-v1"
+    assert spec["a_fingerprint_version"] == M.A_FINGERPRINT_V2_EXACT
+    assert manifest["format"] == "polymarket-mix-models-v2"
     assert manifest["frozen_sha256"] == M._sha256(frozen)
     assert manifest["a_fingerprint"] == spec["a_fingerprint"]
+    assert manifest["frozen_a_fingerprint"] == spec["a_fingerprint"]
+    assert manifest["frozen_a_fingerprint_version"] == M.A_FINGERPRINT_V2_EXACT
+    assert manifest["canonical_a_fingerprint"] == spec["a_fingerprint"]
+    assert manifest["a_identity_match"] == "canonical_v2_exact"
     assert manifest["features"] == M.FEATURES
     assert {rule["id"] for rule in manifest["rules"]} == {rule["id"] for rule in spec["rules"]}
 
@@ -811,6 +961,7 @@ def test_subcommand_end_to_end(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cross, "fetch", fetch)
     monkeypatch.setattr(hf, "download", download)
+    monkeypatch.setattr(M, "CANONICAL_STUDY_FROZEN", tmp_path / "canonical-study-not-created.json")
     out = tmp_path / "real" / "mix-hf.md"
     cross.main(["mix", "--workdir", str(wd), "--out", str(out)])
     assert fetched == ["MANIFEST.txt", name] and not (wd / name).exists()
@@ -831,6 +982,7 @@ def test_partial_run_is_a_trial_and_a_truncated_archive_is_failed(tmp_path, monk
     src = archive(tmp_path / "src.tar.gz", "2026-06-10")
     names = [f"market_parquet_2026-06-{d}.tar.gz" for d in ("10", "11")]
     monkeypatch.setattr(M, "FETCH_WAIT_S", 0)
+    monkeypatch.setattr(M, "CANONICAL_STUDY_FROZEN", tmp_path / "canonical-study-not-created.json")
     cut = {"on": False}
 
     def fetch(n, dest=None):
@@ -853,8 +1005,48 @@ def test_partial_run_is_a_trial_and_a_truncated_archive_is_failed(tmp_path, monk
     assert not (tmp_path / "real" / "cross-mix-frozen.json").exists()  # A not read: still a trial
 
 
+def test_run_refuses_an_existing_historical_freeze_before_loading_any_inputs(tmp_path, monkeypatch):
+    out = tmp_path / "alternate" / "other-name.md"
+    frozen = tmp_path / "real" / "cross-mix-frozen.json"
+    frozen.parent.mkdir(parents=True)
+    frozen.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(M, "CANONICAL_STUDY_FROZEN", frozen)
+    monkeypatch.setattr(M, "load_inputs", lambda *_: pytest.fail("historical inputs were loaded"))
+
+    with pytest.raises(ValueError, match="historical study is frozen"):
+        M.run(tmp_path / "wd", out, log=lambda _: None)
+
+
+def test_migration_preflight_rejects_segment_drift_before_loading_or_fetching_any_history(tmp_path, monkeypatch):
+    out = tmp_path / "real" / "cross-mix-hf.md"
+    frozen = M.out_paths(out)[1]
+    frozen.parent.mkdir(parents=True)
+    frozen.write_bytes((M.HERE / "real" / "cross-mix-frozen.json").read_bytes())
+    monkeypatch.setattr(M, "SEGMENTS", (
+        ("A", "2026-05-25", "2026-08-17"),
+        ("B", "2026-08-17", "2026-08-20"),
+        ("C", "2026-08-20", "2026-08-30"),
+    ))
+    monkeypatch.setattr(hf, "klines", lambda *_: pytest.fail("historical inputs were loaded"))
+    monkeypatch.setattr(cross, "fetch", lambda *_: pytest.fail("historical archives were fetched"))
+
+    with pytest.raises(ValueError, match="设定与现在的代码不同"):
+        M.run(tmp_path / "wd", out, bundle_proposal=True, log=lambda _: None)
+
+
 def test_cross_mix_default_output_is_committed_by_the_lane(monkeypatch):
     seen = {}
-    monkeypatch.setattr(M, "run", lambda wd, out, days, dataset=None: seen.update(out=out))
+    monkeypatch.setattr(
+        M,
+        "run",
+        lambda wd, out, days, dataset=None, bundle_only=False, bundle_proposal=False: seen.update(
+            out=out, bundle_only=bundle_only, bundle_proposal=bundle_proposal
+        ),
+    )
     cross.main(["mix"])
     assert seen["out"] == "real/cross-mix-hf.md"  # the polymarket-cross lane commits real/cross-* only
+    assert seen["bundle_only"] is False
+    assert seen["bundle_proposal"] is False
+
+    cross.main(["mix", "--bundle-proposal"])
+    assert seen["bundle_proposal"] is True and seen["bundle_only"] is False
