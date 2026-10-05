@@ -3,3 +3,4 @@
 2026-10-05T02:16:06Z restart: no run after 37232438077 (external monitor again did not start one)
 2026-10-05T02:31:38Z restart after the discovery timeout in 37254730065 (day_extremes paged 1m candles back to 2025-11 for the before-2027 hit market; now 1d candles for whole days)
 2026-10-05T08:11:25Z restart: no run after 37255755566 (external monitor did not start one)
+2026-10-05T13:46:50Z restart: no run after 37282109060 (must cover 15:00-16:00 UTC, the 10-05 daily markets' checkpoints)
