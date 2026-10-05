@@ -1,0 +1,22 @@
+{
+ "format": "polymarket-mix-model-anchor-v1",
+ "made": "2026-10-05T05:52:00.366784+00:00",
+ "frozen_file": "cross-mix-frozen.json",
+ "frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
+ "a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "frozen_a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "frozen_a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "canonical_a_fingerprint": "b8d735ecc4c9d630b6bcda355af9bd4a9ce3c005a3da08b039f5693c882a7be2",
+ "canonical_a_fingerprint_version": "mix-a-v2-exact-model-rows",
+ "a_identity_match": "legacy_v1_rounded",
+ "model_file": "cross-mix-models.joblib",
+ "model_sha256": "4f9b8f67b9ee874871c26dc021481b2309b85eaee8bc45132afd76e0be82fea8",
+ "manifest_file": "cross-mix-models.json",
+ "manifest_sha256": "5b1c8dda3d4398b93b262f42a946b5258e4d9d4e975c84542bb5af0dc86254ae",
+ "approval_file": "cross-mix-model-approval.json",
+ "approval_sha256": "18372549b69cc9ffd7e9d9a56045ff58273c39f1709ca9adb7b4590f0e908fd9",
+ "migration_provenance_sha256": "31fdf9940f10b6f1f9bd866c09f402c9c64cb9e9277fe38f09ecc390367a4dcc",
+ "training_rows": 162591,
+ "training_matrix_sha256": "06d0abf5844cdd66504903db0882a7dd78531a436d9d58384f88034fbe474598"
+}
