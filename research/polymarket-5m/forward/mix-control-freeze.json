@@ -42,6 +42,6 @@
   "family_tests": 100,
   "alpha": 0.01,
   "orders": "paper only",
-  "runner_sha256": "579ac0c87316bcf551499b8e203bbc4038d5ff01fdc83daf371bef0af3b80c67",
-  "protocol_sha256": "bbd3167bbc1b66d510aaf6cf35d164f1f9be052a183e853451c310f398953ec9"
+  "runner_sha256": "7d3f8c00d7fce7d7c8d99c549d90155c3111f55338d789308b211f39f3617d01",
+  "protocol_sha256": "311a7e5d855c182b848e8faa3c181f294fa21b04a94a4a20699a29a228650e04"
 }

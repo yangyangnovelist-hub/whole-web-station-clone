@@ -1321,7 +1321,8 @@ def summarize(rows: list[dict[str, Any]], counters: Counter) -> dict[str, Any]:
 
 
 def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
-                   rows_out: str | Path | None = None) -> dict[str, Any]:
+                   rows_out: str | Path | None = None,
+                   source_protocol_sha256: str | None = None) -> dict[str, Any]:
     archive_dir = Path(archive_dir)
     standard = archive_dir / "strict" if (archive_dir / "strict" / "manifest.json").exists() else archive_dir
     checked = archive.validate_standard_artifact(standard)
@@ -1331,6 +1332,13 @@ def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
     source = iter_aggregate_spot_events(archive_dir, profile=signal_tape_profile)
     clob = archive.iter_normalized_events(standard / "clob_events.jsonl.gz", family="clob")
     rows, counters = replay_normalized(source, clob, mappings, outcomes, config)
+    if source_protocol_sha256 is not None:
+        if (len(source_protocol_sha256) != 64
+                or any(char not in "0123456789abcdef" for char in source_protocol_sha256)):
+            raise ValueError("invalid MIX source protocol fingerprint")
+        for row in rows:
+            row["source_strategy_id"] = STRATEGY_ID
+            row["source_protocol_sha256"] = source_protocol_sha256
     if rows_out is not None:
         destination = Path(rows_out)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1351,6 +1359,9 @@ def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
                           "book_clock": "local_receipt", "depth": "single_best_ask_at_least_five",
                           "outcome_use": "after_fill_only", "orders": "paper_only",
                           "limitation": "standard artifact has no explicit lifecycle/halt field"}
+    if source_protocol_sha256 is not None:
+        result["source_protocol"] = {"strategy_id": STRATEGY_ID,
+                                     "protocol_sha256": source_protocol_sha256}
     return result
 
 
@@ -1370,7 +1381,8 @@ def main() -> None:
         parser.error("--append requires --rows-out")
     freeze, config = load_control_freeze(args.freeze) if args.freeze else (None, ControlConfig())
     rows_out = args.rows_out
-    result = replay_archive(args.archive, config=config, rows_out=rows_out)
+    result = replay_archive(args.archive, config=config, rows_out=rows_out,
+                            source_protocol_sha256=freeze["protocol_sha256"] if freeze else None)
     if args.append:
         if result["dataset"]["paper_gate_eligible"]:
             pooled = append_observations(args.append, rows_out, args.verdict_out)

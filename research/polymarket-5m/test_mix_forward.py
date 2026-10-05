@@ -517,6 +517,31 @@ def test_archive_replay_exposes_the_machine_readable_model_feature_gate(tmp_path
     assert gate["missing_policy"] == "fail_closed_no_imputation_no_posthoc_fetch"
 
 
+def test_archive_replay_binds_formal_rows_to_the_source_protocol(tmp_path, monkeypatch):
+    manifest = _mix_feature_manifest()
+    monkeypatch.setattr(F.archive, "validate_standard_artifact",
+                        lambda _: {"manifest": manifest, "counts": manifest["counts"]})
+    monkeypatch.setattr(F.archive, "iter_market_mappings", lambda _: iter(()))
+    monkeypatch.setattr(F.archive, "iter_outcomes", lambda _: iter(()))
+    monkeypatch.setattr(F.archive, "iter_normalized_events", lambda *args, **kwargs: iter(()))
+    monkeypatch.setattr(F, "iter_aggregate_spot_events", lambda *args, **kwargs: iter(()))
+    monkeypatch.setattr(F, "replay_normalized",
+                        lambda *args, **kwargs: ([{"market_id": "m1"}], F.Counter()))
+    monkeypatch.setattr(F, "summarize", lambda *args, **kwargs: {})
+    monkeypatch.setattr(F, "verdict", lambda *args, **kwargs: {"status": "collecting"})
+    rows_out = tmp_path / "rows.jsonl"
+
+    result = F.replay_archive(tmp_path, rows_out=rows_out,
+                              source_protocol_sha256="a" * 64)
+    row = json.loads(rows_out.read_text(encoding="utf-8"))
+
+    assert row["source_strategy_id"] == F.STRATEGY_ID
+    assert row["source_protocol_sha256"] == "a" * 64
+    assert result["source_protocol"] == {
+        "strategy_id": F.STRATEGY_ID, "protocol_sha256": "a" * 64,
+    }
+
+
 def test_signal_features_include_clob_updates_at_the_same_receipt_time():
     source, signal_ms = quiet_then_jump_events()
     due = signal_ms + 500.0
