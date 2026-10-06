@@ -98,6 +98,46 @@ def _atomic_write(path: str | Path, data: bytes) -> None:
             temporary.unlink()
 
 
+def _validate_model_metadata(historical_frozen: Path, model_path: Path,
+                             manifest_path: Path, anchor_path: Path,
+                             approval_path: Path) -> None:
+    """Validate the immutable artifact chain without deserialising a version-pinned model."""
+    frozen = json.loads(historical_frozen.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
+    rules = [{key: rule[key] for key in ("id", "policy", "model", "q", "cut")}
+             for rule in frozen.get("rules", [])]
+    required_rule = {"id": RULE_ID, "policy": "settle", "model": "ridge", "q": 0.02,
+                     "cut": RULE_CUT}
+    if tuple(frozen.get("features", [])) != tuple(mix.FEATURES) or required_rule not in rules:
+        raise ValueError("R1 projection historical freeze lacks the frozen R1 contract")
+    frozen_sha = _sha256(historical_frozen)
+    model_sha = _sha256(model_path)
+    manifest_expected = {
+        "format": mix.MODEL_BUNDLE_FORMAT,
+        "frozen_sha256": frozen_sha,
+        "features": list(mix.FEATURES),
+        "rules": rules,
+        "model_file": model_path.name,
+        "model_sha256": model_sha,
+    }
+    if any(manifest.get(key) != value for key, value in manifest_expected.items()):
+        raise ValueError("R1 projection model manifest differs from the historical freeze")
+    anchor_expected = {
+        "format": mix.MODEL_ANCHOR_FORMAT,
+        "frozen_file": historical_frozen.name,
+        "frozen_sha256": frozen_sha,
+        "model_file": model_path.name,
+        "model_sha256": model_sha,
+        "manifest_file": manifest_path.name,
+        "manifest_sha256": _sha256(manifest_path),
+        "approval_file": approval_path.name,
+        "approval_sha256": _sha256(approval_path),
+    }
+    if any(anchor.get(key) != value for key, value in anchor_expected.items()):
+        raise ValueError("R1 projection model anchor does not bind the approved bundle")
+
+
 def create_protocol(destination: str | Path, historical_frozen: str | Path,
                     source_control_freeze: str | Path, holdout_start_utc: str) -> dict[str, Any]:
     destination = Path(destination)
@@ -107,7 +147,9 @@ def create_protocol(destination: str | Path, historical_frozen: str | Path,
     source_control_freeze = Path(source_control_freeze)
     model_path, manifest_path = mix.model_bundle_paths(historical_frozen)
     anchor_path = mix.model_anchor_path(historical_frozen)
-    required = (historical_frozen, source_control_freeze, model_path, manifest_path, anchor_path)
+    approval_path = mix.model_approval_path(historical_frozen)
+    required = (historical_frozen, source_control_freeze, model_path, manifest_path, anchor_path,
+                approval_path)
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise ValueError("R1 projection protocol lacks model artifacts: " + ", ".join(missing))
@@ -130,7 +172,8 @@ def create_protocol(destination: str | Path, historical_frozen: str | Path,
         raise ValueError("R1 projection source control timestamps are invalid")
     if start < control_start or start < control_made:
         raise ValueError("R1 projection holdout predates its source control")
-    ProjectedR1Scorer(forward.load_scorer(historical_frozen))
+    _validate_model_metadata(historical_frozen, model_path, manifest_path, anchor_path,
+                             approval_path)
     parent = destination.parent
     dependency_sha256 = _dependency_hashes()
     payload: dict[str, Any] = {
@@ -151,6 +194,8 @@ def create_protocol(destination: str | Path, historical_frozen: str | Path,
         "model_manifest_sha256": _sha256(manifest_path),
         "model_anchor_file": _relative(anchor_path, parent),
         "model_anchor_sha256": _sha256(anchor_path),
+        "model_approval_file": _relative(approval_path, parent),
+        "model_approval_sha256": _sha256(approval_path),
         "source_strategy_id": forward.STRATEGY_ID,
         "source_protocol_mismatch_policy": SOURCE_PROTOCOL_MISMATCH_POLICY,
         "source_jump_z_cut": forward.CONTROL_CUT,
@@ -222,6 +267,7 @@ def load_protocol(path: str | Path) -> tuple[dict[str, Any], float]:
         ("model_file", "model_sha256"),
         ("model_manifest_file", "model_manifest_sha256"),
         ("model_anchor_file", "model_anchor_sha256"),
+        ("model_approval_file", "model_approval_sha256"),
     )
     for file_key, sha_key in bindings:
         artifact = (path.parent / str(payload[file_key])).resolve()

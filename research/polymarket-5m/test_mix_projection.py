@@ -119,12 +119,28 @@ def test_projection_gate_uses_first_fill_per_market_and_200_test_correction(monk
 
 def test_projection_protocol_binds_runner_source_control_and_model_artifacts(tmp_path, monkeypatch):
     historical = tmp_path / "cross-mix-frozen.json"
-    historical.write_text(json.dumps({"features": list(mix.FEATURES)}), encoding="utf-8")
+    rule = {"id": "R1", "policy": "settle", "model": "ridge", "q": 0.02,
+            "cut": projection.RULE_CUT}
+    historical.write_text(json.dumps({"features": list(mix.FEATURES), "rules": [rule]}),
+                          encoding="utf-8")
     model, manifest = mix.model_bundle_paths(historical)
     anchor = mix.model_anchor_path(historical)
+    approval = mix.model_approval_path(historical)
     model.write_bytes(b"model")
-    manifest.write_text("{}", encoding="utf-8")
-    anchor.write_text("{}", encoding="utf-8")
+    approval.write_text('{"approved":true}', encoding="utf-8")
+    manifest.write_text(json.dumps({
+        "format": mix.MODEL_BUNDLE_FORMAT,
+        "frozen_sha256": projection._sha256(historical),
+        "features": list(mix.FEATURES), "rules": [rule],
+        "model_file": model.name, "model_sha256": projection._sha256(model),
+    }), encoding="utf-8")
+    anchor.write_text(json.dumps({
+        "format": mix.MODEL_ANCHOR_FORMAT,
+        "frozen_file": historical.name, "frozen_sha256": projection._sha256(historical),
+        "model_file": model.name, "model_sha256": projection._sha256(model),
+        "manifest_file": manifest.name, "manifest_sha256": projection._sha256(manifest),
+        "approval_file": approval.name, "approval_sha256": projection._sha256(approval),
+    }), encoding="utf-8")
     control = tmp_path / "mix-control-freeze.json"
     control_payload = {
         "schema": forward.FREEZE_SCHEMA,
@@ -136,7 +152,8 @@ def test_projection_protocol_binds_runner_source_control_and_model_artifacts(tmp
     control_payload["protocol_sha256"] = projection._canonical_sha(control_payload)
     control.write_text(json.dumps(control_payload), encoding="utf-8")
     destination = tmp_path / "mix-projection-freeze.json"
-    monkeypatch.setattr(forward, "load_scorer", lambda _: _scorer())
+    monkeypatch.setattr(forward, "load_scorer", lambda _: pytest.fail(
+        "protocol creation must not deserialize a version-pinned model"))
 
     frozen = projection.create_protocol(
         destination, historical, control, "2099-10-05T13:00:00Z",
@@ -151,6 +168,7 @@ def test_projection_protocol_binds_runner_source_control_and_model_artifacts(tmp
     assert holdout_start_ms == datetime(2099, 10, 5, 13, tzinfo=timezone.utc).timestamp() * 1_000.0
     assert loaded["family_tests"] == 200
     assert loaded["source_control_protocol_sha256"] == control_payload["protocol_sha256"]
+    assert loaded["model_approval_sha256"] == projection._sha256(approval)
     assert set(loaded["dependency_sha256"]) == {
         "mix_forward.py", "mix_hf.py", "binary.py", "h_replay_archive.py",
         "h_replay_run.py", "jump2s.py", "pm_outcomes.py",
