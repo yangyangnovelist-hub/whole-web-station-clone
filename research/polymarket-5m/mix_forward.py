@@ -1084,6 +1084,23 @@ def iter_aggregate_spot_events(archive_dir: str | Path,
            "source_ts_ms": None, "stream": "mix_aggregate"}
 
 
+def iter_mix_source_events(archive_dir: str | Path, standard_dir: str | Path,
+                           profile: Optional[dict[str, Any]] = None) -> Iterable[dict[str, Any]]:
+    """Merge frozen aggregate spot with only the causal DVOL lifecycle from the strict source tape."""
+    spot = iter_aggregate_spot_events(archive_dir, profile=profile)
+    standard_source = archive.iter_normalized_events(
+        Path(standard_dir) / "source_events.jsonl.gz", family="source"
+    )
+    dvol_kinds = {"deribit_connection", "deribit_dvol", "deribit_disconnect"}
+    dvol = (event for event in standard_source if str(event["kind"]) in dvol_kinds)
+    decorated_spot = ((float(event["recv_ms"]), 0, index, event)
+                      for index, event in enumerate(spot))
+    decorated_dvol = ((float(event["recv_ms"]), 1, index, event)
+                      for index, event in enumerate(dvol))
+    for _, _, _, event in heapq.merge(decorated_spot, decorated_dvol, key=lambda item: item[:3]):
+        yield event
+
+
 def exact_pvalue(rows: list[dict[str, Any]]) -> float:
     if not rows:
         return 1.0
@@ -1329,7 +1346,7 @@ def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
     mappings = list(archive.iter_market_mappings(standard / "market_registry.csv.gz"))
     outcomes = {row["market_id"]: row["winner"] for row in archive.iter_outcomes(standard / "market_outcomes.csv.gz")}
     signal_tape_profile: dict[str, Any] = {}
-    source = iter_aggregate_spot_events(archive_dir, profile=signal_tape_profile)
+    source = iter_mix_source_events(archive_dir, standard, profile=signal_tape_profile)
     clob = archive.iter_normalized_events(standard / "clob_events.jsonl.gz", family="clob")
     rows, counters = replay_normalized(source, clob, mappings, outcomes, config)
     if source_protocol_sha256 is not None:

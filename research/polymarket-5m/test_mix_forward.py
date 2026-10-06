@@ -517,6 +517,56 @@ def test_archive_replay_exposes_the_machine_readable_model_feature_gate(tmp_path
     assert gate["missing_policy"] == "fail_closed_no_imputation_no_posthoc_fetch"
 
 
+def test_archive_replay_merges_only_dvol_into_the_frozen_spot_tape(tmp_path, monkeypatch):
+    manifest = _mix_feature_manifest()
+    monkeypatch.setattr(F.archive, "validate_standard_artifact",
+                        lambda _: {"manifest": manifest, "counts": manifest["counts"]})
+    monkeypatch.setattr(F.archive, "iter_market_mappings", lambda _: iter(()))
+    monkeypatch.setattr(F.archive, "iter_outcomes", lambda _: iter(()))
+    standard_source = [
+        source_event("deribit_connection", 0, 1_000.0, stream="deribit", connection_epoch=1),
+        source_event("deribit_quote", 1, 1_050.0, source_ts_ms=1_040.0,
+                     stream="deribit", connection_epoch=1, bid=60_000.0, ask=60_001.0),
+        source_event("futures_trade", 2, 1_075.0, source_ts_ms=1_060.0,
+                     stream="futures", connection_epoch=1, price=60_000.0, size=1.0),
+        source_event("deribit_dvol", 3, 1_100.0, source_ts_ms=1_090.0,
+                     stream="deribit", connection_epoch=1, volatility=60.0),
+        source_event("deribit_disconnect", 4, 1_200.0, stream="deribit", connection_epoch=1),
+    ]
+
+    def normalized(_, family):
+        return iter(standard_source if family == "source" else ())
+
+    monkeypatch.setattr(F.archive, "iter_normalized_events", normalized)
+    aggregate_spot = [
+        source_event("spot_connection", 0, 900.0, stream="mix_aggregate"),
+        source_event("spot_trade", 1, 1_080.0, source_ts_ms=970.0,
+                     stream="mix_aggregate", price=60_000.0, size=0.0),
+        source_event("spot_disconnect", 2, 1_300.0, stream="mix_aggregate"),
+    ]
+
+    def spot_tape(_, profile=None):
+        profile.update(_mix_signal_profile())
+        return iter(aggregate_spot)
+
+    monkeypatch.setattr(F, "iter_aggregate_spot_events", spot_tape)
+    captured = {}
+
+    def replay(source, clob, *args):
+        captured["source"] = list(source)
+        captured["clob"] = list(clob)
+        return [], F.Counter()
+
+    monkeypatch.setattr(F, "replay_normalized", replay)
+    F.replay_archive(tmp_path)
+
+    assert [row["kind"] for row in captured["source"]] == [
+        "spot_connection", "deribit_connection", "spot_trade",
+        "deribit_dvol", "deribit_disconnect", "spot_disconnect",
+    ]
+    assert captured["clob"] == []
+
+
 def test_archive_replay_binds_formal_rows_to_the_source_protocol(tmp_path, monkeypatch):
     manifest = _mix_feature_manifest()
     monkeypatch.setattr(F.archive, "validate_standard_artifact",
