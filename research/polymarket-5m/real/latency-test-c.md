@@ -4,7 +4,7 @@
 
 | 币种 | 录制段 | 触发（按 L = 检验值） |
 |---|---:|---:|
-| btc | 27 | 1,128 |
+| btc | 28 | 1,164 |
 
 录制段备注（跳过的和断线检查）：
 
@@ -28,17 +28,18 @@
 - btc 37347643542: 18 candidates dropped because the CLOB socket closed between the quote and the order (249 disconnects in the recording; test C counts its judged lag only)
 - btc 37384144976: 7 candidates dropped because the CLOB socket closed between the quote and the order (157 disconnects in the recording; test C counts its judged lag only)
 - btc 37412793391: 12 candidates dropped because the CLOB socket closed between the quote and the order (219 disconnects in the recording; test C counts its judged lag only)
+- btc 37444926603: 10 candidates dropped because the CLOB socket closed between the quote and the order (244 disconnects in the recording; test C counts its judged lag only)
 
 | L | 笔数 | 胜率 | 平均价 | EV | p | 卖一数量中位 |
 |---:|---|---|---|---|---|---|
-| 0 秒 | 1,170 | 59.9% | 0.571 | +1.57¢ | 0.1106 | 104 |
-| 0.1 秒 | 1,147 | 59.9% | 0.581 | +0.60¢ | 0.3301 | 70 |
-| 0.2 秒 | 1,133 | 59.8% | 0.594 | -0.76¢ | 1.0000 | 60 |
-| 0.3 秒 | 1,128 | 59.7% | 0.609 | -2.48¢ | 1.0000 | 77 |
-| 0.4 秒 | 1,123 | 59.6% | 0.616 | -3.20¢ | 1.0000 | 100 |
-| 0.5 秒 | 1,117 | 59.5% | 0.619 | -3.55¢ | 1.0000 | 130 |
-| 1 秒 | 1,103 | 59.6% | 0.622 | -3.82¢ | 1.0000 | 252 |
-| 2 秒 | 1,093 | 59.6% | 0.621 | -3.75¢ | 1.0000 | 346 |
-| 5 秒 | 1,064 | 59.6% | 0.618 | -3.36¢ | 1.0000 | 335 |
+| 0 秒 | 1,210 | 59.6% | 0.569 | +1.40¢ | 0.1286 | 107 |
+| 0.1 秒 | 1,185 | 59.6% | 0.580 | +0.39¢ | 0.3899 | 72 |
+| 0.2 秒 | 1,170 | 59.5% | 0.592 | -0.96¢ | 1.0000 | 60 |
+| 0.3 秒 | 1,164 | 59.4% | 0.607 | -2.60¢ | 1.0000 | 79 |
+| 0.4 秒 | 1,159 | 59.3% | 0.614 | -3.31¢ | 1.0000 | 101 |
+| 0.5 秒 | 1,152 | 59.2% | 0.617 | -3.74¢ | 1.0000 | 133 |
+| 1 秒 | 1,138 | 59.2% | 0.620 | -4.00¢ | 1.0000 | 256 |
+| 2 秒 | 1,127 | 59.3% | 0.620 | -3.89¢ | 1.0000 | 341 |
+| 5 秒 | 1,098 | 59.3% | 0.617 | -3.55¢ | 1.0000 | 337 |
 
-检验 C（前 1,500 笔）：目前 1,128 笔，不到 1,500 笔，不判定。
+检验 C（前 1,500 笔）：目前 1,164 笔，不到 1,500 笔，不判定。
