@@ -2,7 +2,7 @@
 
 事先写死（10 月 2 日约 08:30 UTC，数据还没录）：2026-10-02 09:00 UTC 起开始的 BTC 5m 市场；币安逐笔成交 2σ 触发（剩 240–15 秒），公平价按 H：从触发前 2 秒的 Up 中间价起算，加上这 2 秒币安的涨跌；0.4 秒后按卖一买顺势一方，公平价 − 卖一 − 手续费 ≥ 12¢ 才买；同一市场每次都买，买到后 2 秒内不再买；第一笔和与第一笔同方向的加仓每笔 1 份，反方向的加仓每笔 2 份；持有到结算。每份赚的钱 = Σ份数×盈亏 / Σ份数，标准误按市场聚类（同一市场的几笔一起结算），单边正态 p。按每个市场第一笔的时间取前 1,000 个有成交的市场、它们的全部成交，判定一次：每份 > 0 且 p < 0.025 才算通过。数据处理同检验 G（每段录制单独算、盘口健康、断线检查）。
 
-录制段 33 个，0.4 秒：成交 425 笔、308 个市场。
+录制段 34 个，0.4 秒：成交 439 笔、319 个市场。
 
 录制段备注（跳过的和断线检查）：
 
@@ -39,12 +39,13 @@
 - btc 37558084377: 3239 candidates dropped because the CLOB socket closed between the quote and the order (184 disconnects in the recording; test C counts its judged lag only)
 - btc 37586562398: 12853 candidates dropped because the CLOB socket closed between the quote and the order (289 disconnects in the recording; test C counts its judged lag only)
 - btc 37621711008: 8188 candidates dropped because the CLOB socket closed between the quote and the order (356 disconnects in the recording; test C counts its judged lag only)
+- btc 37663361030: 2649 candidates dropped because the CLOB socket closed between the quote and the order (260 disconnects in the recording; test C counts its judged lag only)
 
 | 版本 | 延迟 | 市场 | 笔数 | 每份（±聚类标准误） | p |
 |---|---|---:|---:|---:|---:|
-| 反向 2 倍（检验的规则） | 0.4 秒 | 308 | 425 | +6.36¢ ±2.1 | 0.0011 |
-| 每次都加（每笔 1 份） | 0.4 秒 | 308 | 425 | +5.22¢ ±2.1 | 0.0059 |
-| 只买第一笔 | 0.4 秒 | 308 | 308 | +4.64¢ ±2.3 | 0.0227 |
-| 反向 2 倍（检验的规则） | 0.3 秒 | 351 | 495 | +10.17¢ ±1.9 | 0.0000 |
+| 反向 2 倍（检验的规则） | 0.4 秒 | 319 | 439 | +6.29¢ ±2.0 | 0.0010 |
+| 每次都加（每笔 1 份） | 0.4 秒 | 319 | 439 | +5.17¢ ±2.0 | 0.0057 |
+| 只买第一笔 | 0.4 秒 | 319 | 319 | +4.38¢ ±2.3 | 0.0264 |
+| 反向 2 倍（检验的规则） | 0.3 秒 | 367 | 514 | +10.37¢ ±1.9 | 0.0000 |
 
-检验 I（前 1,000 个市场）：目前 308 个市场，不到 1,000 个，不判定。
+检验 I（前 1,000 个市场）：目前 319 个市场，不到 1,000 个，不判定。
