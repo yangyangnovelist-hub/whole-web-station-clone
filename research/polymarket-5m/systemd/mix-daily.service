@@ -11,8 +11,8 @@ Environment=PYTHONPATH=/home/ubuntu/rec/h-race
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=OMP_NUM_THREADS=1
 Environment=STRICT_SHARED_ROOT=/home/ubuntu/rec/formal/strict-days
-Environment=EXPECTED_PROTOCOL_SHA256=c979e02a2155b5af81050a79cc088008ecfc102256ddcfed26123af4b4a45326
-Environment=EXPECTED_PROJECTION_PROTOCOL_SHA256=b1d71910adece9b2af76a608f6a625fbc9ceb4f92fdbe005a4cb5db2deaad92f
+Environment=EXPECTED_PROTOCOL_SHA256=31f49eed5d3fdb39afb791ee54f645f59601788921bb336fcc81312699ff3cf4
+Environment=EXPECTED_PROJECTION_PROTOCOL_SHA256=51241df6897a0f16e066b69630c286ab83301842418fb9b43cb5e40248f1ef8a
 ExecStart=/usr/bin/timeout 3600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/mix_daily.py
 Nice=15
 IOSchedulingClass=idle

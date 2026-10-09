@@ -114,7 +114,7 @@ def test_source_hour_selection_is_exact():
 def test_evaluator_freeze_binds_every_dependency(tmp_path):
     frozen, digest = daily.load_evaluator_freeze()
 
-    assert digest == "65c874c9af2aa1605e17c895b13dd9cbd515ce38be5d6ce90d89a5edb4807767"
+    assert digest == "de372e3e9d787855cff399d883cd322147a486d832edf2e7c7534bf5b106bae5"
     assert frozen["strategy_fingerprint"] == proxy.EXPECTED_FREEZE_SHA256
     frozen["dependencies_sha256"]["settlement_proxy.py"] = "0" * 64
     path = tmp_path / "freeze.json"

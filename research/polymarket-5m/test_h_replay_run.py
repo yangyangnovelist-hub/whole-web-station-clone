@@ -92,6 +92,32 @@ def test_timestamped_first_futures_uses_exchange_clock_and_spot_trade_sigma():
     assert math.isfinite(candidate.sigma)
 
 
+def test_timestamped_first_applies_a_source_specific_z_floor():
+    config = run.SignalConfig(
+        z0=2.0,
+        source_z0={"deribit_quote": 4.0},
+        tau_hi_s=300.0,
+        tau_lo_s=0.0,
+        sigma_window_s=10,
+        sigma_min_observations=3,
+    )
+    trigger = run.TimestampedFirstTrigger(config)
+    for second, price in enumerate((100.0, 100.01, 100.0, 100.01, 100.0, 100.01), 100):
+        assert trigger.update_trade(second * 1_000, price) is None
+    sigma = trigger.grid.sigma()
+    assert math.isfinite(sigma)
+    moved = 100.0 * math.exp(3.0 * sigma)
+    for source in ("deribit_quote", "futures_trade"):
+        assert trigger.update_source(source, 104_000, 100.0) is None
+        assert trigger.update_source(source, 105_000, 100.0) is None
+
+    assert trigger.update_source("deribit_quote", 106_000, moved) is None
+    candidate = trigger.update_source("futures_trade", 106_000, moved)
+
+    assert candidate is not None
+    assert abs(candidate.move_1s) / candidate.sigma == pytest.approx(3.0)
+
+
 def test_timestamped_first_rejects_a_regressed_source_clock():
     trigger = run.TimestampedFirstTrigger(run.SignalConfig(
         tau_hi_s=300.0, tau_lo_s=0.0, sigma_window_s=3, sigma_min_observations=2,

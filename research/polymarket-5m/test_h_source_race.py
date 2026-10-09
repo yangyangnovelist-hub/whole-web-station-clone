@@ -61,6 +61,7 @@ def _summary(sources: frozenset[str], *, manifest_id: str = "same-run") -> dict[
             "endpoint_move_sensitivity": "unknown_closing_twap_samples/60",
             "candidate_sources": ["binance_spot_trade", "binance_futures_bookTicker"],
             "active_trigger_sources": sorted(sources),
+            "source_z0": dict(race.CANDIDATE_SOURCE_Z0),
         },
         "latencies": {
             "500": {
@@ -153,8 +154,17 @@ def test_candidate_races_both_free_early_sources_against_deployed_baseline():
     })
 
 
+def test_source_race_rejects_a_replay_without_the_frozen_source_z_floor():
+    result = _summary(race.CANDIDATE_SOURCES)
+    result["protocol"]["source_z0"] = {}
+
+    with pytest.raises(ValueError, match="source-specific z drift"):
+        race._validate_arm("candidate", result, race.CANDIDATE_SOURCES)
+
+
 def test_source_race_replay_uses_one_local_receipt_clock_for_all_sources():
     current = {
+        "signal": {},
         "timing": {
             "signal_time_basis": "exchange_source_timestamp",
             "book_trigger_synthetic_lag_ms": 106.0,
@@ -172,6 +182,7 @@ def test_source_race_replay_uses_one_local_receipt_clock_for_all_sources():
         "execution": {
             "evaluation_ms": [300.0, 350.0, 400.0, 500.0],
             "primary_evaluation_ms": 400.0,
+            "source_z0": {"deribit_quote": 3.0},
         },
     }
 
@@ -181,6 +192,7 @@ def test_source_race_replay_uses_one_local_receipt_clock_for_all_sources():
     assert frozen["timing"]["primary_evaluation_ms"] == 400.0
     assert frozen["timing"]["book_trigger_synthetic_lag_ms"] == 0.0
     assert frozen["semantics"]["candidate_sources"] == sorted(race.CANDIDATE_SOURCES)
+    assert frozen["signal"]["source_z0"] == {"deribit_quote": 3.0}
 
 
 def test_compare_archive_rejects_dataset_identity_drift(tmp_path, monkeypatch):

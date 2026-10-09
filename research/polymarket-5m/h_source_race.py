@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - compatibility fallback outside the res
 REQUIRED_STRATEGY_ID = "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3"
 BASELINE_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
 CANDIDATE_SOURCES = frozenset({*BASELINE_SOURCES, "futures_trade", "deribit_quote"})
+CANDIDATE_SOURCE_Z0 = {"deribit_quote": 3.0}
 SCHEMA = "current-h-source-race-v2"
 SOURCE_RACE_FREEZE_PATH = Path(__file__).with_name("forward") / "source-race-freeze.json"
 SOURCE_RACE_FREEZE_SHA256_PATH = SOURCE_RACE_FREEZE_PATH.with_suffix(".sha256")
@@ -78,6 +79,9 @@ def _load_source_race_freeze(path: str | Path = SOURCE_RACE_FREEZE_PATH) -> tupl
         raise ValueError("source-race baseline drift")
     if frozenset(arms.get("candidate") or ()) != CANDIDATE_SOURCES:
         raise ValueError("source-race candidate drift")
+    source_z0 = frozen.get("execution", {}).get("source_z0") or {}
+    if source_z0 != CANDIDATE_SOURCE_Z0:
+        raise ValueError("source-race source-specific z drift")
     root = Path(__file__).resolve().parent
     for relative, expected in (frozen.get("dependencies_sha256") or {}).items():
         dependency = root / relative
@@ -165,6 +169,7 @@ def _receipt_clock_replay_freeze(
     frozen["timing"]["book_trigger_synthetic_lag_ms"] = 0.0
     frozen["timing"]["evaluation_ms"] = list(execution["evaluation_ms"])
     frozen["timing"]["primary_evaluation_ms"] = float(execution["primary_evaluation_ms"])
+    frozen["signal"]["source_z0"] = dict(execution["source_z0"])
     frozen["semantics"]["event_order"] = "local_receipt_ms_stable"
     frozen["semantics"]["source_timestamp"] = "signal_features_and_audit_only"
     frozen["semantics"]["trigger"] = "first_eligible_local_receipt_across_frozen_sources"
@@ -230,6 +235,8 @@ def _validate_arm(name: str, result: dict[str, Any], expected_sources: frozenset
     active = frozenset(protocol.get("active_trigger_sources", ()))
     if active != expected_sources:
         raise ValueError(f"{name} active source drift: {sorted(active)} != {sorted(expected_sources)}")
+    if protocol.get("source_z0") != CANDIDATE_SOURCE_Z0:
+        raise ValueError(f"{name} source-specific z drift")
     manifest = result.get("dataset", {}).get("manifest") or {}
     if manifest.get("receipt_race_ready") is not True:
         raise ValueError(f"{name} dataset is not receipt-race-ready")

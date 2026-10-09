@@ -28,6 +28,7 @@ DEFAULT_TRIGGER_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
 class SignalConfig:
     book_lag_ms: float = 106.0
     z0: float = 2.0
+    source_z0: dict[str, float] = field(default_factory=dict)
     tau_hi_s: float = 240.0
     tau_lo_s: float = 15.0
     reference_age_s: float = 5.0
@@ -44,6 +45,8 @@ def signal_config_from_freeze(frozen: dict[str, Any]) -> SignalConfig:
     return SignalConfig(
         book_lag_ms=float(timing["book_trigger_synthetic_lag_ms"]),
         z0=float(signal["z0"]),
+        source_z0={str(source): float(value)
+                   for source, value in (signal.get("source_z0") or {}).items()},
         tau_hi_s=float(signal["tau_hi_s"]),
         tau_lo_s=float(signal["tau_lo_s"]),
         reference_age_s=float(signal["reference_age_s"]),
@@ -224,6 +227,7 @@ class TimestampedFirstTrigger:
         timestamp_ms: float,
         price: float,
         *,
+        source: str,
         reject_exact_duplicate: bool,
         clamp_regressed: bool,
     ) -> Optional[Candidate]:
@@ -253,7 +257,8 @@ class TimestampedFirstTrigger:
             return None
         sigma = self.grid.sigma()
         move = log_price - log_prices[reference_index]
-        if not math.isfinite(sigma) or abs(move) <= self.config.z0 * sigma:
+        minimum_z = max(self.config.z0, self.config.source_z0.get(source, self.config.z0))
+        if not math.isfinite(sigma) or abs(move) <= minimum_z * sigma:
             return None
         anchor_index = bisect_right(timestamps, timestamp_s - self.config.anchor_s) - 1
         anchor = log_prices[anchor_index] if anchor_index >= 0 else math.nan
@@ -264,6 +269,7 @@ class TimestampedFirstTrigger:
             self.grid.update(source_timestamp_ms / 1_000.0, math.log(price))
         return self._candidate(
             self.trade_timestamps, self.trade_log_prices, source_timestamp_ms, price,
+            source="spot_trade",
             reject_exact_duplicate=False,
             clamp_regressed=True,
         )
@@ -276,6 +282,7 @@ class TimestampedFirstTrigger:
         log_prices = self.source_log_prices.setdefault(source, [])
         return self._candidate(
             timestamps, log_prices, source_timestamp_ms, price,
+            source=source,
             reject_exact_duplicate=True,
             clamp_regressed=False,
         )
@@ -866,6 +873,7 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
         "evaluation_clock": frozen["timing"]["signal_time_basis"],
         "active_trigger_sources": sorted(DEFAULT_TRIGGER_SOURCES if trigger_sources is None
                                           else trigger_sources),
+        "source_z0": dict(sorted(signal.source_z0.items())),
     }
     return result
 

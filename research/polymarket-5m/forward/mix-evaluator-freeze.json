@@ -5,12 +5,12 @@
     "bn_spot_agg_2",
     "bn_spot_agg_3"
   ],
-  "control_protocol_sha256": "c979e02a2155b5af81050a79cc088008ecfc102256ddcfed26123af4b4a45326",
+  "control_protocol_sha256": "31f49eed5d3fdb39afb791ee54f645f59601788921bb336fcc81312699ff3cf4",
   "dependencies_sha256": {
     "archive_day.py": "13ac06da7b854443948846da9aad031cb1d6995e90dd17f45999423b77e46bdb",
     "eu_strict.py": "99e557ddfb856de9b844411a5234aef104aee41391f8912f739fc9adc14405b7",
-    "forward/mix-control-freeze.json": "ba7dd84e950a1286d520e296e4cc00ec3b5fb1bb15e8fbd704ff2ab16322de14",
-    "forward/mix-r1-17f-freeze.json": "1686203d616a722a8e680c2d5e3d3c4662d2195308b3723202af5b1f06de4f89",
+    "forward/mix-control-freeze.json": "a5d03cc05b9fba8e50e6f3ca41fcc7ff539cabafedc091b654b43c87abc2550d",
+    "forward/mix-r1-17f-freeze.json": "b351e58a960e75150f8e12f4a8cd72cfa610ffa3768a91308a2a75adbc2b5680",
     "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
     "mix_agg_rec.py": "12abe8cd1a6e556170cc2e5dd164b9a9674cbd17ee15b358bd05cc6ab18c443c",
     "mix_daily.py": "1e3484877b726b727d15bfa3472437cccfdbf7b8700c4e5e04428a7df4561d85",
@@ -23,15 +23,15 @@
     "source_race_daily.py": "9b24b22ec80edd36f4d4ac3f654ed1d8c3cf9b9344516618c41810e7cf333859",
     "strict_prebuild.py": "be6b48a3a3ece74f9670acc4ac6c526408788f8dbc4781ecdb2534d45f98baaa",
     "systemd/mix-agg-recorder.service": "a58f64f3789d4603161f61d464c570fd23b6e8521fde679446f48fd769fef38c",
-    "systemd/mix-daily.service": "9995b8b908a93bd5967b42142ed76717f64c5fd37083ed8f11a3e629e3bd120c",
+    "systemd/mix-daily.service": "1f9f10a133f0025f26588fd34c3d362a791cba0a64f3baa0cdadf3970e2a627a",
     "systemd/mix-daily.timer": "87b651fbad05b23f49604c114bcda6842d67eaef05fe129fc561cd2dec43754b",
     "systemd/strict-artifact-daily.service": "e95b41e45a171287f1004fabcbc56b921632faa68f05ed7f385cfa262eaa1cc4",
     "systemd/strict-artifact-daily.timer": "453abc98f24a32a88620e2b21a942f3f3df08d9a8aefd3a0838f2be124fca2cb"
   },
   "holdout_start_utc": "2026-10-10T00:00:00Z",
-  "made": "2026-10-09T15:08:00Z",
+  "made": "2026-10-09T15:53:39Z",
   "orders": "paper_only",
   "pre_roll_hours": 5,
-  "projection_protocol_sha256": "b1d71910adece9b2af76a608f6a625fbc9ceb4f92fdbe005a4cb5db2deaad92f",
+  "projection_protocol_sha256": "51241df6897a0f16e066b69630c286ab83301842418fb9b43cb5e40248f1ef8a",
   "schema": "polymarket-mix-evaluator-freeze-v1"
 }
