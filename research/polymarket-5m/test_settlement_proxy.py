@@ -42,6 +42,27 @@ def test_raw_price_parsers(source, payload, expected):
     assert prices[0].receive_ms == 10_000.0
 
 
+@pytest.mark.parametrize(
+    ("source", "price_frame", "irrelevant_frame"),
+    [
+        ("bn_spot", '{"stream":"btcusdt@bookTicker"}', '{"stream":"btcusdt@trade"}'),
+        ("coinbase", '{"type":"ticker"}', '{"type":"match"}'),
+        ("kraken", '{"channel":"book"}', '{"channel":"heartbeat"}'),
+        ("bitstamp", '{"channel":"order_book_btcusd"}', '{"channel":"live_trades_btcusd"}'),
+        ("okx", '{"arg":{"channel":"bbo-tbt"}}', '{"arg":{"channel":"trades"}}'),
+        ("bybit_spot", '{"topic":"orderbook.1.BTCUSDT"}', '{"topic":"publicTrade.BTCUSDT"}'),
+        ("deribit", '{"channel":"deribit_price_index.btc_usd"}', '{"channel":"trades.BTC-PERPETUAL.raw"}'),
+    ],
+)
+def test_price_frame_prefilter_is_a_conservative_source_specific_screen(
+    source, price_frame, irrelevant_frame,
+):
+    markers = sp.PRICE_FRAME_MARKERS[source]
+
+    assert any(marker in price_frame for marker in markers)
+    assert not any(marker in irrelevant_frame for marker in markers)
+
+
 def test_chainlink_parser_preserves_payload_push_and_receipt_clocks():
     payload = {
         "topic": "crypto_prices_chainlink",
@@ -72,6 +93,72 @@ def test_kraken_book_requires_a_snapshot_and_updates_causally():
     assert second[0].value == 100.5
 
 
+def test_kraken_book_retains_only_the_subscribed_ten_levels():
+    state = sp.FrameState()
+    snapshot = {
+        "channel": "book",
+        "type": "snapshot",
+        "data": [{
+            "bids": [
+                {"price": float(price), "qty": 1.0}
+                for price in range(90, 100)
+            ],
+            "asks": [
+                {"price": float(price), "qty": 1.0}
+                for price in range(101, 111)
+            ],
+        }],
+    }
+    update = {
+        "channel": "book",
+        "type": "update",
+        "data": [{
+            "bids": [{"price": 100.0, "qty": 1.0}],
+            "asks": [{"price": 100.5, "qty": 1.0}],
+        }],
+    }
+
+    sp.parse_raw_frame("kraken", 1_000.0, json.dumps(snapshot), state)
+    points, _ = sp.parse_raw_frame("kraken", 1_001.0, json.dumps(update), state)
+
+    assert len(state.kraken_bids) == 10
+    assert len(state.kraken_asks) == 10
+    assert 90.0 not in state.kraken_bids
+    assert 110.0 not in state.kraken_asks
+    assert points[0].value == 100.25
+
+
+def test_irrelevant_frames_preserve_stateful_feed_continuity(tmp_path):
+    path = tmp_path / "kraken.20261001T00.txt.gz"
+    snapshot = {
+        "channel": "book",
+        "type": "snapshot",
+        "data": [{
+            "bids": [{"price": 99.0, "qty": 1.0}],
+            "asks": [{"price": 101.0, "qty": 1.0}],
+        }],
+    }
+    update = {
+        "channel": "book",
+        "type": "update",
+        "data": [{"bids": [{"price": 100.0, "qty": 1.0}], "asks": []}],
+    }
+    rows = [
+        (1_000.0, snapshot),
+        (2_500.0, {"channel": "heartbeat"}),
+        (4_000.0, update),
+    ]
+    with gzip.open(path, "wt", encoding="utf-8") as stream:
+        for receive_ms, payload in rows:
+            stream.write(f"{int(receive_ms * 1_000_000)}\t{json.dumps(payload)}\n")
+
+    series, raw_count = sp._load_source(tmp_path, "kraken", sp.ProxyConfig())
+
+    assert raw_count == 2
+    assert len(series) == 2
+    assert series.at(4_000.0) == 100.5
+
+
 def test_step_series_never_reads_a_future_receipt():
     series = sp.StepSeries.from_points([
         sp.PricePoint("x", 100.0, 10.0),
@@ -86,6 +173,10 @@ def test_step_series_never_reads_a_future_receipt():
 def test_committed_freeze_hash_is_enforced(tmp_path):
     frozen = sp.load_freeze()
     assert sp.strategy_fingerprint(frozen) == sp.EXPECTED_FREEZE_SHA256
+    assert frozen["strategy_id"] == "settlement-proxy-v3"
+    assert sp._iso_timestamp(frozen["holdout_start"]) - sp._iso_timestamp(
+        frozen["calibration_end"]
+    ) == 48 * 60 * 60 * 1_000
 
     frozen["proxy_config"]["timing_placebo_delay_ms"] = 251.0
     tampered = tmp_path / "freeze.json"
@@ -143,6 +234,35 @@ def test_proxy_window_requires_every_component_to_be_received_by_decision():
     assert estimate is not None
     assert estimate.combined == pytest.approx(101.0)
     assert too_early is None
+
+
+def test_proxy_window_requires_four_spots_but_deribit_is_optional():
+    boundary = 600_000.0
+    payloads = sp.settlement_payload_times(boundary)
+    config = sp.ProxyConfig(minimum_spot_sources=4)
+    series = {
+        source: _constant_series(source, (payload - 1_000.0 for payload in payloads), 101.0)
+        for source in sp.SPOT_SOURCES[:4]
+    }
+    for source in sp.SPOT_SOURCES[4:]:
+        series[source] = _constant_series(source, [0.0], 101.0)
+    series[sp.DERIBIT_SOURCE] = _constant_series(sp.DERIBIT_SOURCE, [0.0], 101.0)
+
+    estimate = sp.estimate_proxy_window(
+        boundary, boundary - 1_000.0, series, _manual_calibration(), config,
+    )
+    missing_fourth = sp.estimate_proxy_window(
+        boundary,
+        boundary - 1_000.0,
+        {**series, sp.SPOT_SOURCES[3]: _constant_series(sp.SPOT_SOURCES[3], [0.0], 101.0)},
+        _manual_calibration(),
+        config,
+    )
+
+    assert estimate is not None
+    assert estimate.combined == pytest.approx(101.0)
+    assert estimate.deribit is None
+    assert missing_fourth is None
 
 
 def test_signal_generation_uses_exact_open_proxy_close_and_ignores_future_quotes():

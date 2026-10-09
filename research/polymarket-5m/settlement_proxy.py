@@ -33,6 +33,15 @@ import h_replay_run
 
 SPOT_SOURCES = ("coinbase", "kraken", "bitstamp", "bn_spot", "okx", "bybit_spot")
 DERIBIT_SOURCE = "deribit_index"
+PRICE_FRAME_MARKERS = {
+    "bn_spot": ("btcusdt@bookTicker", "btcusdt@depth"),
+    "coinbase": ('"ticker"',),
+    "kraken": ('"book"',),
+    "bitstamp": ("order_book_btcusd",),
+    "okx": ("bbo-tbt",),
+    "bybit_spot": ("orderbook.1.BTCUSDT",),
+    "deribit": ("deribit_price_index.btc_usd",),
+}
 BASE_VARIANT = "proxy_spot6_deribit"
 BASELINE_VARIANT = "delayed_chainlink"
 TIMING_VARIANT = "proxy_execution_250ms_delayed"
@@ -45,7 +54,7 @@ VERDICT_PIN = Path(__file__).with_name("forward") / "settlement-proxy-verdict.js
 # Updated only before the untouched holdout starts.  load_freeze() rejects any
 # later edit to the preregistered protocol instead of silently accepting a new
 # fingerprint.
-EXPECTED_FREEZE_SHA256 = "926304634d35483f233b2da9b0f185dec9880101430571ae151475b7e97bb502"
+EXPECTED_FREEZE_SHA256 = "2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee"
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,7 @@ class ProxyConfig:
     max_quote_age_ms: float = 2_000.0
     lag_grid_ms: tuple[float, ...] = tuple(float(value) for value in range(-2_500, 1_001, 100))
     calibration_fit_fraction: float = 0.60
+    minimum_spot_sources: int = 4
     min_fit_points: int = 300
     min_validation_windows: int = 100
     residual_quantile: float = 0.99
@@ -101,6 +111,7 @@ class ProxyCalibration:
     deribit_validation_mae_bp: float
     combined_validation_mae_bp: float
     ablation_residual_bounds_bp: dict[str, float] = field(default_factory=dict)
+    ablation_validation_windows: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -213,12 +224,12 @@ def parse_raw_frame(
                         state.kraken_asks[price] = size
                     else:
                         state.kraken_asks.pop(price, None)
-            if len(state.kraken_bids) > 20:
-                keep = set(sorted(state.kraken_bids)[-20:])
+            if len(state.kraken_bids) > 10:
+                keep = set(sorted(state.kraken_bids)[-10:])
                 state.kraken_bids = {price: size for price, size in state.kraken_bids.items()
                                      if price in keep}
-            if len(state.kraken_asks) > 20:
-                keep = set(sorted(state.kraken_asks)[:20])
+            if len(state.kraken_asks) > 10:
+                keep = set(sorted(state.kraken_asks)[:10])
                 state.kraken_asks = {price: size for price, size in state.kraken_asks.items()
                                      if price in keep}
             if state.kraken_ready and state.kraken_bids and state.kraken_asks:
@@ -374,34 +385,39 @@ def estimate_proxy_window(
 ) -> Optional[ProxyWindowEstimate]:
     spot_sources = tuple(source for source in SPOT_SOURCES if source != omit_source)
     use_deribit = omit_source != DERIBIT_SOURCE
-    if not spot_sources and not use_deribit:
+    if len(spot_sources) < config.minimum_spot_sources:
         return None
     spot_values: list[float] = []
     deribit_values: list[float] = []
     latest_query = -math.inf
     for payload_ms in settlement_payload_times(boundary_ms):
-        spot = None
-        if spot_sources:
-            spot = _component_value(
-                payload_ms, decision_ms, series, spot_sources,
-                calibration.spot_query_offset_ms, calibration.venue_log_offsets, config,
-            )
-            if spot is None:
-                return None
-            spot_values.append(spot)
-            latest_query = max(latest_query, payload_ms + calibration.spot_query_offset_ms)
+        adjusted_spot = []
+        query_ms = payload_ms + calibration.spot_query_offset_ms
+        if query_ms >= decision_ms:
+            return None
+        for source in spot_sources:
+            value = series[source].at(query_ms, max_age_ms=config.max_quote_age_ms)
+            if value is not None:
+                adjusted_spot.append(math.log(value) - calibration.venue_log_offsets[source])
+        if len(adjusted_spot) < config.minimum_spot_sources:
+            return None
+        spot_values.append(math.exp(median(adjusted_spot)))
+        latest_query = max(latest_query, query_ms)
         if use_deribit:
             deribit = _component_value(
                 payload_ms, decision_ms, series, (DERIBIT_SOURCE,),
                 calibration.deribit_query_offset_ms,
                 {DERIBIT_SOURCE: calibration.deribit_log_offset}, config,
             )
-            if deribit is None:
-                return None
-            deribit_values.append(deribit)
+            if deribit is not None:
+                deribit_values.append(deribit)
             latest_query = max(latest_query, payload_ms + calibration.deribit_query_offset_ms)
     spot_close = sum(spot_values) / len(spot_values) if spot_values else None
-    deribit_close = sum(deribit_values) / len(deribit_values) if deribit_values else None
+    deribit_close = (
+        sum(deribit_values) / len(deribit_values)
+        if use_deribit and len(deribit_values) == len(settlement_payload_times(boundary_ms))
+        else None
+    )
     if spot_close is not None and deribit_close is not None:
         combined = math.sqrt(spot_close * deribit_close)
     else:
@@ -517,10 +533,12 @@ def fit_calibration(
     residual_quantile = _quantile(residuals, config.residual_quantile)
     residual_bound = residual_quantile * config.residual_safety_multiplier
     ablation_bounds = {}
+    ablation_windows = {}
     for source in (*SPOT_SOURCES, DERIBIT_SOURCE):
         ablation_residuals = window_residuals(source)
         if len(ablation_residuals) < config.min_validation_windows:
             raise ValueError(f"insufficient validation windows for omit_{source}")
+        ablation_windows[source] = len(ablation_residuals)
         ablation_bounds[source] = (
             _quantile(ablation_residuals, config.residual_quantile)
             * config.residual_safety_multiplier
@@ -546,6 +564,7 @@ def fit_calibration(
         combined_validation_mae_bp=(sum(combined_point_errors) / len(combined_point_errors)
                                     if combined_point_errors else math.nan),
         ablation_residual_bounds_bp=ablation_bounds,
+        ablation_validation_windows=ablation_windows,
     )
 
 
@@ -566,7 +585,7 @@ def _atomic_json(path: str | Path, payload: Mapping[str, Any]) -> None:
 
 def load_freeze(path: str | Path = FREEZE_PATH) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload.get("strategy_id") != "settlement-proxy-v1":
+    if payload.get("strategy_id") != "settlement-proxy-v3":
         raise ValueError("unexpected settlement-proxy strategy id")
     fingerprint = strategy_fingerprint(payload)
     if fingerprint != EXPECTED_FREEZE_SHA256:
@@ -795,34 +814,66 @@ def generate_signals(
     return signals, {variant: dict(counter) for variant, counter in audit.items()}
 
 
-def audit_official_outcomes(
+def outcome_observations(
     mappings: Iterable[Mapping[str, Any]],
     official_outcomes: Mapping[str, str],
     chainlink_points: Iterable[ChainlinkPoint],
-) -> dict[str, Any]:
-    """Verify the reconstructed settlement rule against resolved market outcomes."""
+) -> list[dict[str, Any]]:
+    """Build per-market settlement observations without discarding prefix identity."""
     exact = {point.payload_ms: point for point in _normalised_chainlink(chainlink_points)}
-    compared = 0
-    mismatches = []
-    missing_exact = 0
-    unresolved = []
+    rows = []
     for mapping in mappings:
         market_id = str(mapping["market_id"])
+        slot = int(mapping["slot"])
         official = official_outcomes.get(market_id)
         if official is None:
-            unresolved.append(market_id)
+            rows.append({
+                "market_id": market_id,
+                "slot": slot,
+                "official": None,
+                "derived": None,
+                "status": "unresolved",
+            })
             continue
-        slot = int(mapping["slot"])
         opening = _window_average(exact, slot * 1_000.0)
         closing = _window_average(exact, (slot + 300) * 1_000.0)
         if opening is None or closing is None:
-            missing_exact += 1
+            rows.append({
+                "market_id": market_id,
+                "slot": slot,
+                "official": official,
+                "derived": None,
+                "status": "missing_exact",
+            })
             continue
         derived = "Up" if closing >= opening else "Down"
-        compared += 1
-        if derived != official:
-            mismatches.append({"market_id": market_id, "slot": slot,
-                               "official": official, "derived": derived})
+        rows.append({
+            "market_id": market_id,
+            "slot": slot,
+            "official": official,
+            "derived": derived,
+            "status": "compared",
+        })
+    return rows
+
+
+def summarize_outcome_observations(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Verify the reconstructed settlement rule for an explicit market prefix."""
+    rows = list(rows)
+    compared_rows = [row for row in rows if row.get("status") == "compared"]
+    missing_exact = sum(row.get("status") == "missing_exact" for row in rows)
+    unresolved = [str(row["market_id"]) for row in rows if row.get("status") == "unresolved"]
+    mismatches = [
+        {
+            "market_id": str(row["market_id"]),
+            "slot": int(row["slot"]),
+            "official": str(row["official"]),
+            "derived": str(row["derived"]),
+        }
+        for row in compared_rows
+        if row.get("derived") != row.get("official")
+    ]
+    compared = len(compared_rows)
     eligible = compared + missing_exact
     coverage = compared / eligible if eligible else 0.0
     return {
@@ -835,6 +886,17 @@ def audit_official_outcomes(
         "mismatches": mismatches[:20],
         "passes": compared > 0 and coverage >= 0.95 and not mismatches and not unresolved,
     }
+
+
+def audit_official_outcomes(
+    mappings: Iterable[Mapping[str, Any]],
+    official_outcomes: Mapping[str, str],
+    chainlink_points: Iterable[ChainlinkPoint],
+) -> dict[str, Any]:
+    """Verify the reconstructed settlement rule against resolved market outcomes."""
+    return summarize_outcome_observations(
+        outcome_observations(mappings, official_outcomes, chainlink_points)
+    )
 
 
 def execution_config(fee_rate: float = 0.07) -> h_replay.ReplayConfig:
@@ -993,6 +1055,7 @@ def replay_execution(
         enriched = []
         for row in rows:
             signal = signal_lookup[(variant, str(row["market_id"]))]
+            row["variant"] = variant
             market_close_ms = (signal.slot + 300) * 1_000.0
             evaluation_clock_ms = signal.decision_ms + float(row["evaluation_ms"])
             if evaluation_clock_ms >= market_close_ms:
@@ -1205,6 +1268,125 @@ def summarize_execution(
     return result
 
 
+def evaluate_observations(
+    rows: Mapping[str, Sequence[Mapping[str, Any]]],
+    signals: Mapping[str, Sequence[ProxySignal]],
+    outcome_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate a pooled chronological sample under the frozen stopping rule."""
+    execution = summarize_execution(rows, signals)
+    base_300 = execution[BASE_VARIANT]["300"]
+    base_500 = execution[BASE_VARIANT]["500"]
+    base_rows = (base_300, base_500)
+    observed_outcome_audit = summarize_outcome_observations(outcome_rows)
+    if all(row["stopping_sample_reached"] for row in base_rows):
+        cutoffs = [
+            (float(row["stopping_last_protocol_slot"]), str(row["stopping_last_market_id"]))
+            for row in base_rows
+        ]
+        judged_market_ids = {
+            signal.market_id
+            for variant_signals in signals.values()
+            for signal in variant_signals
+            if any(_signal_protocol_key(signal) <= cutoff for cutoff in cutoffs)
+        }
+        outcome_audit = summarize_outcome_observations(
+            row for row in outcome_rows if str(row["market_id"]) in judged_market_ids
+        )
+    else:
+        outcome_audit = observed_outcome_audit
+
+    robust_variants = [
+        variant for variant in execution
+        if variant.startswith("omit_") or variant == TIMING_VARIANT
+    ]
+    robustness = {
+        variant: {
+            "coverage_vs_base_300": execution[variant]["300"]["coverage_vs_base"],
+            "coverage_vs_base_500": execution[variant]["500"]["coverage_vs_base"],
+            "direction_match_rate_300": execution[variant]["300"]["direction_match_rate"],
+            "direction_match_rate_500": execution[variant]["500"]["direction_match_rate"],
+            "ev_300": execution[variant]["300"]["net_ev_per_share"],
+            "ev_500": execution[variant]["500"]["net_ev_per_share"],
+            "unresolved_300": execution[variant]["300"]["unresolved_market_count"],
+            "unresolved_500": execution[variant]["500"]["unresolved_market_count"],
+        }
+        for variant in robust_variants
+    }
+    positive_robustness = all(
+        row["coverage_vs_base_300"] >= 0.80
+        and row["coverage_vs_base_500"] >= 0.80
+        and row["direction_match_rate_300"] >= 0.80
+        and row["direction_match_rate_500"] >= 0.80
+        and row["ev_300"] is not None and row["ev_300"] > 0
+        and row["ev_500"] is not None and row["ev_500"] > 0
+        and row["unresolved_300"] == 0
+        and row["unresolved_500"] == 0
+        for row in robustness.values()
+    )
+
+    def statistical(row: Mapping[str, Any]) -> bool:
+        return bool(
+            row["stopping_sample_reached"]
+            and row["unresolved_market_count"] == 0
+            and row["fills"] >= MIN_STOPPING_FILLS
+            and row["days"] >= MIN_STOPPING_DAYS
+            and row["day_cluster_lower_99"] is not None
+            and row["day_cluster_lower_99"] > 0
+            and row["corrected_exact_p"] < 0.01
+        )
+
+    statistical_by_latency = {"300": statistical(base_300), "500": statistical(base_500)}
+    both_base_positive = all(
+        row["fills"] and row["net_ev_per_share"] is not None and row["net_ev_per_share"] > 0
+        for row in (base_300, base_500)
+    )
+    baseline_increment = {
+        latency: execution[BASE_VARIANT][latency]["pnl_per_signal"]
+        - execution[BASELINE_VARIANT][latency]["pnl_per_signal"]
+        for latency in ("300", "500")
+    }
+    beats_baseline = all(value > 0 for value in baseline_increment.values())
+    all_evaluated_outcomes_resolved = all(
+        execution[variant][latency]["unresolved_market_count"] == 0
+        for variant in execution
+        for latency in ("300", "500")
+    )
+    paper_gate_passes = bool(
+        both_base_positive and positive_robustness and beats_baseline
+        and all_evaluated_outcomes_resolved
+        and outcome_audit["passes"] and all(statistical_by_latency.values())
+    )
+    gate = {
+        # Displayed L2 proves only that depth survived to the checkpoint. It cannot
+        # certify queue priority or hidden-liquidity competition, so overall passage
+        # remains false until a separately authorised bounded live FAK calibration.
+        "passes": False,
+        "paper_gate_passes": paper_gate_passes,
+        "live_fak_calibration_passes": False,
+        "requires_live_fak_calibration": True,
+        "base_300ms_and_500ms_positive": both_base_positive,
+        "beats_delayed_chainlink_baseline": beats_baseline,
+        "pnl_per_signal_increment_vs_baseline": baseline_increment,
+        "all_source_ablations_and_timing_positive": positive_robustness,
+        "all_evaluated_outcomes_resolved": all_evaluated_outcomes_resolved,
+        "robustness": robustness,
+        "settlement_rule_matches_official_outcomes": outcome_audit["passes"],
+        "statistical_gate_by_latency": statistical_by_latency,
+        "required_fills": MIN_STOPPING_FILLS,
+        "required_days": MIN_STOPPING_DAYS,
+        "paper_depth_warning": (
+            "displayed direct depth does not prove queue priority or hidden live FAK fill"
+        ),
+    }
+    return {
+        "execution": execution,
+        "outcome_audit": outcome_audit,
+        "observed_outcome_audit": observed_outcome_audit,
+        "gate": gate,
+    }
+
+
 def paper_verdict(result: Mapping[str, Any]) -> dict[str, Any]:
     base = result["execution"][BASE_VARIANT]
     primary_rows = [base["300"], base["500"]]
@@ -1285,6 +1467,8 @@ def _load_source(root: Path, source: str, config: ProxyConfig) -> tuple[StepSeri
             # Require a fresh Kraken snapshot / both Bybit sides afterwards.
             state = FrameState()
         last_frame_ms = receive_ms
+        if not any(marker in text for marker in PRICE_FRAME_MARKERS[source]):
+            continue
         points, _ = parse_raw_frame(source, receive_ms, text, state)
         for point in points:
             count += 1
@@ -1347,6 +1531,7 @@ def run(
     *,
     calibration_pin: str | Path | None = None,
     fingerprint: str | None = None,
+    include_observations: bool = False,
 ) -> dict[str, Any]:
     config = config or ProxyConfig()
     if holdout_start_ms < calibration_end_ms:
@@ -1376,7 +1561,7 @@ def run(
         mapping for mapping in mappings
         if int(mapping["slot"]) * 1_000.0 >= holdout_start_ms
     ]
-    observed_outcome_audit = audit_official_outcomes(
+    outcome_rows = outcome_observations(
         holdout_mappings, official_outcomes, chainlink,
     )
     signals, signal_audit = generate_signals(
@@ -1389,110 +1574,8 @@ def run(
         mappings,
         execution_config(fee_rate),
     )
-    execution = summarize_execution(execution_rows, signals)
-    base_300 = execution[BASE_VARIANT]["300"]
-    base_500 = execution[BASE_VARIANT]["500"]
-    base_rows = (base_300, base_500)
-    if all(row["stopping_sample_reached"] for row in base_rows):
-        cutoffs = [
-            (float(row["stopping_last_protocol_slot"]), str(row["stopping_last_market_id"]))
-            for row in base_rows
-        ]
-        judged_market_ids = {
-            signal.market_id
-            for variant_signals in signals.values()
-            for signal in variant_signals
-            if any(_signal_protocol_key(signal) <= cutoff for cutoff in cutoffs)
-        }
-        judged_mappings = [
-            mapping for mapping in holdout_mappings
-            if str(mapping["market_id"]) in judged_market_ids
-        ]
-        outcome_audit = audit_official_outcomes(
-            judged_mappings, official_outcomes, chainlink,
-        )
-    else:
-        outcome_audit = observed_outcome_audit
-    robust_variants = [variant for variant in execution
-                       if variant.startswith("omit_") or variant == TIMING_VARIANT]
-    robustness = {
-        variant: {
-            "coverage_vs_base_300": execution[variant]["300"]["coverage_vs_base"],
-            "coverage_vs_base_500": execution[variant]["500"]["coverage_vs_base"],
-            "direction_match_rate_300": execution[variant]["300"]["direction_match_rate"],
-            "direction_match_rate_500": execution[variant]["500"]["direction_match_rate"],
-            "ev_300": execution[variant]["300"]["net_ev_per_share"],
-            "ev_500": execution[variant]["500"]["net_ev_per_share"],
-            "unresolved_300": execution[variant]["300"]["unresolved_market_count"],
-            "unresolved_500": execution[variant]["500"]["unresolved_market_count"],
-        }
-        for variant in robust_variants
-    }
-    positive_robustness = all(
-        row["coverage_vs_base_300"] >= 0.80
-        and row["coverage_vs_base_500"] >= 0.80
-        and row["direction_match_rate_300"] >= 0.80
-        and row["direction_match_rate_500"] >= 0.80
-        and row["ev_300"] is not None and row["ev_300"] > 0
-        and row["ev_500"] is not None and row["ev_500"] > 0
-        and row["unresolved_300"] == 0
-        and row["unresolved_500"] == 0
-        for row in robustness.values()
-    )
-
-    def statistical(row: Mapping[str, Any]) -> bool:
-        return bool(
-            row["stopping_sample_reached"]
-            and row["unresolved_market_count"] == 0
-            and row["fills"] >= MIN_STOPPING_FILLS
-            and row["days"] >= MIN_STOPPING_DAYS
-            and row["day_cluster_lower_99"] is not None
-            and row["day_cluster_lower_99"] > 0
-            and row["corrected_exact_p"] < 0.01
-        )
-
-    statistical_by_latency = {"300": statistical(base_300), "500": statistical(base_500)}
-    both_base_positive = all(
-        row["fills"] and row["net_ev_per_share"] is not None and row["net_ev_per_share"] > 0
-        for row in (base_300, base_500)
-    )
-    baseline_increment = {
-        latency: execution[BASE_VARIANT][latency]["pnl_per_signal"]
-        - execution[BASELINE_VARIANT][latency]["pnl_per_signal"]
-        for latency in ("300", "500")
-    }
-    beats_baseline = all(value > 0 for value in baseline_increment.values())
-    all_evaluated_outcomes_resolved = all(
-        execution[variant][latency]["unresolved_market_count"] == 0
-        for variant in execution
-        for latency in ("300", "500")
-    )
-    paper_gate_passes = bool(
-        both_base_positive and positive_robustness and beats_baseline
-        and all_evaluated_outcomes_resolved
-        and outcome_audit["passes"] and all(statistical_by_latency.values())
-    )
-    gate = {
-        # Displayed L2 proves only that depth survived to the checkpoint.  It cannot
-        # certify queue priority or hidden-liquidity competition, so overall passage
-        # remains false until a separately authorised bounded live FAK calibration.
-        "passes": False,
-        "paper_gate_passes": paper_gate_passes,
-        "live_fak_calibration_passes": False,
-        "requires_live_fak_calibration": True,
-        "base_300ms_and_500ms_positive": both_base_positive,
-        "beats_delayed_chainlink_baseline": beats_baseline,
-        "pnl_per_signal_increment_vs_baseline": baseline_increment,
-        "all_source_ablations_and_timing_positive": positive_robustness,
-        "all_evaluated_outcomes_resolved": all_evaluated_outcomes_resolved,
-        "robustness": robustness,
-        "settlement_rule_matches_official_outcomes": outcome_audit["passes"],
-        "statistical_gate_by_latency": statistical_by_latency,
-        "required_fills": MIN_STOPPING_FILLS,
-        "required_days": MIN_STOPPING_DAYS,
-        "paper_depth_warning": "displayed direct depth does not prove queue priority or hidden live FAK fill",
-    }
-    return {
+    evaluation = evaluate_observations(execution_rows, signals, outcome_rows)
+    result = {
         "protocol": {
             "calibration_end_ms": calibration_end_ms,
             "holdout_start_ms": holdout_start_ms,
@@ -1506,12 +1589,19 @@ def run(
         },
         "source_stats": source_stats,
         "calibration": asdict(calibration),
-        "outcome_audit": outcome_audit,
-        "observed_outcome_audit": observed_outcome_audit,
         "signals": signal_audit,
-        "execution": execution,
-        "gate": gate,
+        **evaluation,
     }
+    if include_observations:
+        result["observations"] = {
+            "signals": {
+                variant: [asdict(signal) for signal in variant_signals]
+                for variant, variant_signals in signals.items()
+            },
+            "execution_rows": execution_rows,
+            "outcome_rows": outcome_rows,
+        }
+    return result
 
 
 def main() -> None:

@@ -1,14 +1,16 @@
 {
-  "strategy_id": "settlement-proxy-v1",
-  "protocol_frozen_at": "2026-10-04T20:37:32Z",
-  "calibration_end": "2026-10-05T13:00:00Z",
-  "holdout_start": "2026-10-05T13:00:00Z",
+  "strategy_id": "settlement-proxy-v3",
+  "supersedes": "settlement-proxy-v1-v2-rejected-infeasible-calibration-availability",
+  "protocol_frozen_at": "2026-10-09T11:18:03Z",
+  "calibration_end": "2026-10-08T00:00:00Z",
+  "holdout_start": "2026-10-10T00:00:00Z",
+  "calibration_embargo_hours": 48,
   "signal": {
     "opening": "exact received Chainlink mean at payload offsets -62s through -2s",
-    "closing": "geometric mean of six-spot median and Deribit BTC index means",
+    "closing": "mean of per-second median from at least four of six spot venues; geometric mean with Deribit only when its full window is available",
     "direction": "sign of projected closing minus opening",
     "minimum_margin": "frozen 99th-percentile absolute calibration residual times 1.25",
-    "agreement_required": true,
+    "agreement_required_when_deribit_complete": true,
     "decision_lead_ms": 1000.0,
     "one_signal_per_market": true
   },
@@ -21,7 +23,7 @@
       "okx",
       "bybit_spot"
     ],
-    "index": "deribit_index",
+    "optional_index": "deribit_index",
     "settlement_truth": "received Chainlink BTC/USD"
   },
   "proxy_config": {
@@ -66,7 +68,8 @@
       900.0,
       1000.0
     ],
-    "calibration_fit_fraction": 0.6,
+    "calibration_fit_fraction": 0.4,
+    "minimum_spot_sources": 4,
     "min_fit_points": 300,
     "min_validation_windows": 100,
     "residual_quantile": 0.99,
