@@ -1,11 +1,9 @@
 import gzip
 import json
 
-import pytest
-
 import eu_strict as eu
 import h_replay_archive as archive
-
+import pytest
 
 DAY = "20261010"
 START_NS = 1_791_590_400_000_000_000
@@ -31,17 +29,20 @@ def test_builds_valid_receipt_race_artifact_from_eu_recorders(tmp_path):
     data.mkdir()
     poly.mkdir()
     routes = {
-        "bn_spot_2": {"e": "trade", "T": SOURCE_MS, "p": "80000", "q": "0.1", "t": 1},
-        "bn_spot_3": {"e": "trade", "T": SOURCE_MS, "p": "80000", "q": "0.1", "t": 1},
-        "bn_spot_4": {"e": "trade", "T": SOURCE_MS, "p": "80000", "q": "0.1", "t": 1},
+        "bn_spot_2": {"e": "trade", "s": "BTCUSDT", "T": SOURCE_MS,
+                      "p": "80000", "q": "0.1", "t": 1},
+        "bn_spot_3": {"e": "trade", "s": "BTCUSDT", "T": SOURCE_MS,
+                      "p": "80000", "q": "0.1", "t": 1},
+        "bn_spot_4": {"e": "trade", "s": "BTCUSDT", "T": SOURCE_MS,
+                      "p": "80000", "q": "0.1", "t": 1},
         "bn_fut_pub_2": {"e": "bookTicker", "E": SOURCE_MS, "T": SOURCE_MS,
-                         "u": 1, "b": "79999", "a": "80001"},
+                         "s": "BTCUSDT", "u": 1, "b": "79999", "a": "80001"},
         "bn_fut_pub_3": {"e": "bookTicker", "E": SOURCE_MS, "T": SOURCE_MS,
-                         "u": 1, "b": "79999", "a": "80001"},
+                         "s": "BTCUSDT", "u": 1, "b": "79999", "a": "80001"},
         "bn_fut_trade": {"e": "trade", "E": SOURCE_MS, "T": SOURCE_MS,
-                         "t": 1, "p": "80000", "q": "0.1"},
+                         "s": "BTCUSDT", "t": 1, "p": "80000", "q": "0.1"},
         "bn_fut_trade_2": {"e": "trade", "E": SOURCE_MS, "T": SOURCE_MS,
-                           "t": 1, "p": "80000", "q": "0.1"},
+                           "s": "BTCUSDT", "t": 1, "p": "80000", "q": "0.1"},
     }
     for offset, (route, frame) in enumerate(routes.items()):
         epoch = START_NS + 100 + offset
@@ -178,11 +179,30 @@ def test_route_reader_does_not_hide_unknown_malformed_frames(tmp_path):
 ])
 def test_trade_adapter_drops_non_economic_numeric_sentinels(role, price, size):
     payload = {
-        "e": "trade", "E": SOURCE_MS, "T": SOURCE_MS,
+        "e": "trade", "s": "BTCUSDT", "E": SOURCE_MS, "T": SOURCE_MS,
         "t": 7, "p": price, "q": size,
     }
 
     assert eu._frame_event(role, payload) is None
+
+
+@pytest.mark.parametrize("role", ["spot", "futures", "futures_trade"])
+def test_source_adapter_rejects_a_non_btc_subscription(role):
+    payload = {
+        "e": "bookTicker" if role == "futures" else "trade",
+        "s": "ETHUSDT",
+        "E": SOURCE_MS,
+        "T": SOURCE_MS,
+        "t": 7,
+        "u": 7,
+        "p": "80000",
+        "q": "0.1",
+        "b": "79999",
+        "a": "80001",
+    }
+
+    with pytest.raises(ValueError, match="symbol"):
+        eu._frame_event(role, payload)
 
 
 def test_clob_reader_recovers_legacy_transport_newline_split(tmp_path):

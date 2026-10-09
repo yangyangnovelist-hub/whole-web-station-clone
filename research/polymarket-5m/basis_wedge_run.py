@@ -10,19 +10,29 @@ import heapq
 import json
 import math
 from collections import Counter
-from dataclasses import asdict, dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, replace
+from decimal import ROUND_HALF_UP, Decimal
 from itertools import groupby
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import basis_wedge as wedge
 import h_replay_archive as archive
 from h_replay_run import DirectMarketBook, TokenBook, _mapping_dict, _merged_events
 
-
 EVALUATION_MS = (400.0, 500.0)
 TARGET_SHARES = 5.0
+TIME_SHIFT_MS = 5_000.0
+NO_WEDGE_MAX_BP = 0.5
+BASE_VARIANT = "base"
+CONTROL_VARIANTS = (
+    "no_wedge",
+    "direction_reversal",
+    "time_shift",
+    "confirmation",
+)
+VARIANTS = (BASE_VARIANT, *CONTROL_VARIANTS)
 _EPS = 1e-9
 
 
@@ -41,6 +51,22 @@ class _Pending:
     epoch: int
     signal_id: str
     signal: wedge.WedgeSignal
+    parent_signal_id: str | None = None
+    variant: str = BASE_VARIANT
+    decision_recv_ms: float = -math.inf
+    scheduled_decision_recv_ms: float = -math.inf
+    decision_book_recv_ms: float | None = None
+    sent: bool = True
+    terminal_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _DelayedDecision:
+    due_ms: float
+    sequence: int
+    epoch: int
+    signal: wedge.WedgeSignal
+    parent_signal_id: str
 
 
 def _unique_markets(
@@ -91,7 +117,7 @@ def _rounded_fee(levels: list[tuple[float, float]], rate: float) -> float:
             Decimal(str(shares))
             * decimal_rate
             * Decimal(str(price))
-            * (Decimal("1") - Decimal(str(price)))
+            * (Decimal(1) - Decimal(str(price)))
         )
         for price, shares in levels
     )
@@ -103,14 +129,21 @@ def _fill_direct(
     fixed_limit: float,
     target_shares: float,
     fee_rate: float,
-) -> tuple[str, float, float | None, float | None, float | None]:
+) -> tuple[
+    str,
+    float,
+    float | None,
+    float | None,
+    float | None,
+    tuple[tuple[float, float], ...],
+]:
     asks = tuple(sorted(token.asks.items())) if token.ready else ()
     if not token.ready:
-        return "book_unavailable", 0.0, None, None, None
+        return "book_unavailable", 0.0, None, None, None, ()
     if not asks:
-        return "no_direct_ask", 0.0, None, None, None
+        return "no_direct_ask", 0.0, None, None, None, ()
     if asks[0][0] > fixed_limit + _EPS:
-        return "ask_above_frozen_limit", 0.0, None, None, None
+        return "ask_above_frozen_limit", 0.0, None, None, None, ()
 
     remaining = target_shares
     fills: list[tuple[float, float]] = []
@@ -128,10 +161,10 @@ def _fill_direct(
             break
     filled_shares = target_shares - remaining
     if filled_shares <= _EPS:
-        return "insufficient_direct_depth", 0.0, None, None, None
+        return "insufficient_direct_depth", 0.0, None, None, None, ()
     fee = _rounded_fee(fills, fee_rate)
     reason = "filled" if remaining <= _EPS else "partial_fill"
-    return reason, filled_shares, notional / filled_shares, fee, notional
+    return reason, filled_shares, notional / filled_shares, fee, notional, tuple(fills)
 
 
 def _result_row(
@@ -144,18 +177,19 @@ def _result_row(
 ) -> dict[str, Any]:
     signal = pending.signal
     book_recv_ms = state.recv_ms if math.isfinite(state.recv_ms) else None
-    reason = terminal_reason
+    reason = terminal_reason or pending.terminal_reason
     shares = 0.0
     fill_vwap = None
     fee = None
     notional = None
+    fill_levels: tuple[tuple[float, float], ...] = ()
     if reason is None and pending.epoch != current_epoch:
         reason = "disconnect"
     elif reason is None and book_recv_ms is not None and book_recv_ms > pending.due_ms + _EPS:
         reason = "future_book_guard"
     elif reason is None:
         token = state.book.up if signal.buy_side == wedge.UP else state.book.down
-        reason, shares, fill_vwap, fee, notional = _fill_direct(
+        reason, shares, fill_vwap, fee, notional, fill_levels = _fill_direct(
             token,
             signal.fixed_limit,
             TARGET_SHARES,
@@ -172,11 +206,16 @@ def _result_row(
            if filled and won is not None and total_cost is not None else None)
     return {
         "signal_id": pending.signal_id,
+        "parent_signal_id": pending.parent_signal_id,
         "paper_only": True,
         "ordering_clock": "local_receipt_ms",
         "match_book_clock": "local_receipt_ms",
         "market_id": signal.market_id,
+        "variant": pending.variant,
         "signal_recv_ms": signal.recv_ms,
+        "decision_recv_ms": pending.decision_recv_ms,
+        "scheduled_decision_recv_ms": pending.scheduled_decision_recv_ms,
+        "decision_book_recv_ms": pending.decision_book_recv_ms,
         "evaluation_ms": pending.evaluation_ms,
         "evaluation_recv_ms": pending.due_ms,
         "book_recv_ms": book_recv_ms,
@@ -190,6 +229,10 @@ def _result_row(
         "target_shares": TARGET_SHARES,
         "filled_shares": shares if filled else 0.0,
         "fill_vwap": fill_vwap,
+        "fill_levels": [
+            {"price": price, "shares": level_shares}
+            for price, level_shares in fill_levels
+        ],
         "fee_rate": state.fee_rate,
         "fee": fee,
         "total_cost": total_cost,
@@ -200,6 +243,7 @@ def _result_row(
         "pnl": pnl,
         "filled": filled,
         "full_fill": full_fill,
+        "sent": pending.sent,
         "reason": reason,
         "signal": asdict(signal),
     }
@@ -212,6 +256,7 @@ def replay_normalized(
     outcomes: dict[str, str],
     *,
     detector_config: wedge.DetectorConfig | None = None,
+    include_controls: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Replay normalized strict streams with 400/500 ms direct-book execution."""
     config = detector_config or wedge.DetectorConfig()
@@ -222,11 +267,26 @@ def replay_normalized(
         for row in mapping_rows
     }
     states = _unique_markets(token_index, fees, config.fee_rate)
-    detector = wedge.BasisWedgeDetector(config)
+    detectors = {BASE_VARIANT: wedge.BasisWedgeDetector(config)}
+    if include_controls:
+        detectors.update({
+            "no_wedge": wedge.BasisWedgeDetector(replace(
+                config,
+                min_basis_move_bp=0.0,
+                max_basis_move_bp=NO_WEDGE_MAX_BP,
+                require_confirmation=False,
+            )),
+            "confirmation": wedge.BasisWedgeDetector(replace(
+                config,
+                require_confirmation=True,
+            )),
+        })
     counters: Counter[str] = Counter()
     rows: list[dict[str, Any]] = []
     pending: list[tuple[float, int, _Pending]] = []
+    delayed: list[tuple[float, int, _DelayedDecision]] = []
     pending_sequence = 0
+    delayed_sequence = 0
     signal_sequence = 0
     epoch = 0
     clob_connected = False
@@ -238,27 +298,118 @@ def replay_normalized(
         epoch += 1
         source_fresh.update({source: False for source in source_fresh})
         _reset_books(states)
-        detector.feed({"kind": "disconnect", "recv_ms": recv_ms, "symbol": config.symbol})
+        for detector in detectors.values():
+            detector.feed({"kind": "disconnect", "recv_ms": recv_ms, "symbol": config.symbol})
         counters["fail_closed_resets"] += 1
         counters[f"reset_{reason}"] += 1
 
-    def schedule(signal: wedge.WedgeSignal) -> None:
+    def schedule(
+        signal: wedge.WedgeSignal,
+        variant: str,
+        *,
+        decision_recv_ms: float | None = None,
+        scheduled_decision_recv_ms: float | None = None,
+        parent_signal_id: str | None = None,
+        sent: bool = True,
+        terminal_reason: str | None = None,
+    ) -> str:
         nonlocal pending_sequence, signal_sequence
         signal_sequence += 1
-        signal_id = f"{signal.market_id}:{signal.recv_ms:.6f}:{signal_sequence}"
+        signal_id = (
+            f"{variant}:{signal.market_id}:{signal.recv_ms:.6f}:{signal_sequence}"
+        )
+        decision_ms = signal.recv_ms if decision_recv_ms is None else decision_recv_ms
+        scheduled_decision_ms = (
+            decision_ms
+            if scheduled_decision_recv_ms is None
+            else scheduled_decision_recv_ms
+        )
+        state = states[signal.market_id]
+        decision_book_ms = state.recv_ms if math.isfinite(state.recv_ms) else None
         counters["signals"] += 1
+        counters[f"signals_{variant}"] += 1
         for latency in EVALUATION_MS:
             item = _Pending(
-                signal.recv_ms + latency,
+                decision_ms + latency,
                 pending_sequence,
                 latency,
                 epoch,
                 signal_id,
                 signal,
+                parent_signal_id,
+                variant,
+                decision_ms,
+                scheduled_decision_ms,
+                decision_book_ms,
+                sent,
+                terminal_reason,
             )
             heapq.heappush(pending, (item.due_ms, item.sequence, item))
             pending_sequence += 1
             counters["evaluations_scheduled"] += 1
+        return signal_id
+
+    def reversal_signal(signal: wedge.WedgeSignal) -> tuple[wedge.WedgeSignal, str | None]:
+        state = states[signal.market_id]
+        token = state.book.up if signal.basis_direction == wedge.UP else state.book.down
+        asks = tuple(sorted(token.asks.items())) if token.ready else ()
+        fair = 1.0 - signal.fair
+        priced = wedge.price_direct_asks(asks, fair, config, require_edge=False)
+        if priced is None:
+            counters["direction_reversal_unavailable"] += 1
+            top = asks[0][0] if asks else 0.0
+            visible = sum(size for _price, size in asks)
+            return (
+                replace(
+                    signal,
+                    buy_side=signal.basis_direction,
+                    fair=fair,
+                    ask=top,
+                    fixed_limit=top,
+                    fee=0.0,
+                    net_edge=fair - top,
+                    direct_depth=visible,
+                ),
+                "direction_reversal_decision_unavailable",
+            )
+        ask, fixed_limit, fee, net_edge, direct_depth = priced
+        return (
+            replace(
+                signal,
+                buy_side=signal.basis_direction,
+                fair=fair,
+                ask=ask,
+                fixed_limit=fixed_limit,
+                fee=fee,
+                net_edge=net_edge,
+                direct_depth=direct_depth,
+            ),
+            None,
+        )
+
+    def handle_signal(variant: str, signal: wedge.WedgeSignal) -> None:
+        nonlocal delayed_sequence
+        base_signal_id = schedule(signal, variant)
+        if not include_controls or variant != BASE_VARIANT:
+            return
+        reversed_signal, reversal_reason = reversal_signal(signal)
+        schedule(
+            reversed_signal,
+            "direction_reversal",
+            parent_signal_id=base_signal_id,
+            sent=reversal_reason is None,
+            terminal_reason=reversal_reason,
+        )
+        item = _DelayedDecision(
+            signal.recv_ms + TIME_SHIFT_MS,
+            delayed_sequence,
+            epoch,
+            signal,
+            base_signal_id,
+        )
+        heapq.heappush(delayed, (item.due_ms, item.sequence, item))
+        delayed_sequence += 1
+        counters["time_shift_decisions_scheduled"] += 1
 
     def record(item: _Pending, terminal_reason: str | None = None) -> None:
         state = states[item.signal.market_id]
@@ -272,6 +423,7 @@ def replay_normalized(
         rows.append(row)
         counters["evaluations"] += 1
         counters[f"reason_{row['reason']}"] += 1
+        counters[f"reason_{item.variant}_{row['reason']}"] += 1
         if row["filled"]:
             counters["fills"] += 1
             counters[f"fills_{int(item.evaluation_ms)}ms"] += 1
@@ -279,14 +431,54 @@ def replay_normalized(
             if row["winner"] is None:
                 counters["fills_without_outcome"] += 1
 
+    def decide_time_shift(item: _DelayedDecision) -> None:
+        state = states[item.signal.market_id]
+        reason = None
+        if item.epoch != epoch:
+            reason = "disconnect"
+        elif math.isfinite(state.recv_ms) and state.recv_ms > item.due_ms + _EPS:
+            reason = "future_book_guard"
+        else:
+            token = state.book.up if item.signal.buy_side == wedge.UP else state.book.down
+            decision_reason, shares, _vwap, _fee, _notional, _levels = _fill_direct(
+                token,
+                item.signal.fixed_limit,
+                TARGET_SHARES,
+                state.fee_rate,
+            )
+            if decision_reason != "filled" or shares + _EPS < TARGET_SHARES:
+                suffix = {
+                    "book_unavailable": "book_unavailable",
+                    "no_direct_ask": "no_direct_ask",
+                    "ask_above_frozen_limit": "ask_above_limit",
+                    "partial_fill": "insufficient_direct_depth",
+                    "insufficient_direct_depth": "insufficient_direct_depth",
+                }.get(decision_reason, decision_reason)
+                reason = f"shifted_decision_{suffix}"
+        schedule(
+            item.signal,
+            "time_shift",
+            decision_recv_ms=item.due_ms,
+            scheduled_decision_recv_ms=item.due_ms,
+            parent_signal_id=item.parent_signal_id,
+            sent=reason is None,
+            terminal_reason=reason,
+        )
+
     def drain(cutoff_ms: float, *, inclusive: bool) -> None:
-        while pending:
-            due_ms = pending[0][0]
+        while pending or delayed:
+            pending_due = pending[0][0] if pending else math.inf
+            delayed_due = delayed[0][0] if delayed else math.inf
+            due_ms = min(pending_due, delayed_due)
             due = due_ms <= cutoff_ms + _EPS if inclusive else due_ms < cutoff_ms - _EPS
             if not due:
                 return
-            _, _, item = heapq.heappop(pending)
-            record(item)
+            if pending_due <= delayed_due:
+                _, _, item = heapq.heappop(pending)
+                record(item)
+            else:
+                _, _, item = heapq.heappop(delayed)
+                decide_time_shift(item)
 
     def process_source(event: dict[str, Any]) -> None:
         nonlocal clob_connected
@@ -317,16 +509,22 @@ def replay_normalized(
         if not source_active[source]:
             counters[f"ignored_{source}_while_disconnected"] += 1
             return
+        if "symbol" not in event:
+            raise ValueError("symbol is required on every normalized source frame")
+        if str(event["symbol"]).upper() != config.symbol.upper():
+            raise ValueError("normalized source symbol drift")
         source_fresh[source] = True
-        signal = detector.feed({
+        normalized = {
             "kind": kind,
             "recv_ms": recv_ms,
             "bid": float(event["bid"]),
             "ask": float(event["ask"]),
-            "symbol": event.get("symbol", config.symbol),
-        })
-        if signal is not None:
-            schedule(signal)
+            "symbol": event["symbol"],
+        }
+        for variant, detector in detectors.items():
+            signal = detector.feed(normalized)
+            if signal is not None:
+                handle_signal(variant, signal)
 
     def process_clob(batch: dict[str, Any]) -> None:
         nonlocal clob_connected
@@ -382,9 +580,11 @@ def replay_normalized(
             if not state.book.ready:
                 counters["direct_book_not_ready"] += 1
                 continue
-            signal = detector.feed(_direct_pm_event(state, recv_ms, config.symbol))
-            if signal is not None:
-                schedule(signal)
+            normalized = _direct_pm_event(state, recv_ms, config.symbol)
+            for variant, detector in detectors.items():
+                signal = detector.feed(normalized)
+                if signal is not None:
+                    handle_signal(variant, signal)
 
     last_recv_ms = -math.inf
     for receive_ms, group in groupby(
@@ -400,38 +600,60 @@ def replay_normalized(
         drain(receive_ms, inclusive=True)
         last_recv_ms = receive_ms
 
+    while delayed:
+        _, _, item = heapq.heappop(delayed)
+        counters["time_shift_censored_before_decision"] += 1
+        schedule(
+            item.signal,
+            "time_shift",
+            decision_recv_ms=item.signal.recv_ms,
+            scheduled_decision_recv_ms=item.due_ms,
+            parent_signal_id=item.parent_signal_id,
+            sent=False,
+            terminal_reason="censored_before_shifted_decision",
+        )
     while pending:
         _, _, item = heapq.heappop(pending)
-        terminal_reason = "disconnect" if item.epoch != epoch else "censored_recording_end"
+        terminal_reason = item.terminal_reason
+        if terminal_reason is None:
+            terminal_reason = "disconnect" if item.epoch != epoch else "censored_recording_end"
         record(item, terminal_reason)
     counters["last_recv_ms_finite"] = int(math.isfinite(last_recv_ms))
     return rows, dict(counters)
 
 
 def summarize(rows: list[dict[str, Any]], counters: dict[str, int]) -> dict[str, Any]:
-    latencies: dict[str, Any] = {}
-    for latency in EVALUATION_MS:
-        sample = [row for row in rows if row["evaluation_ms"] == latency]
-        fills = [row for row in sample if row["filled"]]
-        full_fills = [row for row in fills if row["full_fill"]]
-        scored = [row for row in fills if row["pnl"] is not None]
-        latencies[str(int(latency))] = {
-            "signals": len(sample),
-            "fills": len(fills),
-            "full_fills": len(full_fills),
-            "partial_fills": len(fills) - len(full_fills),
-            "fill_rate": len(fills) / len(sample) if sample else 0.0,
-            "full_fill_rate": len(full_fills) / len(sample) if sample else 0.0,
-            "filled_shares": sum(float(row["filled_shares"]) for row in fills),
-            "pnl": sum(float(row["pnl"]) for row in scored),
-            "net_ev_per_share": (
-                sum(float(row["pnl"]) for row in scored)
-                / sum(float(row["filled_shares"]) for row in scored)
-                if scored else None
-            ),
-            "reasons": dict(Counter(str(row["reason"]) for row in sample)),
-        }
-    return {"counters": counters, "latencies": latencies}
+    variants: dict[str, Any] = {}
+    for variant in VARIANTS:
+        latencies: dict[str, Any] = {}
+        variant_rows = [row for row in rows if row.get("variant", BASE_VARIANT) == variant]
+        for latency in EVALUATION_MS:
+            sample = [row for row in variant_rows if row["evaluation_ms"] == latency]
+            fills = [row for row in sample if row["filled"]]
+            full_fills = [row for row in fills if row["full_fill"]]
+            scored = [row for row in fills if row["pnl"] is not None]
+            filled_shares = sum(float(row["filled_shares"]) for row in scored)
+            pnl = sum(float(row["pnl"]) for row in scored)
+            latencies[str(int(latency))] = {
+                "signals": len(sample),
+                "sent": sum(bool(row.get("sent", True)) for row in sample),
+                "fills": len(fills),
+                "full_fills": len(full_fills),
+                "partial_fills": len(fills) - len(full_fills),
+                "fill_rate": len(fills) / len(sample) if sample else 0.0,
+                "full_fill_rate": len(full_fills) / len(sample) if sample else 0.0,
+                "filled_shares": sum(float(row["filled_shares"]) for row in fills),
+                "pnl": pnl,
+                "net_ev_per_share": pnl / filled_shares if filled_shares else None,
+                "reasons": dict(Counter(str(row["reason"]) for row in sample)),
+            }
+        variants[variant] = {"latencies": latencies}
+    return {
+        "counters": counters,
+        "variants": variants,
+        # Compatibility view used by the pre-control audit and old report code.
+        "latencies": variants[BASE_VARIANT]["latencies"],
+    }
 
 
 def replay_archive(
@@ -453,6 +675,7 @@ def replay_archive(
         standard / "source_events.jsonl.gz",
         family="source",
     )
+    config = detector_config or wedge.DetectorConfig()
     clob_events = archive.iter_normalized_events(
         standard / "clob_events.jsonl.gz",
         family="clob",
@@ -462,7 +685,7 @@ def replay_archive(
         clob_events,
         mappings,
         outcomes,
-        detector_config=detector_config,
+        detector_config=config,
     )
     if rows_out is not None:
         destination = Path(rows_out)
@@ -477,6 +700,7 @@ def replay_archive(
         "sample_scope": "standard_forward_artifact",
         "archive": root.name,
         "manifest": validation["manifest"],
+        "source_symbol_provenance": "validated_on_each_source_price_frame",
         "mapped_markets": len(mappings),
         "outcomes": len(outcomes),
     }

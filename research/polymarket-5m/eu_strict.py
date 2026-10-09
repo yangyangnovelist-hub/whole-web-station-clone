@@ -13,9 +13,10 @@ import os
 import shutil
 import time
 from collections import Counter
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 import pm_outcomes
 
@@ -153,7 +154,7 @@ def _iter_route(
                     continue
                 payload = _loads(raw)
                 if not isinstance(payload, dict):
-                    raise ValueError(f"{path.name}:{line_number}: frame is not an object")
+                    raise TypeError(f"{path.name}:{line_number}: frame is not an object")
                 yield receive_ns, route, payload
 
 
@@ -170,34 +171,45 @@ def _frame_event(role: str, payload: Mapping[str, Any]) -> dict[str, Any] | None
     if role == "spot":
         if event_name != "trade" and not stream.endswith("@trade"):
             return None
+        raw_symbol = str(data.get("s") or stream.partition("@")[0]).upper()
+        if raw_symbol != "BTCUSDT":
+            raise ValueError(f"unexpected spot symbol {raw_symbol!r}")
         price, size = float(data["p"]), float(data.get("q") or 0)
         if not (math.isfinite(price) and math.isfinite(size) and price > 0 and size > 0):
             return None
         return {
             "kind": "spot_trade", "source_ts_ms": _clock_ms(data.get("T")),
-            "price": price, "size": size,
+            "price": price, "size": size, "symbol": "BTC",
             "dedupe": (data.get("t"), data.get("T"), data.get("p"), data.get("q")),
         }
     if role == "futures":
         if event_name != "bookTicker" and "bookTicker" not in stream:
             return None
+        raw_symbol = str(data.get("s") or stream.partition("@")[0]).upper()
+        if raw_symbol != "BTCUSDT":
+            raise ValueError(f"unexpected futures symbol {raw_symbol!r}")
         bid, ask = float(data["b"]), float(data["a"])
         if not 0 < bid < ask:
             return None
         return {
             "kind": "futures_bbo", "source_ts_ms": _clock_ms(data.get("T") or data.get("E")),
             "event_ts_ms": _clock_ms(data.get("E")), "bid": bid, "ask": ask,
+            "symbol": "BTC",
             "dedupe": (data.get("u"), data.get("T"), data.get("b"), data.get("a")),
         }
     if role == "futures_trade":
         if event_name != "trade" and not stream.endswith("@trade"):
             return None
+        raw_symbol = str(data.get("s") or stream.partition("@")[0]).upper()
+        if raw_symbol != "BTCUSDT":
+            raise ValueError(f"unexpected futures-trade symbol {raw_symbol!r}")
         price, size = float(data["p"]), float(data.get("q") or 0)
         if not (math.isfinite(price) and math.isfinite(size) and price > 0 and size > 0):
             return None
         return {
             "kind": "futures_trade", "source_ts_ms": _clock_ms(data.get("T")),
             "event_ts_ms": _clock_ms(data.get("E")), "price": price, "size": size,
+            "symbol": "BTC",
             "dedupe": (data.get("t"), data.get("T"), data.get("p"), data.get("q")),
         }
     if role == "deribit":
@@ -213,7 +225,7 @@ def _frame_event(role: str, payload: Mapping[str, Any]) -> dict[str, Any] | None
         return {
             "kind": "deribit_quote", "source_ts_ms": _clock_ms(quote.get("timestamp")),
             "bid": bid, "ask": ask, "bid_size": float(quote.get("best_bid_amount") or 0),
-            "ask_size": float(quote.get("best_ask_amount") or 0),
+            "ask_size": float(quote.get("best_ask_amount") or 0), "symbol": "BTC",
             "dedupe": (quote.get("timestamp"), quote.get("best_bid_price"),
                        quote.get("best_ask_price")),
         }

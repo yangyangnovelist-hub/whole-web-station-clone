@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 import basis_wedge as bw
 import pytest
@@ -125,6 +125,41 @@ def test_spot_or_deribit_confirmation_rejects_the_wedge() -> None:
         ))
 
         assert signal is None
+
+
+def test_confirmation_mode_requires_a_same_direction_post_shock_move() -> None:
+    detector = bw.BasisWedgeDetector(bw.DetectorConfig(require_confirmation=True))
+    prime(detector)
+    detector.feed(bbo("futures_bbo", 200.0, 100.02))
+    detector.feed(bbo("spot_bbo", 210.0, 100.004))
+    detector.feed(bbo("deribit_quote", 220.0, 100.0))
+
+    signal = detector.feed(book(
+        "m", 300.0, end_ms=120_000.0,
+        up=(0.52, 0.54), down=(0.43, 0.45), down_asks=((0.45, 5.0),),
+    ))
+
+    assert signal is not None
+    assert signal.spot_move_bp > 0.35
+    assert signal.basis_direction == "up"
+
+
+def test_maximum_basis_gate_supports_the_no_wedge_placebo() -> None:
+    detector = bw.BasisWedgeDetector(bw.DetectorConfig(
+        min_basis_move_bp=0.0,
+        max_basis_move_bp=0.5,
+    ))
+    prime(detector)
+    detector.feed(bbo("futures_bbo", 200.0, 100.004))
+    confirm(detector)
+
+    signal = detector.feed(book(
+        "m", 300.0, end_ms=120_000.0,
+        up=(0.52, 0.54), down=(0.43, 0.45), down_asks=((0.45, 5.0),),
+    ))
+
+    assert signal is not None
+    assert 0.0 < abs(signal.basis_change_bp) <= 0.5
 
 
 def test_polymarket_must_follow_the_basis_direction_by_two_cents() -> None:
@@ -363,8 +398,12 @@ def test_no_signal_until_spot_and_deribit_publish_after_the_futures_shock() -> N
     detector = bw.BasisWedgeDetector()
     prime(detector)
     detector.feed(bbo("futures_bbo", 200.0, 100.02))
-    followed = dict(end_ms=120_000.0, up=(0.52, 0.54), down=(0.43, 0.45),
-                    down_asks=((0.45, 5.0),))
+    followed = {
+        "end_ms": 120_000.0,
+        "up": (0.52, 0.54),
+        "down": (0.43, 0.45),
+        "down_asks": ((0.45, 5.0),),
+    }
 
     assert detector.feed(book("m", 250.0, **followed)) is None
     detector.feed(bbo("spot_bbo", 260.0, 100.0))
@@ -408,8 +447,8 @@ def test_reverse_fair_is_the_complement_of_the_anchor_direction_midpoint() -> No
 
 def test_follow_midpoint_requires_tight_five_share_bid_and_ask() -> None:
     cases = (
-        dict(up=(0.45, 0.55)),
-        dict(up_bids=((0.52, 1.0),), up_asks=((0.54, 10.0),)),
+        {"up": (0.45, 0.55)},
+        {"up_bids": ((0.52, 1.0),), "up_asks": ((0.54, 10.0),)},
     )
     for override in cases:
         detector = bw.BasisWedgeDetector()
@@ -454,8 +493,8 @@ def test_reported_price_fee_and_edge_use_the_full_five_share_vwap() -> None:
     assert signal is not None
     assert math.isclose(signal.ask, 0.448)
     raw_fee = (
-        Decimal("1") * Decimal("0.07") * Decimal("0.44") * Decimal("0.56")
-        + Decimal("4") * Decimal("0.07") * Decimal("0.45") * Decimal("0.55")
+        Decimal(1) * Decimal("0.07") * Decimal("0.44") * Decimal("0.56")
+        + Decimal(4) * Decimal("0.07") * Decimal("0.45") * Decimal("0.55")
     )
     rounded_fee = raw_fee.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP)
     expected_fee_per_share = float(rounded_fee) / 5.0
@@ -470,12 +509,12 @@ def test_same_millisecond_frames_use_feed_order_not_timestamp_equality() -> None
     detector.feed(bbo("deribit_quote", 200.0, 100.0))
     detector.feed(bbo("futures_bbo", 200.0, 100.02))
 
-    followed = dict(
-        end_ms=120_000.0,
-        up=(0.52, 0.54),
-        down=(0.43, 0.45),
-        down_asks=((0.45, 5.0),),
-    )
+    followed = {
+        "end_ms": 120_000.0,
+        "up": (0.52, 0.54),
+        "down": (0.43, 0.45),
+        "down_asks": ((0.45, 5.0),),
+    }
     assert detector.feed(book("m", 200.0, **followed)) is None
     detector.feed(bbo("spot_bbo", 200.0, 100.0))
     signal = detector.feed(bbo("deribit_quote", 200.0, 100.0))
@@ -503,12 +542,12 @@ def test_first_qualifying_futures_crossing_is_immutable_until_confirmation() -> 
     detector = bw.BasisWedgeDetector()
     prime(detector)
     detector.feed(bbo("futures_bbo", 200.0, 100.02))
-    followed = dict(
-        end_ms=120_000.0,
-        up=(0.52, 0.54),
-        down=(0.43, 0.45),
-        down_asks=((0.45, 5.0),),
-    )
+    followed = {
+        "end_ms": 120_000.0,
+        "up": (0.52, 0.54),
+        "down": (0.43, 0.45),
+        "down_asks": ((0.45, 5.0),),
+    }
     assert detector.feed(book("m", 205.0, **followed)) is None
     detector.feed(bbo("futures_bbo", 210.0, 100.02))
     detector.feed(bbo("spot_bbo", 220.0, 100.0))

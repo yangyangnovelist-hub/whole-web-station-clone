@@ -6,12 +6,11 @@ events and emits immutable candidates.  It never places or models an order.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Mapping, Sequence
+from decimal import ROUND_HALF_UP, Decimal
 
 from h_replay import taker_fee
-
 
 UP = "up"
 DOWN = "down"
@@ -31,6 +30,7 @@ class DetectorConfig:
     window_ms: float = 500.0
     max_source_age_ms: float = 500.0
     min_basis_move_bp: float = 1.5
+    max_basis_move_bp: float | None = None
     max_spot_move_bp: float = 0.35
     max_deribit_move_bp: float = 0.5
     max_chainlink_move_bp: float = 0.35
@@ -43,6 +43,7 @@ class DetectorConfig:
     min_direct_depth: float = 5.0
     fee_rate: float = 0.07
     require_chainlink: bool = False
+    require_confirmation: bool = False
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ class _WedgeCandidate:
     shock_recv_ms: float
     shock_order: int
     basis_direction: str
-    before: "_SourceState"
+    before: _SourceState
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,52 @@ def _levels(raw: object, *, bids: bool) -> tuple[tuple[float, float], ...]:
 
 def _bp_move(before: float, after: float) -> float:
     return (after / before - 1.0) * 10_000.0
+
+
+def price_direct_asks(
+    asks: Sequence[tuple[float, float]],
+    fair: float,
+    config: DetectorConfig,
+    *,
+    require_edge: bool = True,
+) -> tuple[float, float, float, float, float] | None:
+    """Price a directly displayed FAK without synthesising the other token.
+
+    Direction-reversal is a diagnostic placebo, so it deliberately fixes the
+    real same-side five-share cost even when that cost has negative model edge.
+    Every candidate strategy still uses ``require_edge=True``.
+    """
+    remaining = config.min_direct_depth
+    cost = 0.0
+    raw_fee = Decimal(0)
+    decimal_rate = Decimal(str(config.fee_rate))
+    fixed_limit = 0.0
+    eligible_depth = 0.0
+    for price, available in asks:
+        per_share_fee = float(taker_fee(price, config.fee_rate))
+        if require_edge and fair - price - per_share_fee + _EPS < config.min_net_edge:
+            break
+        eligible_depth += available
+        take = min(remaining, available)
+        if take <= 0.0:
+            continue
+        remaining -= take
+        cost += take * price
+        decimal_price = Decimal(str(price))
+        raw_fee += (
+            Decimal(str(take)) * decimal_rate * decimal_price * (Decimal(1) - decimal_price)
+        )
+        fixed_limit = price
+    if remaining > _EPS:
+        return None
+    shares = config.min_direct_depth
+    rounded_fee = float(raw_fee.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
+    average_price = cost / shares
+    fee_per_share = rounded_fee / shares
+    net_edge = fair - average_price - fee_per_share
+    if require_edge and net_edge + _EPS < config.min_net_edge:
+        return None
+    return average_price, fixed_limit, fee_per_share, net_edge, eligible_depth
 
 
 class BasisWedgeDetector:
@@ -288,7 +335,7 @@ class BasisWedgeDetector:
             if before is None:
                 continue
             metrics = self._source_metrics(before, latest)
-            if not self._source_gates_pass(metrics):
+            if not self._capture_gates_pass(metrics):
                 continue
             direction = UP if metrics[0] > 0.0 else DOWN
             self._candidates[market_id] = _WedgeCandidate(
@@ -388,9 +435,12 @@ class BasisWedgeDetector:
             ):
                 return None
         chainlink = self._latest("chainlink")
-        if chainlink is not None and shock_recv_ms is not None:
-            if (chainlink.recv_ms, chainlink.order) <= (shock_recv_ms, shock_order):
-                chainlink = None
+        if (
+            chainlink is not None
+            and shock_recv_ms is not None
+            and (chainlink.recv_ms, chainlink.order) <= (shock_recv_ms, shock_order)
+        ):
+            chainlink = None
         if self.config.require_chainlink and (
                 chainlink is None
                 or recv_ms - chainlink.recv_ms > self.config.max_source_age_ms + _EPS):
@@ -431,12 +481,46 @@ class BasisWedgeDetector:
 
     def _source_gates_pass(self, metrics: tuple[float, float, float, float | None]) -> bool:
         basis, spot, deribit, chainlink = metrics
+        if not self._basis_gate_pass(basis):
+            return False
+        chainlink_quiet = (
+            chainlink is None or abs(chainlink) <= self.config.max_chainlink_move_bp + _EPS
+        )
+        if self.config.require_confirmation:
+            direction = 1.0 if basis > 0.0 else -1.0
+            confirms = (
+                direction * spot > self.config.max_spot_move_bp + _EPS
+                or direction * deribit > self.config.max_deribit_move_bp + _EPS
+            )
+            return (
+                confirms
+                and chainlink_quiet
+                and (not self.config.require_chainlink or chainlink is not None)
+            )
         return (
-            abs(basis) + _EPS >= self.config.min_basis_move_bp
-            and abs(spot) <= self.config.max_spot_move_bp + _EPS
+            abs(spot) <= self.config.max_spot_move_bp + _EPS
             and abs(deribit) <= self.config.max_deribit_move_bp + _EPS
-            and (chainlink is None or abs(chainlink) <= self.config.max_chainlink_move_bp + _EPS)
+            and chainlink_quiet
             and (not self.config.require_chainlink or chainlink is not None)
+        )
+
+    def _capture_gates_pass(
+        self,
+        metrics: tuple[float, float, float, float | None],
+    ) -> bool:
+        if not self._basis_gate_pass(metrics[0]):
+            return False
+        # Confirmation must be observed on strictly post-shock source frames,
+        # so it cannot be required at the instant the immutable shock is saved.
+        return self.config.require_confirmation or self._source_gates_pass(metrics)
+
+    def _basis_gate_pass(self, basis: float) -> bool:
+        magnitude = abs(basis)
+        maximum = self.config.max_basis_move_bp
+        return (
+            magnitude > _EPS
+            and magnitude + _EPS >= self.config.min_basis_move_bp
+            and (maximum is None or magnitude <= maximum + _EPS)
         )
 
     def _direct_fill(
@@ -444,37 +528,7 @@ class BasisWedgeDetector:
         asks: tuple[tuple[float, float], ...],
         fair: float,
     ) -> tuple[float, float, float, float, float] | None:
-        remaining = self.config.min_direct_depth
-        cost = 0.0
-        raw_fee = Decimal("0")
-        decimal_rate = Decimal(str(self.config.fee_rate))
-        fixed_limit = 0.0
-        eligible_depth = 0.0
-        for price, available in asks:
-            per_share_fee = float(taker_fee(price, self.config.fee_rate))
-            if fair - price - per_share_fee + _EPS < self.config.min_net_edge:
-                break
-            eligible_depth += available
-            take = min(remaining, available)
-            if take <= 0.0:
-                continue
-            remaining -= take
-            cost += take * price
-            decimal_price = Decimal(str(price))
-            raw_fee += (
-                Decimal(str(take)) * decimal_rate * decimal_price * (Decimal("1") - decimal_price)
-            )
-            fixed_limit = price
-        if remaining > _EPS:
-            return None
-        shares = self.config.min_direct_depth
-        rounded_fee = float(raw_fee.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
-        average_price = cost / shares
-        fee_per_share = rounded_fee / shares
-        net_edge = fair - average_price - fee_per_share
-        if net_edge + _EPS < self.config.min_net_edge:
-            return None
-        return average_price, fixed_limit, fee_per_share, net_edge, eligible_depth
+        return price_direct_asks(asks, fair, self.config)
 
     def _latest(self, source: str) -> _Quote | None:
         history = self._quotes[source]

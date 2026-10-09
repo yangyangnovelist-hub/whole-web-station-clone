@@ -4,11 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
-
 import settlement_proxy as proxy
 import settlement_proxy_daily as daily
 import settlement_proxy_forward as forward
-
 
 DAY = "20261010"
 PREVIOUS = "20261009"
@@ -114,7 +112,7 @@ def test_source_hour_selection_is_exact():
 def test_evaluator_freeze_binds_every_dependency(tmp_path):
     frozen, digest = daily.load_evaluator_freeze()
 
-    assert digest == "94e16d91e674a91a12c476d327114ff76fd4fc3c2f6aa02faeb479656153a019"
+    assert digest == "56eb017ed1888b7e97d11f52e2200f4cb8260a2c65d2710cc351f1091b211a28"
     assert frozen["strategy_fingerprint"] == proxy.EXPECTED_FREEZE_SHA256
     frozen["dependencies_sha256"]["settlement_proxy.py"] = "0" * 64
     path = tmp_path / "freeze.json"

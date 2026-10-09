@@ -1,7 +1,7 @@
 {
-  "schema": "basis-wedge-protocol-v1",
+  "schema": "basis-wedge-protocol-v2",
   "strategy_id": "BTC-PERP-BASIS-WEDGE-REVERSAL-V1",
-  "created_at": "2026-10-09T17:59:44Z",
+  "created_at": "2026-10-09T18:40:00Z",
   "holdout_start": "2026-10-10T00:00:00Z",
   "holdout_start_ms": 1791590400000,
   "collector_region": "eu-west-1",
@@ -32,7 +32,7 @@
     "primary_clock": "local receipt time",
     "total_order": "stable merged input order within equal receipt timestamps",
     "exchange_timestamps": "audit only",
-    "symbol_required_on_every_input": true,
+    "symbol_required_on_every_price_bearing_source_input": true,
     "disconnect": "clear all live source and direct-book state; require fresh frames and snapshots",
     "stale_source_ms": 500.0,
     "regressed_receipt_time": "clear all live state and reject the regressed frame",
@@ -56,11 +56,11 @@
     "paper_depth_is_fill_upper_bound": true
   },
   "controls": {
-    "no_wedge": "same Polymarket follow condition with absolute basis change below 0.5 bp",
-    "direction_reversal": "buy the basis-follow direction instead of the frozen opposite side",
-    "time_shift": "shift the frozen futures shock forward five seconds while preserving market exposure",
-    "confirmation": "same basis shock when spot or Deribit confirms beyond the frozen quiet-source threshold",
-    "all_controls_use_identical_execution_and_outcome_rules": true
+    "no_wedge": "same Polymarket follow and reverse-side edge rules with 0 < absolute basis change <= 0.5 bp",
+    "direction_reversal": "at each base decision buy five directly displayed shares of the basis-follow side at its own frozen five-share limit; this diagnostic intentionally does not reapply the reverse model-edge gate",
+    "time_shift": "at base decision plus exactly 5000 ms, preserve the original reverse side, fair and limit; send only if at least five direct shares remain at or below that limit, then evaluate 400/500 ms from the delayed decision",
+    "confirmation": "same >=1.5 bp basis shock, Polymarket follow and reverse-side edge rules when a strictly post-shock spot move exceeds 0.35 bp or Deribit move exceeds 0.5 bp in the basis direction",
+    "shared_rules": "all controls use local receipt ordering, direct token books, five-share depth, the same FAK fill model, fee rounding and resolved outcomes; only direction_reversal omits the candidate edge gate because edge direction is the tested placebo"
   },
   "statistics": {
     "chronological_development_and_validation_before_holdout_only": true,
@@ -73,7 +73,9 @@
     "require_positive_net_ev_at_400_and_500_ms": true,
     "require_positive_one_sided_99_percent_day_cluster_lower_bound": true,
     "require_multiplicity_adjusted_exact_p_below_alpha": true,
-    "all_control_outcomes_resolved_before_promotion": true
+    "all_control_outcomes_resolved_before_promotion": true,
+    "stopping_clock": "the earliest common decision receipt timestamp at which both 400 and 500 ms base arms independently have 1000 resolved full five-share fills across at least seven UTC days",
+    "partial_fills": "included in variant risk, PnL and EV reporting but excluded from the primary stopping counts"
   },
   "promotion": {
     "production_activation": false,
@@ -81,8 +83,8 @@
     "paper_pass_is_not_live_profitability_proof": true
   },
   "dependencies_sha256": {
-    "basis_wedge.py": "34ecd735ba4c20ad23bc35f8282a52018576698f505a7ac528cd00742510bd72",
-    "eu_strict.py": "c5f66156b698f5aba90c07980514f013ae3eca140b7aa538e30fe48c8abdcf41",
+    "basis_wedge.py": "f71db7c29fd0659c07f3186abfc17e8692129141549d88a2a1966e71126c70d5",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
     "h_replay.py": "ea3ffb44b7b941273e5ee320b6f75c7ef6555351cc58c74ebcffebb4ae649b41",
     "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
     "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4"

@@ -7,14 +7,12 @@ import importlib
 import importlib.util
 import json
 from collections import Counter
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-
-import pytest
 
 import basis_wedge as wedge
 import basis_wedge_run as run
-
+import pytest
 
 ROOT = Path(__file__).parent
 
@@ -70,7 +68,11 @@ def _source_events(*, tail_ms: float = BASE_MS + 1_000.0) -> list[dict[str, obje
         {"kind": "spot_bbo", "recv_ms": tail_ms, "bid": 99.995, "ask": 100.005},
     ]
     for sequence, row in enumerate(rows):
-        row.update({"seq": sequence, "source_ts_ms": row.get("recv_ms")})
+        row.update({
+            "seq": sequence,
+            "source_ts_ms": row.get("recv_ms"),
+            "symbol": "BTC",
+        })
     return rows
 
 
@@ -143,6 +145,7 @@ def _replay(
     *,
     source: list[dict[str, object]] | None = None,
     winner: str = "Down",
+    include_controls: bool = False,
 ) -> tuple[list[dict[str, object]], dict[str, int]]:
     return run.replay_normalized(
         _source_events() if source is None else source,
@@ -150,7 +153,105 @@ def _replay(
         _mapping(),
         {"m": winner},
         detector_config=wedge.DetectorConfig(),
+        include_controls=include_controls,
     )
+
+
+def test_no_wedge_and_confirmation_are_separate_causal_control_variants() -> None:
+    no_wedge_source = _source_events()
+    next(row for row in no_wedge_source if row["kind"] == "futures_bbo"
+         and row["recv_ms"] == BASE_MS + 200.0).update({
+             "bid": 99.999, "ask": 100.009,
+         })
+    no_wedge_rows, _ = _replay(
+        _clob_events(), source=no_wedge_source, include_controls=True,
+    )
+
+    confirming_source = _source_events()
+    next(row for row in confirming_source if row["kind"] == "spot_bbo"
+         and row["recv_ms"] == BASE_MS + 210.0).update({
+             "bid": 99.999, "ask": 100.009,
+         })
+    confirmation_rows, _ = _replay(
+        _clob_events(), source=confirming_source, include_controls=True,
+    )
+
+    assert {row["variant"] for row in no_wedge_rows} == {"no_wedge"}
+    assert {row["variant"] for row in confirmation_rows} == {"confirmation"}
+    assert {row["decision_recv_ms"] for row in no_wedge_rows} == {BASE_MS + 300.0}
+
+
+def test_direction_reversal_uses_the_same_side_direct_ask_not_a_mirror() -> None:
+    rows, _ = _replay(_clob_events(), include_controls=True, winner="Up")
+    control = [row for row in rows if row["variant"] == "direction_reversal"]
+
+    assert len(control) == 2
+    assert {row["buy_side"] for row in control} == {"up"}
+    assert {row["fixed_limit"] for row in control} == {0.54}
+    assert all(row["filled"] for row in control)
+    assert {row["fill_vwap"] for row in control} == {0.54}
+
+
+def test_five_second_time_shift_rechecks_the_frozen_limit_before_sending() -> None:
+    expensive_at_decision = _book_pair(
+        BASE_MS + 5_300.0,
+        up_bids=((0.52, 10.0),), up_asks=((0.54, 10.0),),
+        down_bids=((0.39, 10.0),), down_asks=((0.60, 10.0),),
+    )
+    rows, _ = _replay(
+        _clob_events(*expensive_at_decision),
+        source=_source_events(tail_ms=BASE_MS + 6_000.0),
+        include_controls=True,
+    )
+    shifted = [row for row in rows if row["variant"] == "time_shift"]
+
+    assert len(shifted) == 2
+    assert {row["decision_recv_ms"] for row in shifted} == {BASE_MS + 5_300.0}
+    assert {row["sent"] for row in shifted} == {False}
+    assert {row["reason"] for row in shifted} == {"shifted_decision_ask_above_limit"}
+
+
+def test_time_shift_evaluates_only_books_known_by_each_due_time() -> None:
+    cheap_at_decision = _book_pair(
+        BASE_MS + 5_300.0,
+        up_bids=((0.52, 10.0),), up_asks=((0.54, 10.0),),
+        down_bids=((0.42, 10.0),), down_asks=((0.44, 5.0),),
+    )
+    exact_400 = _book_pair(
+        BASE_MS + 5_700.0,
+        up_bids=((0.52, 10.0),), up_asks=((0.54, 10.0),),
+        down_bids=((0.42, 10.0),), down_asks=((0.43, 5.0),),
+    )
+    after_400 = _book_pair(
+        BASE_MS + 5_701.0,
+        up_bids=((0.52, 10.0),), up_asks=((0.54, 10.0),),
+        down_bids=((0.41, 10.0),), down_asks=((0.42, 5.0),),
+    )
+    rows, _ = _replay(
+        _clob_events(*cheap_at_decision, *exact_400, *after_400),
+        source=_source_events(tail_ms=BASE_MS + 6_000.0),
+        include_controls=True,
+    )
+    shifted = {
+        int(row["evaluation_ms"]): row
+        for row in rows if row["variant"] == "time_shift"
+    }
+
+    assert shifted[400]["sent"] is True
+    assert shifted[400]["fill_vwap"] == pytest.approx(0.43)
+    assert shifted[400]["book_recv_ms"] == BASE_MS + 5_700.0
+    assert shifted[500]["fill_vwap"] == pytest.approx(0.42)
+    assert shifted[500]["book_recv_ms"] == BASE_MS + 5_701.0
+
+
+def test_summary_keeps_control_variants_separate_from_base_compatibility_view() -> None:
+    rows, counters = _replay(_clob_events(), include_controls=True)
+    summary = run.summarize(rows, counters)
+
+    assert set(summary["variants"]) == {
+        "base", "no_wedge", "direction_reversal", "time_shift", "confirmation",
+    }
+    assert summary["latencies"] == summary["variants"]["base"]["latencies"]
 
 
 def test_exact_due_book_is_used_but_a_book_one_millisecond_later_is_not() -> None:
@@ -236,6 +337,18 @@ def test_source_disconnect_invalidates_both_pending_latency_branches() -> None:
     assert counters["reason_disconnect"] == 2
 
 
+def test_normalized_source_frames_must_carry_the_frozen_symbol() -> None:
+    missing = _source_events()
+    next(row for row in missing if row["kind"] == "futures_bbo").pop("symbol")
+    with pytest.raises(ValueError, match="symbol is required"):
+        _replay(_clob_events(), source=missing)
+
+    wrong = _source_events()
+    next(row for row in wrong if row["kind"] == "futures_bbo")["symbol"] = "ETH"
+    with pytest.raises(ValueError, match="symbol drift"):
+        _replay(_clob_events(), source=wrong)
+
+
 def test_direct_only_execution_does_not_mirror_the_opposite_bid() -> None:
     # Up bid 0.56 would imply a synthetic Down ask of 0.44.  Direct Down asks
     # are all above the signal's frozen 0.45 limit and must not fill.
@@ -263,8 +376,8 @@ def test_exact_five_share_vwap_real_fee_and_settlement_pnl() -> None:
     row = next(item for item in rows if item["evaluation_ms"] == 400.0)
     notional = 2.0 * 0.43 + 3.0 * 0.44
     raw_fee = (
-        Decimal("2") * Decimal("0.07") * Decimal("0.43") * Decimal("0.57")
-        + Decimal("3") * Decimal("0.07") * Decimal("0.44") * Decimal("0.56")
+        Decimal(2) * Decimal("0.07") * Decimal("0.43") * Decimal("0.57")
+        + Decimal(3) * Decimal("0.07") * Decimal("0.44") * Decimal("0.56")
     )
     rounded_fee = float(raw_fee.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP))
 
@@ -341,7 +454,11 @@ def test_clob_reconnect_rejects_price_changes_until_both_direct_snapshots_arrive
     ]
     source.sort(key=lambda row: float(row["recv_ms"]))
     for sequence, row in enumerate(source):
-        row.update({"seq": sequence, "source_ts_ms": row.get("recv_ms")})
+        row.update({
+            "seq": sequence,
+            "source_ts_ms": row.get("recv_ms"),
+            "symbol": "BTC",
+        })
 
     rows, counters = _replay(clob, source=source)
 
@@ -439,8 +556,25 @@ def test_standard_strict_artifact_entrypoint_streams_records_and_counters(tmp_pa
 
     assert result["dataset"]["paper_only"] is True
     assert result["dataset"]["sample_scope"] == "standard_forward_artifact"
-    assert len(result["records"]) == 2
+    assert len(result["records"]) == 6
     assert persisted == result["records"]
-    assert result["counters"]["signals"] == 1
+    assert result["counters"]["signals_base"] == 1
+    assert result["counters"]["signals"] == 3
     assert result["latencies"]["400"]["fills"] == 1
     assert result["latencies"]["500"]["fills"] == 1
+    assert result["variants"]["direction_reversal"]["latencies"]["400"]["fills"] == 1
+    assert result["counters"]["time_shift_censored_before_decision"] == 1
+    assert result["variants"]["time_shift"]["latencies"]["400"]["signals"] == 1
+    assert result["variants"]["time_shift"]["latencies"]["400"]["reasons"] == {
+        "censored_before_shifted_decision": 1,
+    }
+
+    missing_symbol = [dict(row) for row in source_rows]
+    next(
+        row for row in missing_symbol
+        if row["kind"] in {"spot_bbo", "futures_bbo", "deribit_quote"}
+    ).pop("symbol")
+    with gzip.open(strict / "source_events.jsonl.gz", "wt") as stream:
+        stream.writelines(json.dumps(row) + "\n" for row in missing_symbol)
+    with pytest.raises(ValueError, match="symbol is required"):
+        run.replay_archive(tmp_path)

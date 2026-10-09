@@ -34,7 +34,7 @@
     "unresolved_outcomes_allowed": 0
   },
   "dependencies_sha256": {
-    "eu_strict.py": "c5f66156b698f5aba90c07980514f013ae3eca140b7aa538e30fe48c8abdcf41",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
     "forward/settlement-proxy-calibration-input.json": "a30ad0a14aa435e86cfa307d6357a128db7d796bc15aff39d469ad0ea8e3712d",
     "forward/settlement-proxy-calibration.json": "9d0dfde485ab94bd0a40dad21fd94d68cfadce869f544cc9bec615d6b16d492e",
     "forward/settlement-proxy-freeze.json": "7812650a8684170729afca0c2e821a550eed96aef957cf4a237244cd74e7b589",

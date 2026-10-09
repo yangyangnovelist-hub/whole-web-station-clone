@@ -4,10 +4,8 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
-
 import mix_daily as daily
-
+import pytest
 
 DAY = "20261010"
 PREVIOUS = "20261009"
@@ -166,7 +164,7 @@ def test_stage_is_not_committed_before_evidence_upload(tmp_path, monkeypatch):
 def test_evaluator_freeze_binds_dependencies(tmp_path):
     frozen, digest = daily.load_evaluator_freeze()
 
-    assert digest == "96f8fe4294e44db2ce164e2ca3abfe6d21d6e8756b214f4ce7e471392252577d"
+    assert digest == "fd72dfda04e81800449356b620103e990cb8112a29ef190b9e0c158c802c0d3f"
     assert frozen["control_protocol_sha256"] == (
         "28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45"
     )
