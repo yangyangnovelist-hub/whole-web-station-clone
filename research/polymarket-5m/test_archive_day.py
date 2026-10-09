@@ -16,6 +16,14 @@ def test_stamp_and_day_selection_exclude_the_open_hour(tmp_path):
     assert archive.files_for_day(group, "20261009", "2026100908") == [closed]
 
 
+def test_mix_group_archives_the_isolated_aggregate_tape():
+    group = archive.GROUPS["mix"]
+
+    assert group.root == Path("/home/ubuntu/rec/data_mix")
+    assert group.prefix == "mix"
+    assert group.suffix == "txt.gz"
+
+
 def test_prune_deletes_only_verified_old_files(tmp_path, monkeypatch):
     group = archive.Group("poly", tmp_path, "jsonl.gz")
     verified = tmp_path / "poly_clob.20261006T01.jsonl.gz"

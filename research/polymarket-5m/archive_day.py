@@ -37,6 +37,7 @@ class Group:
 GROUPS = {
     "rec": Group("rec", Path("/home/ubuntu/rec/data"), "txt.gz"),
     "poly": Group("poly", Path("/home/ubuntu/rec/data_poly"), "jsonl.gz"),
+    "mix": Group("mix", Path("/home/ubuntu/rec/data_mix"), "txt.gz"),
 }
 
 
