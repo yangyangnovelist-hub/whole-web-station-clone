@@ -240,6 +240,25 @@
       "priority": 9,
       "passes": false,
       "notes": "The corrected runner validates the full source tape, causally merges only Deribit connection/DVOL/disconnect events into the frozen aggregate-trade tape, preserves CLOB receipt order with the deployed per-token stale guard, filters non-economic zero-price futures sentinels and performs the same replay with bounded memory. No formal eu-west stopping row has been admitted. The untouched cutoff remains 2026-10-10T00:00:00Z. Control protocol 28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45 binds runner e1bdc7774bef55bfe33d8b7c66d3916708b73fb5b4930dc1d8261ebb338e8dcc; R1-17F mean-projection protocol 26f64d5332186ef53f4e1e5e1a1ab7b50fcd45b544770d5b1268fcc42808145c remains a separate 17-causal-feature hypothesis with four historical factor inputs fixed at A-training means, not a reconstruction of historical R1. Evaluator freeze af4b24cac10486266f1aba97a487e23d5f82954dfc9743036fb25238765d125b binds the three-route aggregate recorder, explicit daily aggregate-tape handoff into shared-artifact replay, first-copy deduplication, joint-disconnect fail-close, exact S3/local identities, chronological crash-safe daily admission and both frozen stopping lanes. Before any upload, the archiver now requires valid gzip and full 24-hour coverage for every frozen route on formal days; remote byte conflicts and changed formal manifests fail closed. Its recorder and 03:00 UTC daily timer are deployed on the eu-west research host. Both lanes remain unpassed until the untouched 1,000-fill, seven-day statistical gates complete; all pre-cutoff runs are audit-only."
+    },
+    {
+      "id": "US-015",
+      "title": "Replace parameter zoos with independent mechanisms and test the perp-basis wedge",
+      "description": "As the account owner, I want strategy breadth counted by independent economic mechanisms rather than parameter variants, and the first genuinely new relative-value mechanism tested on executable books.",
+      "acceptanceCriteria": [
+        "Maintain one deduplicated mechanism ledger; changing only time, lookback, threshold, price band, session or size never creates another mechanism",
+        "Retire the claim that either legacy 100-rule zoo represents 100 independent economic hypotheses and keep its historical rejection evidence without reusing any consumed holdout",
+        "Freeze one Binance-perpetual-specific basis-wedge reversal: the perpetual basis moves at least 1.5 basis points in 500 milliseconds while spot, Deribit and optional Chainlink do not confirm, and Polymarket follows the isolated move by at least two cents",
+        "Order all inputs by local receipt time, fail closed after disconnects or stale frames, freeze the reverse-side fair value and limit at the signal, and use only direct token asks",
+        "Replay at 400 and 500 milliseconds with at least five directly displayed shares and the real taker fee; report no-wedge, direction-reversal, time-shift and confirmation controls",
+        "Use chronological development, validation and locked holdout; promote only if both execution latencies are positive and the first frozen sample spans at least seven UTC days with a positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted exact p below 0.01",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "The independence audit found at most 30 mechanism templates in zoo100.py and 13 in strategy_zoo.py; the rest are parameter variants, and strategy_zoo's previous-outcome rule also lacks a causal result-availability timestamp. Across the repository, 16 deduplicated economic families are evidenced: seven rejected, five awaiting strict forward evidence and four structural or micro-capacity mechanisms. Existing support/resistance and volume-conditioned work remains owned by its separate active thread. US-015 therefore starts with a distinct relative-value hypothesis: an isolated Binance-perpetual basis shock that Polymarket follows even though spot and Deribit do not confirm. This is not the rejected hourly basis direction factor or the rejected 120-220 millisecond jump predictor. Protocol fafb1831765c548fd3f0913262d682fd04a66cd5227ea297c196bd4d85d23f88 was frozen at 2026-10-09T17:59:44Z for the 2026-10-10T00:00:00Z holdout. The receipt-causal detector uses an immutable first qualifying futures crossing, strict post-shock spot/Deribit confirmation frames, mandatory BTC labels, direct dual-token books, exact five-decimal fee rounding and one signal per market; it decides immediately when the last required confirmation arrives instead of waiting for another Polymarket frame. The strict artifact adapter evaluates frozen limits at 400/500 ms, records every positive FAK partial fill and reserves the primary stopping sample for full five-share fills. No holdout result exists yet, controls and chronological forward admission still need to be completed, and no production path is authorised."
     }
   ]
 }

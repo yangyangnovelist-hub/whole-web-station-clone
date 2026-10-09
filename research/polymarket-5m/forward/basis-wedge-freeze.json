@@ -1,0 +1,90 @@
+{
+  "schema": "basis-wedge-protocol-v1",
+  "strategy_id": "BTC-PERP-BASIS-WEDGE-REVERSAL-V1",
+  "created_at": "2026-10-09T17:59:44Z",
+  "holdout_start": "2026-10-10T00:00:00Z",
+  "holdout_start_ms": 1791590400000,
+  "collector_region": "eu-west-1",
+  "paper_only": true,
+  "hypothesis": "An isolated Binance perpetual-versus-spot basis shock that Polymarket follows without spot or Deribit confirmation is a transient derivative-specific wedge; buy the opposite Polymarket side only when its direct ask remains at least three cents below the pre-impact complementary fair value after fee.",
+  "signal": {
+    "symbol": "BTC",
+    "window_ms": 500.0,
+    "minimum_absolute_basis_move_bp": 1.5,
+    "maximum_absolute_spot_move_bp": 0.35,
+    "maximum_absolute_deribit_move_bp": 0.5,
+    "optional_maximum_absolute_chainlink_move_bp": 0.35,
+    "minimum_polymarket_follow_move": 0.02,
+    "maximum_polymarket_direction_spread": 0.05,
+    "minimum_polymarket_direction_top_depth": 5.0,
+    "remaining_seconds": [
+      30.0,
+      240.0
+    ],
+    "first_qualifying_futures_crossing_is_immutable": true,
+    "spot_and_deribit_require_strictly_post_shock_frames": true,
+    "decision_time": "the first local receipt when the immutable shock, quiet-source confirmations and a qualifying already-received direct Polymarket book are all known; do not wait for another book frame",
+    "fair": "one minus the direct direction-side midpoint observed before the immutable futures crossing",
+    "buy_side": "opposite the isolated basis direction",
+    "one_signal_per_market": true
+  },
+  "causality": {
+    "primary_clock": "local receipt time",
+    "total_order": "stable merged input order within equal receipt timestamps",
+    "exchange_timestamps": "audit only",
+    "symbol_required_on_every_input": true,
+    "disconnect": "clear all live source and direct-book state; require fresh frames and snapshots",
+    "stale_source_ms": 500.0,
+    "regressed_receipt_time": "clear all live state and reject the regressed frame",
+    "direct_books_only": true,
+    "mirrored_or_synthetic_books": false
+  },
+  "execution": {
+    "evaluation_ms": [
+      400.0,
+      500.0
+    ],
+    "venue_hold_ms": 150.0,
+    "minimum_full_fill_shares": 5.0,
+    "minimum_net_edge_per_share": 0.03,
+    "limit": "highest direct ask required to fill five shares at the frozen signal, unchanged afterward",
+    "order_type": "paper FAK",
+    "partial_fills": "record every positive FAK fill and its PnL; only full five-share fills enter the primary stopping sample",
+    "taker_fee_rate": 0.07,
+    "fee_rounding": "total USDC fee rounded to five decimals using half-up",
+    "fill_price": "five-share VWAP across direct asks no worse than the frozen limit",
+    "paper_depth_is_fill_upper_bound": true
+  },
+  "controls": {
+    "no_wedge": "same Polymarket follow condition with absolute basis change below 0.5 bp",
+    "direction_reversal": "buy the basis-follow direction instead of the frozen opposite side",
+    "time_shift": "shift the frozen futures shock forward five seconds while preserving market exposure",
+    "confirmation": "same basis shock when spot or Deribit confirms beyond the frozen quiet-source threshold",
+    "all_controls_use_identical_execution_and_outcome_rules": true
+  },
+  "statistics": {
+    "chronological_development_and_validation_before_holdout_only": true,
+    "first_frozen_sample_only": true,
+    "minimum_full_fills_per_latency": 1000,
+    "minimum_utc_days": 7,
+    "family_tests": 256,
+    "multiple_testing": "Bonferroni",
+    "one_sided_alpha": 0.01,
+    "require_positive_net_ev_at_400_and_500_ms": true,
+    "require_positive_one_sided_99_percent_day_cluster_lower_bound": true,
+    "require_multiplicity_adjusted_exact_p_below_alpha": true,
+    "all_control_outcomes_resolved_before_promotion": true
+  },
+  "promotion": {
+    "production_activation": false,
+    "live_fak_calibration_requires_separate_authorization": true,
+    "paper_pass_is_not_live_profitability_proof": true
+  },
+  "dependencies_sha256": {
+    "basis_wedge.py": "34ecd735ba4c20ad23bc35f8282a52018576698f505a7ac528cd00742510bd72",
+    "eu_strict.py": "c5f66156b698f5aba90c07980514f013ae3eca140b7aa538e30fe48c8abdcf41",
+    "h_replay.py": "ea3ffb44b7b941273e5ee320b6f75c7ef6555351cc58c74ebcffebb4ae649b41",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4"
+  }
+}
