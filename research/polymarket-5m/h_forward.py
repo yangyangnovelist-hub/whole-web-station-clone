@@ -53,13 +53,11 @@ def market_observation_key(row: dict[str, Any]) -> tuple[str, float]:
     return str(row["market_id"]), float(row["evaluation_ms"])
 
 
-def add(new_rows: str | Path, store: str | Path = STORE) -> list[dict[str, Any]]:
-    """Append unseen observations; the first recording of each market/latency always wins."""
-    destination = Path(store)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+def merge(existing: Iterable[dict[str, Any]], fresh: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the immutable-first observation merge used by every current-H ledger."""
     chosen_run: dict[tuple[str, float], str] = {}
     pooled: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for row in [*_read_jsonl(destination), *_read_jsonl(new_rows)]:
+    for row in [*existing, *fresh]:
         if row.get("strategy_id") != STRATEGY_ID:
             raise ValueError(
                 f"observation strategy_id {row.get('strategy_id')!r} does not match {STRATEGY_ID!r}"
@@ -69,11 +67,24 @@ def add(new_rows: str | Path, store: str | Path = STORE) -> list[dict[str, Any]]
         if chosen_run.setdefault(market_key, run_id) != run_id:
             continue
         pooled.setdefault(observation_key(row), row)
-    rows = sorted(pooled.values(), key=lambda row: (float(row["signal_ms"]), str(row["market_id"]),
+    return sorted(pooled.values(), key=lambda row: (float(row["signal_ms"]), str(row["market_id"]),
                                                      float(row["evaluation_ms"]), str(row["direction"])))
-    with destination.open("w", encoding="utf-8") as stream:
+
+
+def _write_rows(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
         for row in rows:
             stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+    temporary.replace(path)
+
+
+def add(new_rows: str | Path, store: str | Path = STORE) -> list[dict[str, Any]]:
+    """Append unseen observations; the first recording of each market/latency always wins."""
+    destination = Path(store)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    rows = merge(_read_jsonl(destination), _read_jsonl(new_rows))
+    _write_rows(destination, rows)
     return rows
 
 
@@ -89,7 +100,7 @@ def _stopping_sample(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return []
 
 
-def _daily_lower_99(sample: list[dict[str, Any]]) -> float | None:
+def daily_cluster_lower(sample: list[dict[str, Any]], alpha: float = ALPHA) -> float | None:
     by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in sample:
         by_day[str(row["day"])].append(row)
@@ -104,7 +115,11 @@ def _daily_lower_99(sample: list[dict[str, Any]]) -> float | None:
     cluster_count = len(clusters)
     standard_error = (math.sqrt(cluster_count / (cluster_count - 1) *
                                 sum(value * value for value in influence)) / total_shares)
-    return estimate - float(student_t.ppf(1.0 - ALPHA, cluster_count - 1)) * standard_error
+    return estimate - float(student_t.ppf(1.0 - alpha, cluster_count - 1)) * standard_error
+
+
+def _daily_lower_99(sample: list[dict[str, Any]]) -> float | None:
+    return daily_cluster_lower(sample, ALPHA)
 
 
 def verdict(rows: list[dict[str, Any]]) -> dict[str, Any]:

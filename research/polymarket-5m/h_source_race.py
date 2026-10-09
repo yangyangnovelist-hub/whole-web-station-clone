@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 from collections import defaultdict
@@ -24,7 +25,7 @@ BASELINE_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
 CANDIDATE_SOURCES = frozenset({*BASELINE_SOURCES, "deribit_quote"})
 SCHEMA = "current-h-source-race-v2"
 SOURCE_RACE_FREEZE_PATH = Path(__file__).with_name("forward") / "source-race-freeze.json"
-SOURCE_RACE_FREEZE_SHA256 = "c37941027d6002cd6a2a9344881d863442f66669d29151b26fd2365bc3b42809"
+SOURCE_RACE_FREEZE_SHA256_PATH = SOURCE_RACE_FREEZE_PATH.with_suffix(".sha256")
 
 _SIGNATURE_FIELDS = (
     "signal_receive_ms", "signal_source_ms", "signal_source", "signal_ms", "direction",
@@ -59,7 +60,13 @@ def _load_source_race_freeze(path: str | Path = SOURCE_RACE_FREEZE_PATH) -> tupl
     path = Path(path)
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
-    if digest != SOURCE_RACE_FREEZE_SHA256:
+    expected_path = (
+        SOURCE_RACE_FREEZE_SHA256_PATH
+        if path.resolve() == SOURCE_RACE_FREEZE_PATH.resolve()
+        else path.with_suffix(".sha256")
+    )
+    expected = expected_path.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected) or digest != expected:
         raise ValueError("source-race freeze fingerprint drift")
     frozen = json.loads(raw)
     if frozen.get("schema") != "current-h-source-race-freeze-v1":

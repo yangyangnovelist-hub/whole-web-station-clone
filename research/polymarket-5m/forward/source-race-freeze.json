@@ -1,6 +1,6 @@
 {
   "schema": "current-h-source-race-freeze-v1",
-  "created_at": "2026-10-09T09:05:00Z",
+  "created_at": "2026-10-09T09:44:13Z",
   "cutoff": "2026-10-10T00:00:00Z",
   "cutoff_ms": 1791590400000,
   "collector_region": "eu-west-1",
@@ -44,13 +44,30 @@
     "require_incremental_fill_or_ev_improvement": true,
     "require_loss_rate_not_worse": true
   },
+  "stopping": {
+    "clock": "signal_receive_ms_local_receipt_utc",
+    "common_cutoff": "earliest_signal_receive_ms_where_both_arms_reach_minimum_fills_and_minimum_utc_days",
+    "sample": "all_resolved_primary_latency_fills_of_at_least_minimum_direct_depth_shares_in_each_arm_at_or_before_common_cutoff",
+    "day": "UTC_date_of_signal_receive_ms",
+    "daily_admission": "closed_UTC_days_in_strict_chronological_order_without_gaps",
+    "state_commit": "only_after_complete_daily_evidence_is_hash_verified_in_S3",
+    "deduplication": "first_observation_run_per_market_and_latency",
+    "terminal_behavior": "pin_once_and_reject_all_later_ledger_mutation"
+  },
   "dependencies_sha256": {
     "eu_strict.py": "7e3784ccd9a375e35eb33e9d523fb4ab3c4b6c08d7c071ac66f61803daefa9c8",
     "forward/current-h-freeze.json": "fdad7b7d919a9018c4a75df9561d27fe8c13cfe23d42aec7d79fdb450eb0df8d",
+    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
     "h_replay.py": "6d37ce5f892ac3a57f8c350b57c975e2f165f4320043dd0e6ec6f8fd6d9349e3",
     "h_replay_archive.py": "461fd1cd6afda138806b592cc5637f805778a03123576a8e219be6d01f557657",
     "h_replay_run.py": "16188390cee0def98ae4ceac9605933bb6a16aafced57475a01d7e9ee0b4d2a4",
+    "h_source_race.py": "445b55f8c0d3e8adfbc79594dc10e04e0608b4e01b4fc08a98bf667a9c936734",
+    "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
     "poly_clob_rec.py": "6168815604114ac689a736c29aed059e8db65e9e72efbd7dd3c3a443be134cc5",
-    "raw_rec.py": "fd75f9b728fd601128faacaa8c055375078efd1b850d9058b8b9009820e169a2"
+    "raw_rec.py": "fd75f9b728fd601128faacaa8c055375078efd1b850d9058b8b9009820e169a2",
+    "source_race_daily.py": "205ed17899f60a84d50579e714df11f6dcbf49a15c8e1bfeafe659330b70d5d2",
+    "source_race_forward.py": "b17c12bd691fa859600b60f470dc8a1ff7e6e0dc11f6ca699e8d818d265160d5",
+    "systemd/source-race-daily.service": "37e021a749e0239179caecc82ef6a23b3c8ecfbd481bfeda737a3a9b5c331ee5",
+    "systemd/source-race-daily.timer": "2dcfce0d0ee30e5ba3a9bbcc104bb8b3ad2e10a1e4c5fbfce4ff857c4255a362"
   }
 }
