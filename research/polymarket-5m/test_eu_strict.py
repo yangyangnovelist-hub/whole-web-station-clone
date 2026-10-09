@@ -169,6 +169,22 @@ def test_route_reader_does_not_hide_unknown_malformed_frames(tmp_path):
         ))
 
 
+@pytest.mark.parametrize("role", ["spot", "futures_trade"])
+@pytest.mark.parametrize("price,size", [
+    ("0", "0"),
+    ("80000", "0"),
+    ("nan", "0.1"),
+    ("80000", "-0.1"),
+])
+def test_trade_adapter_drops_non_economic_numeric_sentinels(role, price, size):
+    payload = {
+        "e": "trade", "E": SOURCE_MS, "T": SOURCE_MS,
+        "t": 7, "p": price, "q": size,
+    }
+
+    assert eu._frame_event(role, payload) is None
+
+
 def test_clob_reader_recovers_legacy_transport_newline_split(tmp_path):
     path = tmp_path / f"poly_clob.{DAY}T00.jsonl.gz"
     with gzip.open(path, "wb") as stream:

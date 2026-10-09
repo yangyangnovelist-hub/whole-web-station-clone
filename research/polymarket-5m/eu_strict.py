@@ -170,9 +170,12 @@ def _frame_event(role: str, payload: Mapping[str, Any]) -> dict[str, Any] | None
     if role == "spot":
         if event_name != "trade" and not stream.endswith("@trade"):
             return None
+        price, size = float(data["p"]), float(data.get("q") or 0)
+        if not (math.isfinite(price) and math.isfinite(size) and price > 0 and size > 0):
+            return None
         return {
             "kind": "spot_trade", "source_ts_ms": _clock_ms(data.get("T")),
-            "price": float(data["p"]), "size": float(data.get("q") or 0),
+            "price": price, "size": size,
             "dedupe": (data.get("t"), data.get("T"), data.get("p"), data.get("q")),
         }
     if role == "futures":
@@ -189,10 +192,12 @@ def _frame_event(role: str, payload: Mapping[str, Any]) -> dict[str, Any] | None
     if role == "futures_trade":
         if event_name != "trade" and not stream.endswith("@trade"):
             return None
+        price, size = float(data["p"]), float(data.get("q") or 0)
+        if not (math.isfinite(price) and math.isfinite(size) and price > 0 and size > 0):
+            return None
         return {
             "kind": "futures_trade", "source_ts_ms": _clock_ms(data.get("T")),
-            "event_ts_ms": _clock_ms(data.get("E")), "price": float(data["p"]),
-            "size": float(data.get("q") or 0),
+            "event_ts_ms": _clock_ms(data.get("E")), "price": price, "size": size,
             "dedupe": (data.get("t"), data.get("T"), data.get("p"), data.get("q")),
         }
     if role == "deribit":

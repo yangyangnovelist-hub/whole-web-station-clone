@@ -1,6 +1,6 @@
 {
   "schema": "current-h-source-race-freeze-v1",
-  "created_at": "2026-10-09T16:36:59Z",
+  "created_at": "2026-10-09T16:56:20Z",
   "cutoff": "2026-10-10T00:00:00Z",
   "cutoff_ms": 1791590400000,
   "collector_region": "eu-west-1",
@@ -62,7 +62,7 @@
     "terminal_behavior": "pin_once_and_reject_all_later_ledger_mutation"
   },
   "dependencies_sha256": {
-    "eu_strict.py": "99e557ddfb856de9b844411a5234aef104aee41391f8912f739fc9adc14405b7",
+    "eu_strict.py": "c5f66156b698f5aba90c07980514f013ae3eca140b7aa538e30fe48c8abdcf41",
     "forward/current-h-freeze.json": "fdad7b7d919a9018c4a75df9561d27fe8c13cfe23d42aec7d79fdb450eb0df8d",
     "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
     "h_replay.py": "ea3ffb44b7b941273e5ee320b6f75c7ef6555351cc58c74ebcffebb4ae649b41",
