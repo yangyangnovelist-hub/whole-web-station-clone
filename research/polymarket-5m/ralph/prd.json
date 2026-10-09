@@ -259,6 +259,25 @@
       "priority": 9,
       "passes": false,
       "notes": "The independence audit found at most 30 mechanism templates in zoo100.py and 13 in strategy_zoo.py; the rest are parameter variants, and strategy_zoo's previous-outcome rule also lacks a causal result-availability timestamp. Across the repository, 16 deduplicated economic families are evidenced: seven rejected, five awaiting strict forward evidence and four structural or micro-capacity mechanisms. Existing support/resistance and volume-conditioned work remains owned by its separate active thread. US-015 tests a distinct relative-value hypothesis: an isolated Binance-perpetual basis shock that Polymarket follows even though spot and Deribit do not confirm. This is not the rejected hourly basis direction factor or the rejected 120-220 millisecond jump predictor. Protocol `bfd343bc370be48c81cc1c96b75e4fbeaeefa2ccf6a9c15c40818ba2b780765f` and evaluator `4450a34a53897a8efe89ea4b5399692b5cfb4e09b9ba56da6764dd5664802bf6` were frozen before the 2026-10-10T00:00:00Z holdout. The receipt-causal detector uses an immutable first qualifying futures crossing, strict post-shock spot/Deribit confirmation frames, source-validated BTC labels, direct dual-token books, exact five-decimal fee rounding and one signal per market; it decides immediately when the last required confirmation arrives instead of waiting for another Polymarket frame. The strict adapter records base, no-wedge, direction-reversal, five-second time-shift and confirmation arms at 400/500 ms, recomputes every direct fill, fee and PnL, reports partials without counting them toward stopping, and requires all matched controls before promotion. Chronological daily admission is checksum-bound and recovers deterministically after every ledger/status commit boundary. No post-cutoff row or holdout result has been read, passes remains false, and no production path is authorised."
+    },
+    {
+      "id": "US-016",
+      "title": "Test a canonical current-H execution veto",
+      "description": "As the account owner, I want likely stale or non-executable current-H sends vetoed without changing H's signal, direction, fair value, limit or size, so that an execution improvement can be measured separately from inventing another alpha.",
+      "acceptanceCriteria": [
+        "Start every arm from the canonical current-H event stream and freeze each attempt's market, receipt time, side, H fair, H fixed limit, order size, rate limit and retry state before applying a gate",
+        "The gate may only veto a send; it may not create a replacement direction, reprice the order, change the H edge threshold or use a terminal-outcome model",
+        "Use only decision-time receipt-causal features and train the veto threshold on an earlier segment; outcome, future book, fill, match and resolution fields are label-only",
+        "Evaluate the end-to-end gated state machine against ungated H and report paired UTC-day delta PnL with every veto, kill and non-fill represented as zero rather than comparing only profitable fills",
+        "Use strict direct dual-token L2 for formal evidence; public 100 millisecond observation-grid books may be diagnostic only and require a pre/post horizon bracket with ambiguous rows censored",
+        "Promote only after at least 1000 gated full fills over seven UTC days, positive absolute 99 percent day-cluster lower bound, positive paired delta-PnL lower bound versus H and the existing multiplicity correction",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "A proposed ValueFill implementation was rejected before launch and removed. It generated 20 ms CrossVenue candidates instead of frozen H candidates, learned a new direction/fair/limit, selected 3-12 cent edge thresholds around a 400 ms primary point, and labelled fills from one stale public snapshot. Its controls were not matched and its per-fill edge comparison rewarded deleting losing fills without counting foregone profitable opportunities. Public archives also lack the futures-BBO arm and exact receipt-ordered direct-L2 lifecycle needed to recreate timestamped-first H. US-016 is therefore an execution enhancement, not a seventeenth independent economic mechanism and not a historical pass. A paper-only veto seam now wraps canonical H without changing its source: allow-all is behavior-identical, the policy receives only immutable decision-time side/fair/ask/limit/edge fields, and veto consumes no order/rate/pending state for that signal while canonical clocks and older evaluations still advance. Each latency is forced into an independent single-horizon machine so branch-specific rate and no-send accounting cannot be swallowed; policy failures permanently latch the replay. Formal work still requires binding the parent H freeze/hash, fitting a preregistered gate on earlier direct-L2 data, charging inference time, and running matched fresh-forward ablations."
     }
   ]
 }
