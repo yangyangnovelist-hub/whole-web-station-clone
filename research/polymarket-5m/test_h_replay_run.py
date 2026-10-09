@@ -98,8 +98,23 @@ def test_timestamped_first_rejects_a_regressed_source_clock():
     ))
 
     assert trigger.update_source("deribit_quote", 2_000, 100.0) is None
+    assert trigger.update_source("deribit_quote", 2_000, 100.0) is None
     assert trigger.update_source("deribit_quote", 1_999, 101.0) is None
     assert trigger.source_timestamps["deribit_quote"] == [2.0]
+
+
+def test_timestamped_first_keeps_same_timestamp_price_changes_and_spot_trades():
+    trigger = run.TimestampedFirstTrigger(run.SignalConfig(
+        tau_hi_s=300.0, tau_lo_s=0.0, sigma_window_s=3, sigma_min_observations=2,
+    ))
+
+    assert trigger.update_source("futures_trade", 2_000, 100.0) is None
+    assert trigger.update_source("futures_trade", 2_000, 101.0) is None
+    assert trigger.update_trade(2_000, 100.0) is None
+    assert trigger.update_trade(2_000, 100.0) is None
+
+    assert trigger.source_timestamps["futures_trade"] == [2.0, 2.0]
+    assert trigger.source_timestamps["spot_trade"] == [2.0, 2.0]
 
 
 def test_direct_token_book_quarantines_an_unreproducible_venue_bba():

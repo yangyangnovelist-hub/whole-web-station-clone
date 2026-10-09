@@ -217,14 +217,24 @@ class TimestampedFirstTrigger:
         self.futures_timestamps = self.source_timestamps.setdefault("futures_book_ticker", [])
         self.futures_log_prices = self.source_log_prices.setdefault("futures_book_ticker", [])
 
-    def _candidate(self, timestamps: list[float], log_prices: list[float], timestamp_ms: float,
-                   price: float) -> Optional[Candidate]:
+    def _candidate(
+        self,
+        timestamps: list[float],
+        log_prices: list[float],
+        timestamp_ms: float,
+        price: float,
+        *,
+        reject_exact_duplicate: bool,
+    ) -> Optional[Candidate]:
         if not price > 0:
             return None
         timestamp_s = timestamp_ms / 1_000.0
         if timestamps and timestamp_s < timestamps[-1]:
             return None
         log_price = math.log(price)
+        if (reject_exact_duplicate and timestamps and timestamp_s == timestamps[-1]
+                and log_price == log_prices[-1]):
+            return None
         timestamps.append(timestamp_s)
         log_prices.append(log_price)
         if len(timestamps) > 4_096 and timestamps[0] < timestamp_s - 10.0:
@@ -249,7 +259,10 @@ class TimestampedFirstTrigger:
     def update_trade(self, source_timestamp_ms: float, price: float) -> Optional[Candidate]:
         if price > 0:
             self.grid.update(source_timestamp_ms / 1_000.0, math.log(price))
-        return self.update_source("spot_trade", source_timestamp_ms, price)
+        return self._candidate(
+            self.trade_timestamps, self.trade_log_prices, source_timestamp_ms, price,
+            reject_exact_duplicate=False,
+        )
 
     def update_futures(self, source_timestamp_ms: float, bid: float, ask: float) -> Optional[Candidate]:
         return self.update_source("futures_book_ticker", source_timestamp_ms, (bid + ask) / 2.0)
@@ -257,7 +270,10 @@ class TimestampedFirstTrigger:
     def update_source(self, source: str, source_timestamp_ms: float, price: float) -> Optional[Candidate]:
         timestamps = self.source_timestamps.setdefault(source, [])
         log_prices = self.source_log_prices.setdefault(source, [])
-        return self._candidate(timestamps, log_prices, source_timestamp_ms, price)
+        return self._candidate(
+            timestamps, log_prices, source_timestamp_ms, price,
+            reject_exact_duplicate=True,
+        )
 
 @dataclass
 class TokenBook:
