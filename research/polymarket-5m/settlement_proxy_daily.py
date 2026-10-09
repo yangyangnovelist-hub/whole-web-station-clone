@@ -28,6 +28,8 @@ EVALUATOR_FREEZE = (
     Path(__file__).with_name("forward") / "settlement-proxy-evaluator-freeze.json"
 )
 SETTLEMENT_SOURCES = calibrate.CACHE_SOURCES
+ADMISSION = "admission.json"
+STATE_ROOT_FILES = (forward.INDEX, forward.STATUS, forward.VERDICT)
 
 
 def _atomic_json(path: str | Path, payload: Mapping[str, Any]) -> None:
@@ -140,7 +142,7 @@ def _stage_state(state: Path, destination: Path) -> Path:
     destination.mkdir(parents=True)
     if state.is_dir():
         for source in state.rglob("*"):
-            if source.name == ".daily.lock":
+            if source.name in (".daily.lock", ADMISSION):
                 continue
             relative = source.relative_to(state)
             target = destination / relative
@@ -152,23 +154,179 @@ def _stage_state(state: Path, destination: Path) -> Path:
     return destination
 
 
-def _commit_state(staged: Path, state: Path) -> None:
+def _state_paths(root: Path) -> list[Path]:
+    paths = [Path(name) for name in STATE_ROOT_FILES if (root / name).is_file()]
+    days = root / forward.DAYS_DIR
+    if days.is_dir():
+        paths.extend(path.relative_to(root) for path in sorted(days.glob("*.json")))
+    return sorted(paths, key=lambda path: path.as_posix())
+
+
+def _valid_state_path(value: str) -> bool:
+    path = Path(value)
+    return bool(
+        not path.is_absolute()
+        and ".." not in path.parts
+        and (
+            path.as_posix() in STATE_ROOT_FILES
+            or (
+                len(path.parts) == 2
+                and path.parts[0] == forward.DAYS_DIR
+                and re.fullmatch(r"\d{8}\.json", path.parts[1])
+            )
+        )
+    )
+
+
+def _state_hashes(root: Path) -> dict[str, str]:
+    return {
+        relative.as_posix(): archive_daily._sha256(root / relative)
+        for relative in _state_paths(root)
+    }
+
+
+def _aligned_state_hashes(base_root: Path, target_root: Path) -> tuple[dict[str, str | None], dict[str, str | None]]:
+    base_present = _state_hashes(base_root)
+    target_present = _state_hashes(target_root)
+    if not set(base_present) <= set(target_present):
+        raise ValueError("settlement-proxy forward update removed state files")
+    names = sorted(set(base_present) | set(target_present))
+    return (
+        {name: base_present.get(name) for name in names},
+        {name: target_present.get(name) for name in names},
+    )
+
+
+def _read_admission(
+    state: Path,
+    *,
+    fingerprint: str,
+    calibration_sha256: str,
+    provenance_sha256: str,
+    evaluator_sha256: str,
+    validate_state: bool = True,
+) -> dict[str, Any] | None:
+    path = state / ADMISSION
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        payload.get("schema") != "settlement-proxy-admission-v1"
+        or payload.get("strategy_fingerprint") != fingerprint
+        or payload.get("calibration_sha256") != calibration_sha256
+        or payload.get("provenance_sha256") != provenance_sha256
+        or payload.get("evaluator_sha256") != evaluator_sha256
+        or not re.fullmatch(r"\d{8}", str(payload.get("day") or ""))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("complete_sha256") or ""))
+    ):
+        raise ValueError("settlement-proxy admission identity drift")
+    expected = payload.get("state_sha256")
+    if (
+        not isinstance(expected, Mapping)
+        or not expected
+        or any(not _valid_state_path(str(name)) for name in expected)
+        or any(not re.fullmatch(r"[0-9a-f]{64}", str(digest or "")) for digest in expected.values())
+    ):
+        raise ValueError("settlement-proxy admission state drift")
+    if validate_state and _state_hashes(state) != dict(expected):
+        raise ValueError("settlement-proxy admitted state hash mismatch")
+    return payload
+
+
+def _validate_complete(
+    complete: Mapping[str, Any],
+    *,
+    day: str,
+    fingerprint: str,
+    calibration_sha256: str,
+    provenance_sha256: str,
+    evaluator_sha256: str,
+) -> list[dict[str, Any]]:
+    if (
+        complete.get("schema") != "settlement-proxy-complete-day-v2"
+        or complete.get("status") != "complete"
+        or complete.get("day") != day
+        or complete.get("strategy_fingerprint") != fingerprint
+        or complete.get("calibration_sha256") != calibration_sha256
+        or complete.get("provenance_sha256") != provenance_sha256
+        or complete.get("evaluator_sha256") != evaluator_sha256
+    ):
+        raise ValueError("completed settlement-proxy day identity drift")
+    base = complete.get("base_state_sha256")
+    target = complete.get("target_state_sha256")
+    if (
+        not isinstance(base, Mapping)
+        or not isinstance(target, Mapping)
+        or set(base) != set(target)
+        or not target
+        or any(not _valid_state_path(str(name)) for name in target)
+    ):
+        raise ValueError("completed settlement-proxy state set drift")
+    for hashes in (base, target):
+        if any(
+            digest is not None and not re.fullmatch(r"[0-9a-f]{64}", str(digest))
+            for digest in hashes.values()
+        ):
+            raise ValueError("completed settlement-proxy state hash drift")
+    evidence = complete.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise ValueError("completed settlement-proxy evidence is missing")
+    paths: list[str] = []
+    for item in evidence:
+        relative = Path(str(item.get("path") or "")) if isinstance(item, Mapping) else Path()
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or ".." in relative.parts
+            or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256") or ""))
+        ):
+            raise ValueError("completed settlement-proxy evidence drift")
+        paths.append(relative.as_posix())
+    if len(paths) != len(set(paths)):
+        raise ValueError("completed settlement-proxy evidence path is duplicated")
+    return list(evidence)
+
+
+def _commit_completed_day(
+    complete: Mapping[str, Any], complete_path: Path, state: Path, day_root: Path,
+) -> None:
+    base = dict(complete["base_state_sha256"])
+    target = dict(complete["target_state_sha256"])
+    current = _state_hashes(state)
+    if not set(current) <= set(target):
+        raise ValueError("unexpected settlement-proxy state while committing")
+    for name in target:
+        if current.get(name) not in (base.get(name), target.get(name)):
+            raise ValueError(f"settlement-proxy state changed while committing {name}")
+    staged = day_root / "state-next"
     state.mkdir(parents=True, exist_ok=True)
-    day_files = sorted((staged / forward.DAYS_DIR).glob("*.json"))
-    for source in day_files:
-        destination = state / forward.DAYS_DIR / source.name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(destination.name + ".tmp")
-        shutil.copyfile(source, temporary)
-        temporary.replace(destination)
-    for name in (forward.INDEX, forward.VERDICT, forward.STATUS):
+    for name, digest in target.items():
         source = staged / name
-        if not source.is_file():
+        if digest is None:
+            destination = state / name
+            if destination.exists():
+                destination.unlink()
             continue
+        if not source.is_file() or archive_daily._sha256(source) != digest:
+            raise ValueError(f"staged settlement-proxy state changed: {name}")
         destination = state / name
-        temporary = destination.with_name(destination.name + ".tmp")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name("." + destination.name + ".tmp")
         shutil.copyfile(source, temporary)
         temporary.replace(destination)
+    expected = {name: digest for name, digest in target.items() if digest is not None}
+    if _state_hashes(state) != expected:
+        raise ValueError("settlement-proxy state commit verification failed")
+    _atomic_json(state / ADMISSION, {
+        "schema": "settlement-proxy-admission-v1",
+        "day": complete["day"],
+        "strategy_fingerprint": complete["strategy_fingerprint"],
+        "calibration_sha256": complete["calibration_sha256"],
+        "provenance_sha256": complete["provenance_sha256"],
+        "evaluator_sha256": complete["evaluator_sha256"],
+        "complete_sha256": archive_daily._sha256(complete_path),
+        "state_sha256": expected,
+    })
 
 
 def _upload_evidence(
@@ -248,6 +406,67 @@ def process_day(
     data_root, poly_root = Path(data_dir), Path(poly_dir)
     day_root = Path(work_dir) / day
     day_root.mkdir(parents=True, exist_ok=True)
+    state = Path(state_dir)
+    complete_path = day_root / "complete.json"
+    admission = _read_admission(
+        state,
+        fingerprint=fingerprint,
+        calibration_sha256=calibration_sha256,
+        provenance_sha256=provenance_sha256,
+        evaluator_sha256=evaluator_sha256,
+        validate_state=not complete_path.is_file(),
+    )
+    if admission is None:
+        if _state_paths(state) and not complete_path.is_file():
+            raise ValueError("settlement-proxy state exists without daily admission")
+        expected_day = holdout_day
+    else:
+        admitted_day = str(admission["day"])
+        if (state / forward.VERDICT).is_file() and day != admitted_day:
+            return {
+                "status": "terminal",
+                "verdict": json.loads((state / forward.VERDICT).read_text(encoding="utf-8")),
+            }
+        expected_day = admitted_day if day == admitted_day else _next_day(admitted_day)
+    if day != expected_day:
+        raise ValueError(f"day is not the next chronological admission: expected {expected_day}")
+    if complete_path.is_file():
+        complete = json.loads(complete_path.read_text(encoding="utf-8"))
+        evidence_rows = _validate_complete(
+            complete,
+            day=day,
+            fingerprint=fingerprint,
+            calibration_sha256=calibration_sha256,
+            provenance_sha256=provenance_sha256,
+            evaluator_sha256=evaluator_sha256,
+        )
+        if admission is not None and day == admission["day"]:
+            if admission["complete_sha256"] != archive_daily._sha256(complete_path):
+                raise ValueError("admitted settlement-proxy complete hash mismatch")
+            _read_admission(
+                state,
+                fingerprint=fingerprint,
+                calibration_sha256=calibration_sha256,
+                provenance_sha256=provenance_sha256,
+                evaluator_sha256=evaluator_sha256,
+                validate_state=True,
+            )
+            staged = day_root / "state-next"
+            if staged.exists():
+                shutil.rmtree(staged)
+            return complete
+        evidence = [day_root / str(item["path"]) for item in evidence_rows]
+        for item, path in zip(evidence_rows, evidence):
+            if not path.is_file() or archive_daily._sha256(path) != item["sha256"]:
+                raise ValueError("completed settlement-proxy evidence changed")
+        _upload_evidence(s3, bucket, day, day_root, [*evidence, complete_path])
+        _commit_completed_day(complete, complete_path, state, day_root)
+        staged = day_root / "state-next"
+        if staged.exists():
+            shutil.rmtree(staged)
+        artifact = day_root / "artifact"
+        archive_daily._discard_local_artifact(artifact, day_root)
+        return complete
 
     previous_day = _next_day(day, -1)
     previous_manifest = archive_daily._archive_manifest(s3, bucket, previous_day, "rec")
@@ -332,7 +551,7 @@ def process_day(
         }
         _atomic_json(result_path, payload)
 
-    state = Path(state_dir)
+    base_state_present = _state_hashes(state)
     staged_state = _stage_state(state, day_root / "state-next")
     pooled = forward.update(
         result_path,
@@ -346,14 +565,13 @@ def process_day(
     copied_manifest = day_root / "strict-manifest.json"
     shutil.copyfile(strict_manifest, copied_manifest)
     evidence = [archive_snapshot, copied_manifest, result_path]
-    evidence.extend(
-        staged_state / name
-        for name in (forward.INDEX, forward.STATUS, forward.VERDICT)
-        if (staged_state / name).is_file()
-    )
-    complete_path = day_root / "complete.json"
+    evidence.extend(staged_state / relative for relative in _state_paths(staged_state))
+    base_state_hashes, target_state_hashes = _aligned_state_hashes(state, staged_state)
+    if {name: digest for name, digest in base_state_hashes.items() if digest is not None} != base_state_present:
+        raise ValueError("settlement-proxy base state changed while staging")
     _atomic_json(complete_path, {
-        "schema": "settlement-proxy-complete-day-v1",
+        "schema": "settlement-proxy-complete-day-v2",
+        "status": "complete",
         "day": day,
         "strategy_fingerprint": fingerprint,
         "calibration_sha256": calibration_sha256,
@@ -361,6 +579,8 @@ def process_day(
         "evaluator_sha256": evaluator_sha256,
         "result_sha256": archive_daily._sha256(result_path),
         "pooled_verdict": pooled["verdict"],
+        "base_state_sha256": base_state_hashes,
+        "target_state_sha256": target_state_hashes,
         "evidence": [
             {
                 "path": path.relative_to(day_root).as_posix(),
@@ -371,11 +591,12 @@ def process_day(
         ],
     })
     _upload_evidence(s3, bucket, day, day_root, [*evidence, complete_path])
-    _commit_state(staged_state, state)
+    complete = json.loads(complete_path.read_text(encoding="utf-8"))
+    _commit_completed_day(complete, complete_path, state, day_root)
     archive_daily._discard_local_artifact(artifact, day_root)
     if staged_state.exists():
         shutil.rmtree(staged_state)
-    return json.loads(complete_path.read_text(encoding="utf-8"))
+    return complete
 
 
 def main() -> None:
@@ -388,15 +609,20 @@ def main() -> None:
     parser.add_argument("--bucket", default=BUCKET)
     args = parser.parse_args()
     freeze = proxy.load_freeze()
+    fingerprint = proxy.strategy_fingerprint(freeze)
     holdout_day = str(freeze["holdout_start"])[:10].replace("-", "")
     state = Path(args.state)
-    index_path = state / forward.INDEX
+    evaluator, evaluator_sha256 = load_evaluator_freeze()
+    admission = _read_admission(
+        state,
+        fingerprint=fingerprint,
+        calibration_sha256=str(evaluator["calibration_sha256"]),
+        provenance_sha256=str(evaluator["provenance_sha256"]),
+        evaluator_sha256=evaluator_sha256,
+        validate_state=False,
+    )
     if args.day is None:
-        if index_path.is_file():
-            index = json.loads(index_path.read_text(encoding="utf-8"))
-            args.day = _next_day(str(index["days"][-1]["day"]))
-        else:
-            args.day = holdout_day
+        args.day = holdout_day if admission is None else _next_day(str(admission["day"]))
     if re.fullmatch(r"\d{8}", args.day) and _next_day(args.day) >= _utc_today():
         print(json.dumps({
             "status": "skipped",

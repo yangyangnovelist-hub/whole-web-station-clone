@@ -1,6 +1,6 @@
 {
   "schema": "settlement-proxy-evaluator-freeze-v1",
-  "frozen_at": "2026-10-09T15:53:39Z",
+  "frozen_at": "2026-10-09T16:32:17Z",
   "holdout_start": "2026-10-10T00:00:00Z",
   "collector_region": "eu-west-1",
   "strategy_fingerprint": "2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee",
@@ -11,7 +11,7 @@
     "order": "closed UTC days without gaps",
     "boundary_context": "D-1 T23, all D hours, D+1 T00",
     "boundary_day_requirement": "D+1 full S3 archive manifest must be closed and verified",
-    "state_commit": "only after immutable S3 evidence verification",
+    "state_commit": "recoverable base/target state commit with admission pointer written last after immutable S3 evidence verification",
     "terminal_behavior": "pin the first terminal prefix and reject later mutation"
   },
   "execution": {
@@ -47,7 +47,7 @@
     "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
     "settlement_proxy.py": "ae9978f8d0fbcea9be2941e6ba94386056cb61fb3dc50d3d2e338875778c7b23",
     "settlement_proxy_calibrate.py": "e11c3d5bbe7edc1d7f869230eb8c2beceabcaceb210814b3f5afb8759a398d94",
-    "settlement_proxy_daily.py": "e75b9d14e664d118757329a56e6901c8917128e316999044a799beeb1ebbfcac",
+    "settlement_proxy_daily.py": "046ade601bdc0c7682cf42c226d9d3032e1a036c3e2b53c195c7ff986bd69fd3",
     "settlement_proxy_forward.py": "9629ffc433aa111619844fe89a8f7541e3b4c3e8c7409c65276eba878630f47d",
     "source_race_daily.py": "9b24b22ec80edd36f4d4ac3f654ed1d8c3cf9b9344516618c41810e7cf333859",
     "strict_prebuild.py": "be6b48a3a3ece74f9670acc4ac6c526408788f8dbc4781ecdb2534d45f98baaa",

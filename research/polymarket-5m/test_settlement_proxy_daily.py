@@ -114,7 +114,7 @@ def test_source_hour_selection_is_exact():
 def test_evaluator_freeze_binds_every_dependency(tmp_path):
     frozen, digest = daily.load_evaluator_freeze()
 
-    assert digest == "de372e3e9d787855cff399d883cd322147a486d832edf2e7c7534bf5b106bae5"
+    assert digest == "573e74d9bf4b946e0f4b5f04201d6b0ec8eb0473710980d4a613813bfbeebf20"
     assert frozen["strategy_fingerprint"] == proxy.EXPECTED_FREEZE_SHA256
     frozen["dependencies_sha256"]["settlement_proxy.py"] = "0" * 64
     path = tmp_path / "freeze.json"
@@ -180,6 +180,82 @@ def test_failed_upload_does_not_commit_staged_state(tmp_path, monkeypatch):
 
     assert not (state / forward.INDEX).exists()
     assert (tmp_path / "work" / DAY / "state-next" / forward.INDEX).is_file()
+
+
+def test_terminal_day_recovers_after_index_only_partial_commit(tmp_path, monkeypatch):
+    calls = {"run": 0}
+    _install_fakes(tmp_path, monkeypatch, calls)
+    monkeypatch.setattr(daily, "_utc_today", lambda: "20261013")
+
+    def fake_terminal_update(result_path, staged_state, **_kwargs):
+        staged_state = Path(staged_state)
+        day_ledger = staged_state / forward.DAYS_DIR / f"{DAY}.json"
+        day_ledger.parent.mkdir(parents=True, exist_ok=True)
+        day_ledger.write_bytes(Path(result_path).read_bytes())
+        (staged_state / forward.INDEX).write_text(
+            json.dumps({"days": [{"day": DAY}]}) + "\n", encoding="utf-8",
+        )
+        (staged_state / forward.STATUS).write_text(
+            json.dumps({"status": "terminal"}) + "\n", encoding="utf-8",
+        )
+        (staged_state / forward.VERDICT).write_text(
+            json.dumps({"verdict": {"status": "pass"}}) + "\n", encoding="utf-8",
+        )
+        return {"verdict": {"status": "pass"}}
+
+    monkeypatch.setattr(daily.forward, "update", fake_terminal_update)
+    original_commit = daily._commit_completed_day
+    state = tmp_path / "state"
+    kwargs = {
+        "day": DAY,
+        "data_dir": tmp_path / "data",
+        "poly_dir": tmp_path / "poly",
+        "work_dir": tmp_path / "work",
+        "state_dir": state,
+        "s3": object(),
+        "bucket": "bucket",
+        "calibration_path": tmp_path / "calibration.json",
+        "provenance_path": tmp_path / "provenance.json",
+    }
+
+    def crash_after_index(complete, complete_path, state_dir, day_root):
+        staged_index = Path(day_root) / "state-next" / forward.INDEX
+        destination = Path(state_dir) / forward.INDEX
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(staged_index.read_bytes())
+        raise RuntimeError("crash after index")
+
+    monkeypatch.setattr(daily, "_commit_completed_day", crash_after_index)
+    with pytest.raises(RuntimeError, match="crash after index"):
+        daily.process_day(**kwargs)
+
+    assert (state / forward.INDEX).is_file()
+    assert not (state / forward.VERDICT).exists()
+    assert not (state / daily.ADMISSION).exists()
+    assert (tmp_path / "work" / DAY / "complete.json").is_file()
+
+    monkeypatch.setattr(daily, "_commit_completed_day", original_commit)
+    recovered = daily.process_day(**kwargs)
+
+    assert recovered["pooled_verdict"]["status"] == "pass"
+    assert (state / forward.VERDICT).is_file()
+    admission = json.loads((state / daily.ADMISSION).read_text(encoding="utf-8"))
+    assert admission["day"] == DAY
+    assert not (tmp_path / "work" / DAY / "state-next").exists()
+
+    terminal = daily.process_day(
+        FOLLOWING,
+        tmp_path / "data",
+        tmp_path / "poly",
+        tmp_path / "work",
+        state,
+        s3=object(),
+        bucket="bucket",
+        calibration_path=tmp_path / "calibration.json",
+        provenance_path=tmp_path / "provenance.json",
+    )
+    assert terminal["status"] == "terminal"
+    assert calls["run"] == 1
 
 
 def test_daily_process_requires_closed_following_boundary_day(tmp_path, monkeypatch):
