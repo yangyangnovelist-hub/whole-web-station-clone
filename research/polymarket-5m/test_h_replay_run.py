@@ -311,6 +311,50 @@ def test_strict_replay_dispatches_optional_race_sources_without_enabling_them_by
     assert counters["deribit_quotes"] == 1
 
 
+def test_source_reconnect_preserves_live_trigger_history(monkeypatch):
+    config = run.SignalConfig(
+        tau_hi_s=300.0, tau_lo_s=0.0, sigma_window_s=3, sigma_min_observations=2,
+    )
+    trigger = run.TimestampedFirstTrigger(config)
+    monkeypatch.setattr(run, "TimestampedFirstTrigger", lambda _config: trigger)
+    source = [
+        {"kind": "deribit_connection", "recv_ms": 100_001.0, "source_ts_ms": None,
+         "seq": 0, "stream": "deribit", "stream_sequence": 0, "connection_epoch": 1},
+        {"kind": "deribit_quote", "recv_ms": 100_002.0, "source_ts_ms": 100_000.0,
+         "seq": 1, "stream": "deribit", "stream_sequence": 1, "connection_epoch": 1,
+         "bid": 99.0, "ask": 101.0},
+        {"kind": "deribit_disconnect", "recv_ms": 101_001.0, "source_ts_ms": None,
+         "seq": 2, "stream": "deribit", "stream_sequence": 2, "connection_epoch": 1},
+        {"kind": "deribit_connection", "recv_ms": 101_002.0, "source_ts_ms": None,
+         "seq": 3, "stream": "deribit", "stream_sequence": 0, "connection_epoch": 2},
+        {"kind": "deribit_quote", "recv_ms": 101_003.0, "source_ts_ms": 101_000.0,
+         "seq": 4, "stream": "deribit", "stream_sequence": 1, "connection_epoch": 2,
+         "bid": 100.0, "ask": 102.0},
+    ]
+
+    run.replay_normalized(
+        source, [], [], {}, replay.ReplayConfig(), config,
+        trigger_sources={"deribit_quote"},
+    )
+
+    assert trigger.source_timestamps["deribit_quote"] == [100.0, 101.0]
+
+
+def test_retained_source_history_fails_closed_after_a_long_gap():
+    trigger = run.TimestampedFirstTrigger(run.SignalConfig(
+        z0=0.1, tau_hi_s=300.0, tau_lo_s=0.0,
+        reference_age_s=5.0, sigma_window_s=3, sigma_min_observations=2,
+    ))
+    for second, price in enumerate((100.0, 100.01, 100.0, 100.01), 90):
+        trigger.update_trade(second * 1_000.0, price)
+    assert trigger.update_source("deribit_quote", 100_000.0, 100.0) is None
+
+    candidate = trigger.update_source("deribit_quote", 110_000.0, 110.0)
+
+    assert candidate is None
+    assert trigger.source_timestamps["deribit_quote"] == [100.0, 110.0]
+
+
 def test_effective_book_uses_mirrored_opposite_bid_without_double_counting():
     market = run.DirectMarketBook("m", 0, "up", "down")
     market.up.replace([{"price": "0.30", "size": "4"}],

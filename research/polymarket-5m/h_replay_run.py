@@ -259,17 +259,6 @@ class TimestampedFirstTrigger:
         log_prices = self.source_log_prices.setdefault(source, [])
         return self._candidate(timestamps, log_prices, source_timestamp_ms, price)
 
-    def reset_source(self, source: str) -> None:
-        self.source_timestamps[source] = []
-        self.source_log_prices[source] = []
-        if source == "spot_trade":
-            self.trade_timestamps = self.source_timestamps[source]
-            self.trade_log_prices = self.source_log_prices[source]
-        elif source == "futures_book_ticker":
-            self.futures_timestamps = self.source_timestamps[source]
-            self.futures_log_prices = self.source_log_prices[source]
-
-
 @dataclass
 class TokenBook:
     bids: dict[float, float] = field(default_factory=dict)
@@ -627,15 +616,14 @@ def replay_normalized(
             continue
         candidate = None
         source = None
-        source_reset = {
+        source_lifecycle = {
             "spot_connection": "spot_trade", "spot_disconnect": "spot_trade",
             "futures_connection": "futures_book_ticker", "futures_disconnect": "futures_book_ticker",
             "futures_trade_connection": "futures_trade",
             "futures_trade_disconnect": "futures_trade",
             "deribit_connection": "deribit_quote", "deribit_disconnect": "deribit_quote",
         }.get(kind)
-        if source_reset is not None:
-            trigger.reset_source(source_reset)
+        if source_lifecycle is not None:
             counters[kind] += 1
             continue
         if kind == "spot_trade":
