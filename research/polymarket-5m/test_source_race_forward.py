@@ -47,8 +47,11 @@ def row(
     return {
         "market_id": market,
         "evaluation_ms": 500.0,
-        "signal_ms": float(START_MS + signal_ms),
+        "signal_ms": float(START_MS + receive_ms),
         "signal_receive_ms": float(START_MS + receive_ms),
+        "evaluation_time_ms": float(START_MS + receive_ms + 500.0),
+        "book_receive_ms": float(START_MS + receive_ms + 500.0),
+        "match_book_clock": "receive_ms",
         "direction": "Up",
         "signal_source": source,
         "filled": True,
@@ -158,6 +161,14 @@ def test_rejects_precutoff_receipt_or_unfrozen_arm_source():
     baseline, candidate = passing_rows()
     candidate[0]["signal_source"] = "futures_trade"
     with pytest.raises(ValueError, match="candidate signal source"):
+        forward.evaluate(baseline, candidate, frozen())
+
+
+def test_rejects_a_book_received_after_the_receipt_clock_horizon():
+    baseline, candidate = passing_rows()
+    candidate[0]["book_receive_ms"] = candidate[0]["evaluation_time_ms"] + 0.001
+
+    with pytest.raises(ValueError, match="book after its receipt horizon"):
         forward.evaluate(baseline, candidate, frozen())
 
 

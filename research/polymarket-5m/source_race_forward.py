@@ -58,12 +58,33 @@ def _validate_arm_rows(
             raise ValueError(f"{arm} row {index} is before the frozen cutoff")
         if evaluation_ms not in allowed_evaluations:
             raise ValueError(f"{arm} row {index} has an unfrozen evaluation latency")
+        if row.get("match_book_clock") != "receive_ms":
+            raise ValueError(f"{arm} row {index} does not use the receipt-clock book")
+        expected_evaluation = receive_ms + evaluation_ms
+        try:
+            evaluation_time_ms = float(row["evaluation_time_ms"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{arm} row {index} has an invalid evaluation clock") from exc
+        if not math.isclose(signal_ms, receive_ms, rel_tol=0, abs_tol=1e-9) or not math.isclose(
+            evaluation_time_ms, expected_evaluation, rel_tol=0, abs_tol=1e-9,
+        ):
+            raise ValueError(f"{arm} row {index} receipt/evaluation clock drift")
+        book_receive_raw = row.get("book_receive_ms")
+        if book_receive_raw is not None:
+            try:
+                book_receive_ms = float(book_receive_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{arm} row {index} has an invalid book receipt clock") from exc
+            if not math.isfinite(book_receive_ms) or book_receive_ms > expected_evaluation + 1e-9:
+                raise ValueError(f"{arm} row {index} uses a book after its receipt horizon")
         try:
             datetime.fromtimestamp(receive_ms / 1_000, tz=timezone.utc)
         except (OverflowError, OSError, ValueError) as exc:
             raise ValueError(f"{arm} row {index} has an invalid receipt clock") from exc
         if not row.get("filled"):
             continue
+        if book_receive_raw is None:
+            raise ValueError(f"{arm} row {index} fill lacks a receipt-clock book")
         try:
             shares = float(row["filled_shares"])
             all_in_cost = float(row["all_in_cost"])

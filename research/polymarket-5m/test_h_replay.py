@@ -494,3 +494,89 @@ def test_local_receipt_clock_preserves_source_time_only_for_audit():
     assert row["signal_ms"] == 1_020
     assert row["signal_source_ms"] == 1_100
     assert row["evaluation_time_ms"] == 1_320
+
+
+def test_local_receipt_clock_cannot_use_a_late_packet_with_an_early_source_timestamp():
+    machine = hr.HReplay(hr.ReplayConfig(
+        evaluation_ms=(300.0,),
+        signal_time_basis="local_receipt_timestamp",
+        max_order_usd=10.0,
+    ))
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_000,
+        "source_ms": 1_000, "up_asks": [[0.30, 10]], "down_asks": [[0.70, 10]],
+    })
+    machine.feed({
+        "kind": "signal", "market_id": "m", "receive_ms": 1_020,
+        "source_ms": 1_020, "direction": "Up", "fair": 0.70,
+    })
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_200,
+        "source_ms": 1_200, "up_asks": [[0.90, 10]], "down_asks": [[0.10, 10]],
+    })
+    # This packet's venue timestamp precedes the 1320ms horizon, but the packet itself is late.
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_370,
+        "source_ms": 1_310, "up_asks": [[0.30, 10]], "down_asks": [[0.70, 10]],
+    })
+    machine.feed({"kind": "watermark", "receive_ms": 1_400, "source_ms": 1_400})
+
+    row = machine.records[0]
+    assert row["evaluation_time_ms"] == 1_320
+    assert row["match_book_clock"] == "receive_ms"
+    assert row["book_receive_ms"] == 1_200
+    assert not row["filled"]
+
+
+def test_local_receipt_clock_applies_a_same_receipt_group_atomically():
+    machine = hr.HReplay(hr.ReplayConfig(
+        evaluation_ms=(300.0,),
+        signal_time_basis="local_receipt_timestamp",
+        max_order_usd=10.0,
+    ))
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_000,
+        "source_ms": 1_000, "up_asks": [[0.30, 10]], "down_asks": [[0.70, 10]],
+    })
+    machine.feed({
+        "kind": "signal", "market_id": "m", "receive_ms": 1_020,
+        "source_ms": 1_020, "direction": "Up", "fair": 0.70,
+    })
+    # Make the legacy source-watermark gate ready before the equal-receipt group.
+    # An implementation that drains after each frame would therefore evaluate
+    # against the first frame and miss the second frame in the same batch.
+    machine.feed({"kind": "watermark", "receive_ms": 1_100, "source_ms": 2_000})
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_320,
+        "source_ms": 1_300, "up_asks": [[0.90, 10]], "down_asks": [[0.10, 10]],
+    })
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_320,
+        "source_ms": 1_310, "up_asks": [[0.30, 10]], "down_asks": [[0.70, 10]],
+    })
+    machine.feed({"kind": "watermark", "receive_ms": 1_321, "source_ms": 1_321})
+
+    row = machine.records[0]
+    assert row["book_receive_ms"] == 1_320
+    assert row["filled"]
+
+
+def test_book_history_retention_preserves_both_clock_horizons():
+    history = hr._BookHistory(keep_ms=6_000.0)
+    for source_ms, receive_ms, ask in (
+        (100.0, 100.0, 0.31),
+        (200.0, 200.0, 0.32),
+        # A delayed packet advances receipt time past the receipt retention window
+        # while the source clock remains near the earlier evaluation horizon.
+        (300.0, 7_000.0, 0.33),
+    ):
+        history.push(hr._Book(
+            ready=True,
+            up_asks=((ask, 10.0),),
+            down_asks=((1.0 - ask, 10.0),),
+            source_ms=source_ms,
+            receive_ms=receive_ms,
+        ))
+
+    assert history.state_at(150.0, clock="source_ms").up_asks[0][0] == 0.31
+    assert history.state_at(7_000.0, clock="receive_ms").up_asks[0][0] == 0.33

@@ -146,34 +146,49 @@ class _Market:
 
 @dataclass
 class _BookHistory:
-    """Short causal history, indexed by the venue's source clock."""
+    """Short causal history indexed independently by source and local receipt clocks."""
 
     keep_ms: float = 6_000.0
     sources: list[float] = field(default_factory=list)
+    receives: list[float] = field(default_factory=list)
     books: list[_Book] = field(default_factory=list)
 
     def push(self, book: _Book) -> None:
         source_ms = float(book.source_ms if book.source_ms is not None else book.receive_ms)
+        receive_ms = float(book.receive_ms if book.receive_ms is not None else source_ms)
         if self.sources and source_ms < self.sources[-1]:
             source_ms = self.sources[-1]
+        if self.receives and receive_ms < self.receives[-1]:
+            raise ValueError("book receipt clock regressed")
         stored = _Book(
             ready=book.ready,
             up_asks=book.up_asks,
             down_asks=book.down_asks,
-            receive_ms=book.receive_ms,
+            receive_ms=receive_ms,
             source_ms=source_ms,
             epoch=book.epoch,
         )
         self.sources.append(source_ms)
+        self.receives.append(receive_ms)
         self.books.append(stored)
-        cutoff = source_ms - self.keep_ms
-        index = bisect_right(self.sources, cutoff) - 1
+        # Each index must retain the predecessor needed by its own clock.  Trimming
+        # only on receipt time can erase a still-live source-time horizon when a
+        # packet is delayed; trimming only on source time has the symmetric bug.
+        source_cutoff = self.sources[-1] - self.keep_ms
+        receive_cutoff = self.receives[-1] - self.keep_ms
+        source_index = bisect_right(self.sources, source_cutoff) - 1
+        receive_index = bisect_right(self.receives, receive_cutoff) - 1
+        index = min(source_index, receive_index)
         if index > 0:
             del self.sources[:index]
+            del self.receives[:index]
             del self.books[:index]
 
-    def state_at(self, source_ms: float) -> Optional[_Book]:
-        index = bisect_right(self.sources, source_ms) - 1
+    def state_at(self, timestamp_ms: float, *, clock: str = "source_ms") -> Optional[_Book]:
+        if clock not in ("source_ms", "receive_ms"):
+            raise ValueError(f"unknown book-history clock: {clock}")
+        timestamps = self.receives if clock == "receive_ms" else self.sources
+        index = bisect_right(timestamps, timestamp_ms) - 1
         return self.books[index] if index >= 0 else None
 
 
@@ -246,6 +261,7 @@ class HReplay:
         self._pending: list[tuple[float, int, float, _Attempt]] = []
         self._sequence = 0
         self._source_watermark = -math.inf
+        self._receive_watermark = -math.inf
         self._sent_by_evaluation: dict[float, list[float]] = {
             float(value): [] for value in self.config.evaluation_ms
         }
@@ -259,10 +275,11 @@ class HReplay:
         return market
 
     def _drain(self, receive_ms: float, inclusive: bool, force: bool = False) -> None:
+        receipt_clock = self.config.signal_time_basis == "local_receipt_timestamp"
         while self._pending:
             due_ms, sequence, evaluation_ms, attempt = self._pending[0]
             receive_ready = due_ms < receive_ms or (inclusive and due_ms == receive_ms)
-            source_ready = self._source_watermark > due_ms
+            source_ready = receipt_clock or self._source_watermark > due_ms
             if not force and not (receive_ready and source_ready):
                 break
             heapq.heappop(self._pending)
@@ -270,13 +287,18 @@ class HReplay:
 
     def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         receive_ms = float(event["receive_ms"])
+        if receive_ms < self._receive_watermark:
+            raise ValueError("event receipt clock regressed")
         before = len(self.records)
         self._drain(receive_ms, inclusive=False)
+        self._receive_watermark = receive_ms
+        receipt_clock = self.config.signal_time_basis == "local_receipt_timestamp"
         kind = str(event["kind"])
         market_id = event.get("market_id")
         if kind == "watermark":
             self._source_watermark = max(self._source_watermark, float(event["source_ms"]))
-            self._drain(receive_ms, inclusive=True)
+            if not receipt_clock:
+                self._drain(receive_ms, inclusive=True)
             return self.records[before:]
         if kind in ("disconnect", "reconnect") and market_id is None:
             for known in self._markets.values():
@@ -287,7 +309,8 @@ class HReplay:
                 known.history.push(known.book)
                 if event.get("advance_watermark", True):
                     self._source_watermark = max(self._source_watermark, source_ms)
-            self._drain(receive_ms, inclusive=True)
+            if not receipt_clock:
+                self._drain(receive_ms, inclusive=True)
             return self.records[before:]
         market = self._market(str(market_id))
         if kind == "snapshot":
@@ -348,7 +371,11 @@ class HReplay:
                 self._source_watermark = max(self._source_watermark, source_ms)
         elif kind == "signal":
             self._signal(market, str(event["market_id"]), event)
-        self._drain(receive_ms, inclusive=True)
+        # Receipt-clock evaluations wait until the complete equal-receipt group has been applied.
+        # The next strictly later event (or finish) drains the horizon.  Source-clock replay keeps
+        # its historical inclusive-watermark behavior unchanged.
+        if not receipt_clock:
+            self._drain(receive_ms, inclusive=True)
         return self.records[before:]
 
     def _signal(self, market: _Market, market_id: str, event: dict[str, Any]) -> None:
@@ -455,7 +482,12 @@ class HReplay:
         market = self._market(attempt.market_id)
         branch = market.branches[evaluation_ms]
         evaluation_time_ms = attempt.signal_ms + evaluation_ms
-        book = market.history.state_at(evaluation_time_ms)
+        match_clock = (
+            "receive_ms"
+            if self.config.signal_time_basis == "local_receipt_timestamp"
+            else "source_ms"
+        )
+        book = market.history.state_at(evaluation_time_ms, clock=match_clock)
         target_shares = self.config.base_shares * attempt.size_multiplier
         signed_size, maker_usd = (_pilot_plan(attempt.fixed_limit, target_shares, self.config)
                                   if attempt.fixed_limit is not None else (None, None))
@@ -502,7 +534,7 @@ class HReplay:
         record = {
             "market_id": attempt.market_id,
             "ordering_clock": "receive_ms",
-            "match_book_clock": "source_ms",
+            "match_book_clock": match_clock,
             "future_health_checked": False,
             "signal_receive_ms": attempt.signal_receive_ms,
             "signal_source_ms": attempt.signal_source_ms,
@@ -557,7 +589,12 @@ class HReplay:
         than being evaluated against a stale terminal book.
         """
         before = len(self.records)
-        self._drain(math.inf, inclusive=True, force=force)
+        if force:
+            self._drain(math.inf, inclusive=True, force=True)
+        elif self.config.signal_time_basis == "local_receipt_timestamp":
+            self._drain(self._receive_watermark, inclusive=True, force=False)
+        else:
+            self._drain(math.inf, inclusive=True, force=False)
         return self.records[before:]
 
     def pending_evaluations(self) -> list[dict[str, Any]]:

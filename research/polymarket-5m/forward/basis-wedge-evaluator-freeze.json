@@ -3,7 +3,7 @@
   "strategy_id": "BTC-PERP-BASIS-WEDGE-REVERSAL-V1",
   "created_at": "2026-10-09T18:55:00Z",
   "holdout_start": "2026-10-10T00:00:00Z",
-  "protocol_sha256": "93ee8f6f63b64e145ae3249091d1d6b7968210c8dcd21d4faab48ae225177be3",
+  "protocol_sha256": "bfd343bc370be48c81cc1c96b75e4fbeaeefa2ccf6a9c15c40818ba2b780765f",
   "collector_region": "eu-west-1",
   "paper_only": true,
   "variants": [
@@ -36,7 +36,7 @@
     "basis_wedge_forward.py": "c300e7201bbc329d49369003a2a675c43400597f5cf505e15e3b5ef50409f933",
     "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
     "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
-    "h_replay.py": "ea3ffb44b7b941273e5ee320b6f75c7ef6555351cc58c74ebcffebb4ae649b41",
+    "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
     "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
     "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4"
   }
