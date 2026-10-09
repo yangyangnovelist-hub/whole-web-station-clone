@@ -7,7 +7,7 @@
   ],
   "control_protocol_sha256": "28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45",
   "dependencies_sha256": {
-    "archive_day.py": "4b9357b03a6877310dd21cc18faefe5ab618ea496e4f36574c8ae396e8cf9e9a",
+    "archive_day.py": "009217f3a4ebb9953147e1e605c1b05ffcb76ff24a7560b9aa413b11db71669b",
     "eu_strict.py": "99e557ddfb856de9b844411a5234aef104aee41391f8912f739fc9adc14405b7",
     "forward/mix-control-freeze.json": "9bff030e6e703861b5e4935fa74cea51c76fe948cae84ca6dd340f7087be0c6a",
     "forward/mix-r1-17f-freeze.json": "bf1a36537d98f7ffe8a4d1cfce7a1dd7bad040d038ffb47f3c3b2fa6a6304bfc",
@@ -29,7 +29,7 @@
     "systemd/strict-artifact-daily.timer": "453abc98f24a32a88620e2b21a942f3f3df08d9a8aefd3a0838f2be124fca2cb"
   },
   "holdout_start_utc": "2026-10-10T00:00:00Z",
-  "made": "2026-10-09T16:36:59Z",
+  "made": "2026-10-09T16:41:21Z",
   "orders": "paper_only",
   "pre_roll_hours": 5,
   "projection_protocol_sha256": "26f64d5332186ef53f4e1e5e1a1ab7b50fcd45b544770d5b1268fcc42808145c",

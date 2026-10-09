@@ -54,6 +54,20 @@ GROUPS = {
     ),
 }
 
+FORMAL_CUTOFF_DAY = "20261010"
+LANE_STATES = {
+    "source": (
+        Path("/home/ubuntu/rec/formal/source-race-state"), ("verdict.json",),
+    ),
+    "settlement": (
+        Path("/home/ubuntu/rec/formal/settlement-proxy-state"), ("verdict.json",),
+    ),
+    "mix": (
+        Path("/home/ubuntu/rec/formal/mix-state"),
+        ("mix-control-verdict.json", "mix-r1-17f-verdict.json"),
+    ),
+}
+
 
 def log(message: str) -> None:
     line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}"
@@ -143,6 +157,58 @@ def complete_hour_coverage(group: Group, day: str, paths: Iterable[Path]) -> boo
     return True
 
 
+def read_lane_progress() -> dict[str, dict[str, Any]]:
+    progress: dict[str, dict[str, Any]] = {}
+    for name, (state, terminal_files) in LANE_STATES.items():
+        admission_path = state / "admission.json"
+        admitted_day: str | None = None
+        if admission_path.is_file():
+            admission = json.loads(admission_path.read_text(encoding="utf-8"))
+            admitted_day = str(admission.get("day") or "")
+            if (
+                not re.fullmatch(r"\d{8}", admitted_day)
+                or admitted_day < FORMAL_CUTOFF_DAY
+            ):
+                raise ValueError(f"{name} admission day drift")
+        terminal = all((state / filename).is_file() for filename in terminal_files)
+        if terminal and admitted_day is None:
+            raise ValueError(f"{name} terminal state exists without admission")
+        progress[name] = {"admitted_day": admitted_day, "terminal": terminal}
+    return progress
+
+
+def _shift_day(day: str, amount: int) -> str:
+    value = dt.datetime.strptime(day, "%Y%m%d").date() + dt.timedelta(days=amount)
+    return value.strftime("%Y%m%d")
+
+
+def formal_prune_watermark(
+    group_name: str, progress: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    requirements = {
+        "rec": (("source", 0), ("settlement", -1), ("mix", 0)),
+        "poly": (("source", 0), ("settlement", 0), ("mix", 0)),
+        "mix": (("mix", -1),),
+    }
+    if group_name not in requirements:
+        raise ValueError(f"unknown archive group for formal pruning: {group_name}")
+    safe_days: list[str] = []
+    for lane, offset in requirements[group_name]:
+        row = progress.get(lane)
+        if not isinstance(row, Mapping):
+            raise ValueError(f"missing {lane} lane progress")
+        if row.get("terminal") is True:
+            continue
+        admitted_day = row.get("admitted_day")
+        if admitted_day is None:
+            return None
+        day = str(admitted_day)
+        if not re.fullmatch(r"\d{8}", day):
+            raise ValueError(f"invalid {lane} admission watermark")
+        safe_days.append(_shift_day(day, offset))
+    return min(safe_days) if safe_days else "99999999"
+
+
 def _remote_manifest(s3: Any, key: str) -> bytes | None:
     try:
         return s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
@@ -219,12 +285,32 @@ def upload_day(s3: Any, group: Group, day: str, current_hour: str) -> bool:
     return True
 
 
-def prune(s3: Any, group: Group, keep_days: int, today: dt.date) -> tuple[int, int]:
+def prune(
+    s3: Any,
+    group: Group,
+    keep_days: int,
+    today: dt.date,
+    *,
+    lane_progress: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[int, int]:
     cutoff = (today - dt.timedelta(days=keep_days)).strftime("%Y%m%d")
-    freed = deleted = kept = 0
+    watermark = (
+        formal_prune_watermark(
+            group.name, read_lane_progress() if lane_progress is None else lane_progress,
+        )
+        if group.complete_from is not None else None
+    )
+    freed = deleted = kept = pending = 0
     for path in sorted(group.root.glob(f"*.{group.suffix}")):
         parsed = stamp(path)
         if parsed is None or parsed[0] >= cutoff:
+            continue
+        if (
+            group.complete_from is not None
+            and parsed[0] >= group.complete_from
+            and (watermark is None or parsed[0] > watermark)
+        ):
+            pending += 1
             continue
         size = path.stat().st_size
         key = f"{group.prefix}/{parsed[0]}/{path.name}"
@@ -237,7 +323,8 @@ def prune(s3: Any, group: Group, keep_days: int, today: dt.date) -> tuple[int, i
             log(f"KEEP {group.name}/{path.name}: no verified copy in S3")
     log(
         f"{group.name} prune before {cutoff}: deleted {deleted} files "
-        f"({freed / 1e9:.2f} GB), kept {kept} unverified"
+        f"({freed / 1e9:.2f} GB), kept {kept} unverified, "
+        f"kept {pending} pending formal admission"
     )
     return deleted, freed
 
@@ -263,8 +350,11 @@ def main() -> int:
     for group in selected_groups(args.group):
         ok = upload_day(s3, group, args.day, current_hour) and ok
     if not args.no_delete:
+        lane_progress = read_lane_progress()
         for group in selected_groups(args.group):
-            prune(s3, group, args.keep_days, now.date())
+            prune(
+                s3, group, args.keep_days, now.date(), lane_progress=lane_progress,
+            )
     return 0 if ok else 1
 
 

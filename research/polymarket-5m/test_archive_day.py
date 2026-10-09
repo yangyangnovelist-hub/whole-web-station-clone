@@ -154,3 +154,47 @@ def test_formal_manifest_requires_every_frozen_route_hour(tmp_path, monkeypatch)
     assert archive.upload_day(s3, group, "20261010", "2026101100") is False
     assert s3.body is None
     assert s3.uploads == 0
+
+
+def test_formal_prune_watermark_preserves_boundary_inputs():
+    progress = {
+        "source": {"admitted_day": "20261010", "terminal": False},
+        "settlement": {"admitted_day": "20261010", "terminal": False},
+        "mix": {"admitted_day": "20261010", "terminal": False},
+    }
+
+    assert archive.formal_prune_watermark("poly", progress) == "20261010"
+    assert archive.formal_prune_watermark("rec", progress) == "20261009"
+    assert archive.formal_prune_watermark("mix", progress) == "20261009"
+
+    progress["settlement"]["admitted_day"] = "20261011"
+    progress["mix"]["admitted_day"] = "20261011"
+    assert archive.formal_prune_watermark("rec", progress) == "20261010"
+    assert archive.formal_prune_watermark("mix", progress) == "20261010"
+
+
+def test_prune_keeps_formal_raw_until_lane_watermark_advances(tmp_path, monkeypatch):
+    group = archive.Group("rec", tmp_path, "txt.gz", complete_from="20261010")
+    path = tmp_path / "bn_spot.20261010T01.txt.gz"
+    path.write_bytes(b"verified")
+    monkeypatch.setattr(archive, "remote_ok", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(archive, "log", lambda _message: None)
+    progress = {
+        "source": {"admitted_day": "20261010", "terminal": False},
+        "settlement": {"admitted_day": "20261010", "terminal": False},
+        "mix": {"admitted_day": "20261010", "terminal": False},
+    }
+
+    deleted, _freed = archive.prune(
+        object(), group, 2, archive.dt.date(2026, 10, 15), lane_progress=progress,
+    )
+    assert deleted == 0
+    assert path.is_file()
+
+    progress["settlement"]["admitted_day"] = "20261011"
+    progress["mix"]["admitted_day"] = "20261011"
+    deleted, _freed = archive.prune(
+        object(), group, 2, archive.dt.date(2026, 10, 15), lane_progress=progress,
+    )
+    assert deleted == 1
+    assert not path.exists()
