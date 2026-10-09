@@ -148,6 +148,7 @@ def test_projection_protocol_binds_runner_source_control_and_model_artifacts(tmp
         "made": "2026-10-05T01:41:16Z",
         "holdout_start_utc": "2026-10-05T13:00:00Z",
         "runner_sha256": projection._sha256(forward.__file__),
+        "dependency_sha256": forward.control_dependency_hashes(),
     }
     control_payload["protocol_sha256"] = projection._canonical_sha(control_payload)
     control.write_text(json.dumps(control_payload), encoding="utf-8")

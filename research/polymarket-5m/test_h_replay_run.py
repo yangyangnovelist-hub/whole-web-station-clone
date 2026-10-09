@@ -20,6 +20,17 @@ def test_signal_freeze_loads_deployed_bookticker_parameters():
     assert config.sigma_min_observations == 300
 
 
+def test_token_book_ignores_a_late_stale_source_update():
+    token = run.TokenBook()
+    token.replace([], [{"price": "0.40", "size": "8"}], 1_000.0)
+
+    applied = token.change("SELL", 0.40, 0.0, 999.0, None, None)
+
+    assert applied is False
+    assert token.source_ms == 1_000.0
+    assert token.asks == {0.40: 8.0}
+
+
 def test_fair_price_scales_endpoint_move_by_unknown_twap_fraction():
     t_rel = 270.0  # 30 of the 60 closing-TWAP seconds remain unknown.
     sigma = 0.01

@@ -516,6 +516,49 @@ def test_late_received_clob_update_cannot_rewrite_an_earlier_match_book():
     assert all(row["match_book_clock"] == "receipt_ms" for row in rows)
 
 
+def test_stale_price_change_does_not_refresh_the_execution_book():
+    class Machine:
+        def __init__(self):
+            self.events = []
+
+        def feed(self, event):
+            self.events.append(event)
+
+    market = sp.h_replay_run.DirectMarketBook("m", 300, "up", "down")
+    tokens = {"up": (market, "Up"), "down": (market, "Down")}
+    machine = Machine()
+    machines = {sp.BASE_VARIANT: machine}
+    connected = sp._direct_clob_batch({
+        "recv_ms": 900.0,
+        "events": [{"kind": "clob_connection", "connection_epoch": 1}],
+    }, machines, tokens, False)
+    connected = sp._direct_clob_batch({
+        "recv_ms": 1_010.0,
+        "events": [
+            {"kind": "clob_snapshot", "asset_id": "up", "source_ts_ms": 1_000.0,
+             "bids": [{"price": "0.39", "size": "10"}],
+             "asks": [{"price": "0.40", "size": "10"}]},
+            {"kind": "clob_snapshot", "asset_id": "down", "source_ts_ms": 1_000.0,
+             "bids": [{"price": "0.59", "size": "10"}],
+             "asks": [{"price": "0.60", "size": "10"}]},
+        ],
+    }, machines, tokens, connected)
+    assert any(event["kind"] == "snapshot" for event in machine.events)
+
+    machine.events.clear()
+    sp._direct_clob_batch({
+        "recv_ms": 2_000.0,
+        "events": [{
+            "kind": "clob_price_change", "asset_id": "up", "source_ts_ms": 999.0,
+            "side": "SELL", "price": "0.40", "size": "9",
+            "best_bid": "0.39", "best_ask": "0.40",
+        }],
+    }, machines, tokens, connected)
+
+    assert not any(event["kind"] in {"snapshot", "invalidate"} for event in machine.events)
+    assert market.up.asks == {0.40: 10.0}
+
+
 def test_partial_fak_loss_is_included_in_strategy_pnl():
     decision = 599_000.0
     signals = {sp.BASE_VARIANT: [sp.ProxySignal(

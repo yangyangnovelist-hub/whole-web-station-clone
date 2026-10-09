@@ -897,14 +897,17 @@ def _direct_clob_batch(
         token = market.up if direction == "Up" else market.down
         source_ms = float(event["source_ts_ms"])
         source_values.append(source_ms)
+        applied = False
         if kind == "clob_snapshot" and source_ms >= token.source_ms:
             token.replace(event["bids"], event["asks"], source_ms)
+            applied = True
         elif kind == "clob_price_change":
-            token.change(
+            applied = token.change(
                 str(event["side"]), float(event["price"]), float(event["size"]),
                 source_ms, event.get("best_bid"), event.get("best_ask"),
             )
-        touched[market.market_id] = market
+        if applied:
+            touched[market.market_id] = market
     for market in touched.values():
         for machine in machines.values():
             if market.ready:

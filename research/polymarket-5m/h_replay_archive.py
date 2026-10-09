@@ -116,7 +116,6 @@ def iter_normalized_events(path, *, family):
     source_active = {source: None for source in source_names}
     source_last_epoch = {source: 0 for source in source_names}
     source_previous_sequence = {source: -1 for source in source_names}
-    previous_clob_source_ms = -float("inf")
     for line_number, row in _iter_json_objects(path):
         try:
             kind = row["kind"]
@@ -207,9 +206,11 @@ def iter_normalized_events(path, *, family):
                             not math.isfinite(size) or not 0 <= price <= 1 or size < 0):
                         raise ValueError("invalid clob_price_change")
                 if kind in ("clob_snapshot", "clob_price_change"):
-                    if not math.isfinite(source_timestamp) or source_timestamp < previous_clob_source_ms:
-                        raise ValueError("clob source_ts_ms moved backwards")
-                    previous_clob_source_ms = source_timestamp
+                    if not math.isfinite(source_timestamp):
+                        raise ValueError("invalid clob source_ts_ms")
+                    # The channel multiplexes many tokens whose venue clocks can interleave.
+                    # recv_ms/seq is the causal order; the replay applies the live per-token
+                    # stale-update guard before mutating a book.
                 if kind == "clob_error":
                     active_epoch = None
             previous_seq = sequence

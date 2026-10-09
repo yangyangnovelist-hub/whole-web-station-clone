@@ -109,7 +109,7 @@ def test_normalized_strict_stream_validates_family_sequence_and_epoch(tmp_path):
         list(archive.iter_normalized_events(clob, family="clob"))
 
 
-def test_normalized_clob_rejects_source_clock_regression(tmp_path):
+def test_normalized_clob_preserves_receive_order_when_one_token_source_clock_regresses(tmp_path):
     archive = importlib.import_module("h_replay_archive")
     clob = tmp_path / "clob.jsonl.gz"
     rows = [
@@ -118,16 +118,18 @@ def test_normalized_clob_rejects_source_clock_regression(tmp_path):
         {"kind": "clob_snapshot", "recv_ms": 1_001.0, "source_ts_ms": 990.0,
          "seq": 1, "connection_epoch": 1, "market_id": "m", "asset_id": "up",
          "bids": [], "asks": []},
-        {"kind": "clob_snapshot", "recv_ms": 1_002.0, "source_ts_ms": 989.0,
-         "seq": 2, "connection_epoch": 1, "market_id": "m", "asset_id": "down",
-         "bids": [], "asks": []},
+        {"kind": "clob_price_change", "recv_ms": 1_002.0, "source_ts_ms": 989.0,
+         "seq": 2, "connection_epoch": 1, "market_id": "m", "asset_id": "up",
+         "price": "0.55", "size": "3", "side": "SELL"},
         {"kind": "clob_error", "recv_ms": 1_003.0, "source_ts_ms": None,
          "seq": 3, "connection_epoch": 1, "error": "closed"},
     ]
     _write_jsonl_gz(clob, rows)
 
-    with pytest.raises(archive.ArchiveFormatError, match="source_ts_ms moved backwards"):
-        list(archive.iter_normalized_events(clob, family="clob"))
+    events = list(archive.iter_normalized_events(clob, family="clob"))
+
+    assert [event["seq"] for event in events] == [0, 1, 2, 3]
+    assert [event["source_ts_ms"] for event in events[1:3]] == [990.0, 989.0]
 
 
 def test_clob_snapshots_use_outer_receive_order_when_source_time_inverts(tmp_path):

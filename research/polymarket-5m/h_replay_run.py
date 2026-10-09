@@ -291,9 +291,9 @@ class TokenBook:
         source_ms: float,
         best_bid: Any,
         best_ask: Any,
-    ) -> None:
+    ) -> bool:
         if not self.ready or source_ms < self.source_ms:
-            return
+            return False
         levels = self.bids if side.upper() == "BUY" else self.asks
         if size > 0:
             levels[price] = size
@@ -304,9 +304,9 @@ class TokenBook:
             venue_bid = float(best_bid)
             venue_ask = float(best_ask)
         except (TypeError, ValueError):
-            return
+            return True
         if not 0 < venue_bid < venue_ask < 1:
-            return
+            return True
         self.bids = {level: amount for level, amount in self.bids.items() if level <= venue_bid + 1e-9}
         self.asks = {level: amount for level, amount in self.asks.items() if level >= venue_ask - 1e-9}
         local_bid = max(self.bids, default=math.nan)
@@ -314,6 +314,7 @@ class TokenBook:
         if not (math.isclose(local_bid, venue_bid, abs_tol=1e-9)
                 and math.isclose(local_ask, venue_ask, abs_tol=1e-9)):
             self.ready = False
+        return True
 
     def ask_levels(self) -> list[list[float]]:
         return [[price, self.asks[price]] for price in sorted(self.asks)]
@@ -465,11 +466,13 @@ def _apply_clob_batch(
         market, direction = hit
         token = market.up if direction == "Up" else market.down
         source_ms = float(event["source_ts_ms"])
+        applied = False
         if event["kind"] == "clob_snapshot":
             if source_ms >= token.source_ms:
                 token.replace(event["bids"], event["asks"], source_ms)
+                applied = True
         elif event["kind"] == "clob_price_change":
-            token.change(
+            applied = token.change(
                 str(event["side"]),
                 float(event["price"]),
                 float(event["size"]),
@@ -477,7 +480,8 @@ def _apply_clob_batch(
                 event.get("best_bid"),
                 event.get("best_ask"),
             )
-        touched[market.market_id] = market
+        if applied:
+            touched[market.market_id] = market
     for market in touched.values():
         ring = rings.setdefault(market.slot, SourceRing())
         if market.ready:

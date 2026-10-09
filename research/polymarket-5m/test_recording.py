@@ -452,3 +452,32 @@ def test_strict_clob_integrity_rejects_duplicate_source_sequence(tmp_path):
                                  "msg": {"event_type": "ignored"}}) + "\n")
     rows = list(rc._strict_clob_events(tmp_path, "btc", {}))
     assert rows[-1][1]["source_sequence_regressions"] == 1
+
+
+def test_strict_clob_tracks_source_regression_per_token_not_globally(tmp_path):
+    day = tmp_path / "raw" / "2026-10-04"
+    day.mkdir(parents=True)
+    with gzip.open(day / "errors.jsonl.gz", "wt") as stream:
+        stream.write(json.dumps({"where": "clob-open", "at": 1, "sequence": 0,
+                                 "connection_epoch": 1}) + "\n")
+        stream.write(json.dumps({"where": "clob", "at": 5, "sequence": 3,
+                                 "connection_epoch": 1, "connection_active": True}) + "\n")
+    messages = [
+        {"recv_ms": 2, "sequence": 1, "connection_epoch": 1, "msg": {
+            "event_type": "book", "asset_id": "up", "timestamp": "2000",
+            "bids": [], "asks": [],
+        }},
+        {"recv_ms": 3, "sequence": 2, "connection_epoch": 1, "msg": {
+            "event_type": "book", "asset_id": "down", "timestamp": "1000",
+            "bids": [], "asks": [],
+        }},
+    ]
+    with gzip.open(day / "clob-btc.jsonl.gz", "wt") as stream:
+        stream.writelines(json.dumps(row) + "\n" for row in messages)
+
+    rows = list(rc._strict_clob_events(tmp_path, "btc", {"up": "m", "down": "m"}))
+
+    assert [event["asset_id"] for event, _, _ in rows if event["kind"] == "clob_snapshot"] == [
+        "up", "down",
+    ]
+    assert rows[-1][1]["source_time_regressions"] == 0

@@ -544,7 +544,11 @@ def _strict_clob_events(src, coin, token_market):
     snapshots = set()
     last_receive_ms = -float("inf")
     last_source_sequence = -1
-    last_source_ms = -float("inf")
+    # Venue timestamps are generated per token/market and can legitimately interleave
+    # backwards across a multiplexed connection.  Receipt sequence is the causal order;
+    # only same-token regressions are stale updates (the replay mirrors the live book and
+    # ignores those updates instead of invalidating the whole recording).
+    last_source_ms: dict[str, float] = {}
     for _, source, row in _strict_clob_inputs(src, coin):
         receive_ms = float(row["at"] if source == "marker" else row["recv_ms"])
         if receive_ms < last_receive_ms:
@@ -603,9 +607,10 @@ def _strict_clob_events(src, coin, token_market):
                 if source_ts is None:
                     stats["missing_source_ts"] += 1
                     continue
-                if source_ts < last_source_ms:
+                previous_source_ms = last_source_ms.get(token, -float("inf"))
+                if source_ts < previous_source_ms:
                     stats["source_time_regressions"] += 1
-                last_source_ms = max(last_source_ms, source_ts)
+                last_source_ms[token] = max(previous_source_ms, source_ts)
                 event = {"kind": "clob_snapshot", "recv_ms": float(row["recv_ms"]), "seq": sequence,
                          "source_ts_ms": source_ts, "connection_epoch": epoch,
                          "market_id": str(message.get("market") or token_market[token]), "asset_id": token,
@@ -620,13 +625,14 @@ def _strict_clob_events(src, coin, token_market):
                 if source_ts is None:
                     stats["missing_source_ts"] += 1
                     continue
-                if source_ts < last_source_ms:
-                    stats["source_time_regressions"] += 1
-                last_source_ms = max(last_source_ms, source_ts)
                 for change in message.get("price_changes") or []:
                     token = str(change.get("asset_id", ""))
                     if token not in token_market:
                         continue
+                    previous_source_ms = last_source_ms.get(token, -float("inf"))
+                    if source_ts < previous_source_ms:
+                        stats["source_time_regressions"] += 1
+                    last_source_ms[token] = max(previous_source_ms, source_ts)
                     event = {"kind": "clob_price_change", "recv_ms": float(row["recv_ms"]),
                              "seq": sequence, "source_ts_ms": source_ts, "connection_epoch": epoch,
                              "market_id": str(message.get("market") or token_market[token]),
@@ -734,7 +740,6 @@ def write_strict_bundle(src, out, coin, markets):
         ),
         "clob_explicit_order": bool(clob_stats["explicit_order"]),
         "clob_source_sequence": clob_stats["source_sequence_regressions"] == 0,
-        "clob_source_time": clob_stats["source_time_regressions"] == 0,
         "clob_source_timestamp": clob_stats["missing_source_ts"] == 0,
         "clob_pre_epoch": clob_stats["dropped_pre_epoch"] == 0,
         "clob_epoch_match": clob_stats["dropped_epoch_mismatch"] == 0,

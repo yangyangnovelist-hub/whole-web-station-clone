@@ -939,6 +939,7 @@ def test_freeze_fingerprint_append_once_and_terminal_verdict_are_immutable(tmp_p
               "min_fills": F.MIN_FILLS, "min_days": F.MIN_DAYS, "family_tests": F.FAMILY_TESTS,
               "alpha": F.ALPHA}
     freeze["runner_sha256"] = F.sha256_file(F.__file__)
+    freeze["dependency_sha256"] = F.control_dependency_hashes()
     freeze["protocol_sha256"] = F._canonical_sha(freeze)
     freeze_path = tmp_path / "freeze.json"
     freeze_path.write_text(json.dumps(freeze))
@@ -957,6 +958,12 @@ def test_freeze_fingerprint_append_once_and_terminal_verdict_are_immutable(tmp_p
     freeze_path.write_text(json.dumps(wrong_runner))
     monkeypatch.setenv("EXPECTED_PROTOCOL_SHA256", wrong_runner["protocol_sha256"])
     with pytest.raises(ValueError, match="audited runner"):
+        F.load_control_freeze(freeze_path)
+    wrong_dependency = dict(freeze, dependency_sha256={"h_replay_archive.py": "0" * 64})
+    wrong_dependency["protocol_sha256"] = F._canonical_sha(wrong_dependency)
+    freeze_path.write_text(json.dumps(wrong_dependency))
+    monkeypatch.setenv("EXPECTED_PROTOCOL_SHA256", wrong_dependency["protocol_sha256"])
+    with pytest.raises(ValueError, match="dependency hash"):
         F.load_control_freeze(freeze_path)
     freeze_path.write_text(json.dumps(freeze))
     monkeypatch.setenv("EXPECTED_PROTOCOL_SHA256", freeze["protocol_sha256"])

@@ -158,7 +158,8 @@ def create_protocol(destination: str | Path, historical_frozen: str | Path,
     if (control.get("schema") != forward.FREEZE_SCHEMA
             or control.get("strategy_id") != forward.STRATEGY_ID
             or control_protocol != _canonical_sha(control)
-            or control.get("runner_sha256") != _sha256(forward.__file__)):
+            or control.get("runner_sha256") != _sha256(forward.__file__)
+            or control.get("dependency_sha256") != forward.control_dependency_hashes()):
         raise ValueError("R1 projection source control protocol is invalid")
     start = datetime.fromisoformat(holdout_start_utc.replace("Z", "+00:00"))
     if start.tzinfo is None:

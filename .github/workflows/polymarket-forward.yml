@@ -142,7 +142,7 @@ jobs:
           else
             echo "Strict artifact validated, but its collector region is not production-equivalent; audit only."
           fi
-          EXPECTED_PROTOCOL_SHA256=9104431b54bdc744919772ddd4d5846522a0a8ca72252a11d7a722469d51a45f \
+          EXPECTED_PROTOCOL_SHA256=ae7a29e149fd405d0df78ea6c2f2e18ff9fde5a63a307cee203e98eedd109a53 \
           python mix_forward.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
             --freeze forward/mix-control-freeze.json \
             --rows-out "$RUNNER_TEMP/mix-control-rows.jsonl" \

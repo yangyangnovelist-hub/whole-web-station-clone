@@ -137,6 +137,19 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def control_dependency_hashes() -> dict[str, str]:
+    """Bind every imported local module that can change control replay semantics."""
+    modules = {
+        "mix_hf.py": mix,
+        "binary.py": binary_model,
+        "h_replay_archive.py": archive,
+        "h_replay_run.py": hrun,
+        "jump2s.py": j2,
+        "pm_outcomes.py": pm_outcomes,
+    }
+    return {name: sha256_file(module.__file__) for name, module in modules.items()}
+
+
 def _canonical_sha(value: Mapping[str, Any]) -> str:
     payload = {key: item for key, item in value.items() if key != "protocol_sha256"}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -163,6 +176,8 @@ def load_control_freeze(path: str | Path) -> tuple[dict[str, Any], "ControlConfi
         raise ValueError("MIX control freeze does not match EXPECTED_PROTOCOL_SHA256")
     if payload.get("runner_sha256") != sha256_file(__file__):
         raise ValueError("MIX control freeze does not match the audited runner")
+    if payload.get("dependency_sha256") != control_dependency_hashes():
+        raise ValueError("MIX control freeze dependency hash mismatch")
     expected = {
         "z_cut": CONTROL_CUT,
         "primary_latency_ms": PRIMARY_LATENCY_MS,
@@ -973,12 +988,17 @@ def replay_normalized(source_events: Iterable[dict[str, Any]], clob_events: Iter
             market, direction = hit
             token = market.up if direction == "Up" else market.down
             source_ms = float(change["source_ts_ms"])
+            applied = False
             if change_kind == "clob_snapshot" and source_ms >= token.source_ms:
                 token.replace(change["bids"], change["asks"], source_ms)
+                applied = True
             elif change_kind == "clob_price_change":
-                token.change(str(change["side"]), float(change["price"]), float(change["size"]), source_ms,
-                             change.get("best_bid"), change.get("best_ask"))
-            touched[market.market_id] = market
+                applied = token.change(
+                    str(change["side"]), float(change["price"]), float(change["size"]), source_ms,
+                    change.get("best_bid"), change.get("best_ask"),
+                )
+            if applied:
+                touched[market.market_id] = market
         for market in touched.values():
             up_ready = _token_uncrossed(market.up)
             down_ready = _token_uncrossed(market.down)
