@@ -127,8 +127,8 @@ class SigmaGrid:
         if second == self.current_second:
             self.current_log_price = log_price
             return
-        if second < self.current_second:
-            return
+        # Match deployed GSignal exactly: a regressed spot second finalises the current
+        # second and moves the sigma grid backward; its trigger history is clamped below.
         self._finalise(self.current_second, self.current_log_price)
         for empty_second in range(self.current_second + 1, second):
             value = self.current_log_price if empty_second - self.current_second <= self.forward_fill_s else math.nan
@@ -225,12 +225,15 @@ class TimestampedFirstTrigger:
         price: float,
         *,
         reject_exact_duplicate: bool,
+        clamp_regressed: bool,
     ) -> Optional[Candidate]:
         if not price > 0:
             return None
         timestamp_s = timestamp_ms / 1_000.0
         if timestamps and timestamp_s < timestamps[-1]:
-            return None
+            if not clamp_regressed:
+                return None
+            timestamp_s = timestamps[-1]
         log_price = math.log(price)
         if (reject_exact_duplicate and timestamps and timestamp_s == timestamps[-1]
                 and log_price == log_prices[-1]):
@@ -262,6 +265,7 @@ class TimestampedFirstTrigger:
         return self._candidate(
             self.trade_timestamps, self.trade_log_prices, source_timestamp_ms, price,
             reject_exact_duplicate=False,
+            clamp_regressed=True,
         )
 
     def update_futures(self, source_timestamp_ms: float, bid: float, ask: float) -> Optional[Candidate]:
@@ -273,6 +277,7 @@ class TimestampedFirstTrigger:
         return self._candidate(
             timestamps, log_prices, source_timestamp_ms, price,
             reject_exact_duplicate=True,
+            clamp_regressed=False,
         )
 
 @dataclass

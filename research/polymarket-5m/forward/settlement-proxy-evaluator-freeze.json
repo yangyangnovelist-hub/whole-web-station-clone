@@ -1,6 +1,6 @@
 {
   "schema": "settlement-proxy-evaluator-freeze-v1",
-  "frozen_at": "2026-10-09T15:24:52Z",
+  "frozen_at": "2026-10-09T15:37:51Z",
   "holdout_start": "2026-10-10T00:00:00Z",
   "collector_region": "eu-west-1",
   "strategy_fingerprint": "2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee",
@@ -40,7 +40,7 @@
     "forward/settlement-proxy-freeze.json": "7812650a8684170729afca0c2e821a550eed96aef957cf4a237244cd74e7b589",
     "h_replay.py": "ea3ffb44b7b941273e5ee320b6f75c7ef6555351cc58c74ebcffebb4ae649b41",
     "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
-    "h_replay_run.py": "3d6a92b6b160beea35ebdffb8aad5e900f4e735101a82bc74919780d7bbb1ba9",
+    "h_replay_run.py": "3b19e5996623f69dd32883079521b7f07890327c368650677c1c5494d7666292",
     "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
     "poly_clob_rec.py": "a90f9d639185465df35bd0aaa8d54d9634954093de734a8010c05ab4c91677c1",
     "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",

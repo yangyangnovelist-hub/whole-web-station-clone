@@ -117,6 +117,21 @@ def test_timestamped_first_keeps_same_timestamp_price_changes_and_spot_trades():
     assert trigger.source_timestamps["spot_trade"] == [2.0, 2.0]
 
 
+def test_timestamped_first_clamps_a_regressed_spot_trade_like_production():
+    trigger = run.TimestampedFirstTrigger(run.SignalConfig(
+        tau_hi_s=300.0, tau_lo_s=0.0, sigma_window_s=3, sigma_min_observations=2,
+    ))
+
+    assert trigger.update_trade(2_000, 100.0) is None
+    assert trigger.update_trade(1_999, 101.0) is None
+
+    assert trigger.source_timestamps["spot_trade"] == [2.0, 2.0]
+    assert trigger.source_log_prices["spot_trade"] == pytest.approx(
+        [math.log(100.0), math.log(101.0)]
+    )
+    assert trigger.grid.current_second == 1
+
+
 def test_direct_token_book_quarantines_an_unreproducible_venue_bba():
     token = run.TokenBook()
     token.replace(
