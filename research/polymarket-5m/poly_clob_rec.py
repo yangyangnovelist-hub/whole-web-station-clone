@@ -1,9 +1,9 @@
-"""Polymarket CLOB market-channel recorder for BTC Up/Down 5m and 15m markets (research only, no orders).
+"""Polymarket CLOB market-channel recorder for BTC Up/Down 5m markets (research only, no orders).
 Every WS message is written verbatim with our receive time (ns) to hourly gzip files:
   <out>/poly_clob.<YYYYMMDD>T<HH>.jsonl.gz   lines: {"rn": <recv_ns>, "c": <conn>, "m": <raw message>}
-Two redundant connections per market set (same subscription as the live H feed: level 2, initial dump).
-Markets are rolled every 5 s: current and next 5m and 15m windows."""
-import asyncio, gzip, json, os, sys, time
+Four redundant connections per market set (same subscription as the live H feed: level 2, initial dump).
+Markets are rolled every 5 s: current and next 5m windows."""
+import asyncio, gzip, json, os, signal, sys, time
 import urllib.request, urllib.parse
 import websockets
 
@@ -28,8 +28,21 @@ class Sink:
     def flush(self):
         if self.f: self.f.flush()
 
+    def close(self):
+        if self.f:
+            self.f.close()
+            self.f = None
+
 
 sink = Sink()
+
+
+def _close_and_exit(*_):
+    """Finish the active gzip member before a systemd restart or shutdown."""
+    try:
+        sink.close()
+    finally:
+        os._exit(0)
 
 
 def envelope(rn, idx, epoch, sequence, kind, **details):
@@ -62,6 +75,18 @@ class RecentFrames:
 
 
 recent_frames = RecentFrames()
+
+
+def single_line_frame(message):
+    """Keep one websocket frame on one JSONL physical line before envelope embedding."""
+    if isinstance(message, bytes):
+        message = message.decode()
+    return message.replace("\r", " ").replace("\n", " ")
+
+
+def market_slugs(now):
+    start = int(now) // 300 * 300
+    return [f"btc-updown-5m-{slot}" for slot in (start, start + 300)]
 
 
 async def tokens(http, slug):
@@ -105,6 +130,7 @@ async def conn(assets, idx, stop):
                         except TimeoutError:
                             continue
                         rn = time.time_ns()
+                        msg = single_line_frame(msg)
                         if msg in ("PONG", ""): continue
                         if not recent_frames.first(msg, rn):
                             continue
@@ -133,6 +159,7 @@ async def conn(assets, idx, stop):
 
 
 async def main():
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _close_and_exit)
     http = None
     cur, stop = None, None
     cache = {}
@@ -143,8 +170,7 @@ async def main():
     asyncio.create_task(flusher())
     while True:
         now = int(time.time())
-        slugs = [f"btc-updown-5m-{s}" for s in (now // 300 * 300, now // 300 * 300 + 300)] + \
-                [f"btc-updown-15m-{s}" for s in (now // 900 * 900, now // 900 * 900 + 900)]
+        slugs = market_slugs(now)
         assets = []
         for s in slugs:
             if s not in cache or not cache[s]:

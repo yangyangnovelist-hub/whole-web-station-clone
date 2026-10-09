@@ -146,6 +146,43 @@ def test_compare_archive_runs_independent_source_arms_and_reports_execution_delt
     assert len(result["observation_files"]["candidate"]["sha256"]) == 64
 
 
+def test_candidate_races_both_free_early_sources_against_deployed_baseline():
+    assert race.BASELINE_SOURCES == frozenset({"spot_trade", "futures_book_ticker"})
+    assert race.CANDIDATE_SOURCES - race.BASELINE_SOURCES == frozenset({
+        "futures_trade", "deribit_quote",
+    })
+
+
+def test_source_race_replay_uses_one_local_receipt_clock_for_all_sources():
+    current = {
+        "timing": {
+            "signal_time_basis": "exchange_source_timestamp",
+            "book_trigger_synthetic_lag_ms": 106.0,
+            "evaluation_ms": [500.0],
+            "primary_evaluation_ms": 500.0,
+        },
+        "semantics": {
+            "event_order": "receive_ms_stable",
+            "source_timestamp": "old",
+            "trigger": "old",
+            "candidate_sources": ["spot_trade"],
+        },
+    }
+    protocol = {
+        "execution": {
+            "evaluation_ms": [300.0, 350.0, 400.0, 500.0],
+            "primary_evaluation_ms": 400.0,
+        },
+    }
+
+    frozen = race._receipt_clock_replay_freeze(current, protocol)
+
+    assert frozen["timing"]["signal_time_basis"] == "local_receipt_timestamp"
+    assert frozen["timing"]["primary_evaluation_ms"] == 400.0
+    assert frozen["timing"]["book_trigger_synthetic_lag_ms"] == 0.0
+    assert frozen["semantics"]["candidate_sources"] == sorted(race.CANDIDATE_SOURCES)
+
+
 def test_compare_archive_rejects_dataset_identity_drift(tmp_path, monkeypatch):
     calls = 0
 

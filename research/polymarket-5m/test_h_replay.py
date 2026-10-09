@@ -1,6 +1,7 @@
 import pytest
 
 import h_replay as hr
+import h_replay_run as run
 
 
 def test_live_fee_limit_is_frozen_at_decision():
@@ -441,3 +442,55 @@ def test_unforced_finish_keeps_unobserved_evaluation_censored():
 
     forced = machine.finish()
     assert len(forced) == 1
+
+
+def test_retry_enabled_unsent_compaction_preserves_summary():
+    config = hr.ReplayConfig(
+        evaluation_ms=(300.0,), retry_after_no_send_or_kill=True,
+    )
+    common = [
+        {"kind": "snapshot", "market_id": "m", "receive_ms": 100,
+         "source_ms": 100, "up_asks": [[0.60, 10]], "down_asks": [[0.40, 10]]},
+        {"kind": "signal", "market_id": "m", "receive_ms": 106,
+         "source_ms": 106, "signal_source": "spot_trade",
+         "direction": "Up", "fair": 0.63},
+        {"kind": "watermark", "receive_ms": 500, "source_ms": 500},
+    ]
+    full = hr.HReplay(config)
+    compact = hr.HReplay(config)
+    for event in common:
+        full.feed(dict(event))
+        compact.feed({**event, "suppress_unsent_record": event["kind"] == "signal"})
+    full.finish(force=False)
+    compact.finish(force=False)
+
+    full_summary = run.summarize(full.records, {})
+    compact_summary = run.summarize(
+        compact.records, {}, compact.suppressed_unsent,
+    )
+
+    assert len(full.records) == 1
+    assert compact.records == []
+    assert compact_summary == full_summary
+
+
+def test_local_receipt_clock_preserves_source_time_only_for_audit():
+    machine = hr.HReplay(hr.ReplayConfig(
+        evaluation_ms=(300.0,),
+        signal_time_basis="local_receipt_timestamp",
+        max_order_usd=10.0,
+    ))
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 1_000,
+        "source_ms": 990, "up_asks": [[0.30, 10]], "down_asks": [[0.70, 10]],
+    })
+    machine.feed({
+        "kind": "signal", "market_id": "m", "receive_ms": 1_020,
+        "source_ms": 1_100, "direction": "Up", "fair": 0.70,
+    })
+    machine.feed({"kind": "watermark", "receive_ms": 1_400, "source_ms": 1_400})
+
+    row = machine.records[0]
+    assert row["signal_ms"] == 1_020
+    assert row["signal_source_ms"] == 1_100
+    assert row["evaluation_time_ms"] == 1_320

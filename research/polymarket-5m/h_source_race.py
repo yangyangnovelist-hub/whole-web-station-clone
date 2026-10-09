@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - compatibility fallback outside the res
 
 REQUIRED_STRATEGY_ID = "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3"
 BASELINE_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
-CANDIDATE_SOURCES = frozenset({*BASELINE_SOURCES, "deribit_quote"})
+CANDIDATE_SOURCES = frozenset({*BASELINE_SOURCES, "futures_trade", "deribit_quote"})
 SCHEMA = "current-h-source-race-v2"
 SOURCE_RACE_FREEZE_PATH = Path(__file__).with_name("forward") / "source-race-freeze.json"
 SOURCE_RACE_FREEZE_SHA256_PATH = SOURCE_RACE_FREEZE_PATH.with_suffix(".sha256")
@@ -153,6 +153,23 @@ def _dataset_identity(dataset: dict[str, Any]) -> dict[str, Any]:
 
 def _protocol_identity(protocol: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in protocol.items() if key != "active_trigger_sources"}
+
+
+def _receipt_clock_replay_freeze(
+    current_h: dict[str, Any], source_race: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep H's decision rule but measure every source on the same local arrival clock."""
+    frozen = json.loads(json.dumps(current_h))
+    execution = source_race["execution"]
+    frozen["timing"]["signal_time_basis"] = "local_receipt_timestamp"
+    frozen["timing"]["book_trigger_synthetic_lag_ms"] = 0.0
+    frozen["timing"]["evaluation_ms"] = list(execution["evaluation_ms"])
+    frozen["timing"]["primary_evaluation_ms"] = float(execution["primary_evaluation_ms"])
+    frozen["semantics"]["event_order"] = "local_receipt_ms_stable"
+    frozen["semantics"]["source_timestamp"] = "signal_features_and_audit_only"
+    frozen["semantics"]["trigger"] = "first_eligible_local_receipt_across_frozen_sources"
+    frozen["semantics"]["candidate_sources"] = sorted(CANDIDATE_SOURCES)
+    return frozen
 
 
 def _read_row_audit(path: Path) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], bytes]]:
@@ -341,14 +358,11 @@ def compare_archive(
     freeze_bytes = freeze_path.read_bytes()
     frozen = json.loads(freeze_bytes)
     source_race_frozen, source_race_freeze_sha256 = _load_source_race_freeze(source_race_freeze_path)
-    if float(frozen["timing"]["primary_evaluation_ms"]) != float(
-        source_race_frozen["execution"]["primary_evaluation_ms"]
-    ):
-        raise ValueError("source-race primary latency drift")
     if int(frozen["statistics"]["family_tests"]) != int(
         source_race_frozen["statistics"]["family_tests"]
     ):
         raise ValueError("source-race multiplicity drift")
+    replay_frozen = _receipt_clock_replay_freeze(frozen, source_race_frozen)
     artifact_identity, artifact_stats, artifact_root = _capture_artifact_identity(archive_dir)
     formal_eligible = _formal_eligibility(artifact_identity, source_race_frozen)
     if require_formal and not formal_eligible:
@@ -356,7 +370,10 @@ def compare_archive(
     with tempfile.TemporaryDirectory(prefix="h-source-race-") as temporary:
         temporary_dir = Path(temporary)
         frozen_snapshot = temporary_dir / "freeze.json"
-        frozen_snapshot.write_bytes(freeze_bytes)
+        frozen_snapshot.write_text(
+            json.dumps(replay_frozen, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
         baseline_rows = temporary_dir / "baseline.jsonl"
         candidate_rows = temporary_dir / "candidate.jsonl"
         baseline = run.replay_archive(
@@ -408,7 +425,7 @@ def compare_archive(
         "latency_deltas": _latency_deltas(baseline, candidate, baseline_audit, candidate_audit),
         "causal_sequence_changes": _causal_changes(baseline_sequences, candidate_sequences),
         "activation_gate": _activation_gate(
-            baseline, candidate, baseline_audit, candidate_audit, frozen,
+            baseline, candidate, baseline_audit, candidate_audit, replay_frozen,
         ),
     }
     if observation_files is not None:

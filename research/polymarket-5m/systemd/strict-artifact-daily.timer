@@ -1,0 +1,13 @@
+[Unit]
+Description=Build the shared strict replay artifact after UTC-day archival
+
+[Timer]
+OnCalendar=*-*-* 00:35:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+Unit=strict-artifact-daily.service
+
+[Install]
+WantedBy=timers.target
+

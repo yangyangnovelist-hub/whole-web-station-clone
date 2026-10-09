@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import hashlib
 import heapq
 import json
 import math
@@ -19,16 +20,30 @@ try:
 except ImportError:  # pragma: no cover - compatibility fallback outside the research environment
     orjson = None
 
+try:
+    from isal import igzip
+except ImportError:  # pragma: no cover - compatibility fallback outside the research environment
+    igzip = None
+
 
 class ArchiveFormatError(ValueError):
     """A source archive record does not match the replay boundary contract."""
 
 
+def _sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 @contextmanager
-def _open_json_stream(path):
+def _open_json_stream(path, *, generated_single_member=False):
     path = Path(path)
     if path.suffix == ".gz":
-        with gzip.open(path, "rb") as stream:
+        opener = igzip.open if generated_single_member and igzip is not None else gzip.open
+        with opener(path, "rb") as stream:
             yield stream
         return
     if path.suffix != ".zst":
@@ -60,10 +75,10 @@ def _open_json_stream(path):
             process.wait()
 
 
-def _iter_json_objects(path):
+def _iter_json_objects(path, *, generated_single_member=False):
     loads = orjson.loads if orjson is not None else json.loads
     decode_error = orjson.JSONDecodeError if orjson is not None else json.JSONDecodeError
-    with _open_json_stream(path) as stream:
+    with _open_json_stream(path, generated_single_member=generated_single_member) as stream:
         for line_number, line in enumerate(stream, 1):
             try:
                 row = loads(line)
@@ -101,6 +116,36 @@ def iter_spot_events(path):
             seq += 1
 
 
+def _iter_logical_normalized_rows(path, family):
+    """Expand the converter's compact physical CLOB rows into the canonical event stream."""
+    for line_number, physical in _iter_json_objects(path, generated_single_member=True):
+        if family != "clob" or physical.get("kind") != "clob_price_change_batch":
+            yield line_number, physical
+            continue
+        try:
+            base_sequence = int(physical["seq"])
+            changes = physical["changes"]
+            if not isinstance(changes, list) or not changes:
+                raise ValueError("empty clob_price_change_batch")
+            for offset, change in enumerate(changes):
+                if not isinstance(change, dict):
+                    raise ValueError("invalid clob_price_change_batch item")
+                yield line_number, {
+                    "kind": "clob_price_change",
+                    "recv_ms": physical["recv_ms"],
+                    "source_ts_ms": physical["source_ts_ms"],
+                    "connection_epoch": physical["connection_epoch"],
+                    "seq": base_sequence + offset,
+                    "connection_id": physical.get("connection_id"),
+                    "market_id": physical["market_id"],
+                    **change,
+                }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ArchiveFormatError(
+                f"{Path(path).name}:{line_number}: invalid clob_price_change_batch: {exc}"
+            ) from exc
+
+
 def iter_normalized_events(path, *, family):
     """Read the standard forward artifact and enforce its causal stream contract."""
     kinds = {
@@ -121,7 +166,7 @@ def iter_normalized_events(path, *, family):
     source_active = {source: None for source in source_names}
     source_last_epoch = {source: 0 for source in source_names}
     source_previous_sequence = {source: -1 for source in source_names}
-    for line_number, row in _iter_json_objects(path):
+    for line_number, row in _iter_logical_normalized_rows(path, family):
         try:
             kind = row["kind"]
             sequence = int(row["seq"])
@@ -386,6 +431,32 @@ def validate_standard_artifact(path):
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("schema") != "polymarket-5m-strict-replay-v2" or manifest.get("complete") is not True:
         raise ArchiveFormatError(f"{root}: incomplete or unknown manifest")
+    converter = manifest.get("converter_validation")
+    if isinstance(converter, dict) and converter.get("schema") == "eu-strict-converter-validation-v1":
+        expected_names = {
+            "source_events.jsonl.gz", "clob_events.jsonl.gz",
+            "market_registry.csv.gz", "market_outcomes.csv.gz",
+        }
+        files = converter.get("files")
+        if not isinstance(files, dict) or set(files) != expected_names:
+            raise ArchiveFormatError(f"{root}: converter validation file set drift")
+        for name in sorted(expected_names):
+            item = files[name]
+            target = root / name
+            if (
+                not isinstance(item, dict)
+                or not target.is_file()
+                or target.stat().st_size != int(item.get("bytes", -1))
+                or _sha256(target) != item.get("sha256")
+            ):
+                raise ArchiveFormatError(f"{root}: converter-validated file drift: {name}")
+        counts = manifest.get("counts")
+        if not isinstance(counts, dict) or any(
+            not isinstance(key, str) or not isinstance(value, int) or value < 0
+            for key, value in counts.items()
+        ):
+            raise ArchiveFormatError(f"{root}: invalid converter-validated counts")
+        return {"manifest": manifest, "counts": dict(counts)}
     counts = Counter()
     for event in iter_normalized_events(root / "source_events.jsonl.gz", family="source"):
         counts[event["kind"]] += 1

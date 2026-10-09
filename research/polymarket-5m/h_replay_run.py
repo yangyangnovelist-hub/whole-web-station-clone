@@ -686,6 +686,9 @@ def replay_normalized(
             "fair": fair,
             "trigger_reason": reason,
             "trial_edge": None,
+            # Unsent attempts do not mutate the deployed retry-enabled H state.  Aggregate them
+            # instead of scheduling hundreds of thousands of identical 300-500 ms evaluations.
+            "suppress_unsent_record": execution_config.retry_after_no_send_or_kill,
         })
     machine.finish(force=False)
     counters["censored_evaluations"] += len(machine.pending_evaluations())
@@ -703,7 +706,19 @@ def replay_normalized(
             row["pnl_per_share"] = None
             row["pnl"] = None
             row["day"] = None
-    return rows, dict(counters)
+    result_counters: dict[str, Any] = dict(counters)
+    suppressed_unsent = getattr(machine, "suppressed_unsent", Counter())
+    if suppressed_unsent:
+        result_counters["_suppressed_unsent"] = [
+            {
+                "evaluation_ms": delay,
+                "reason": reason,
+                "source": source,
+                "count": count,
+            }
+            for (delay, reason, source), count in sorted(suppressed_unsent.items())
+        ]
+    return rows, result_counters
 
 
 def _exact_pvalue(fills: list[dict[str, Any]]) -> float:
@@ -720,27 +735,49 @@ def _exact_pvalue(fills: list[dict[str, Any]]) -> float:
     return min(max(sum(pmf[observed_wins:]), 0.0), 1.0)
 
 
-def summarize(rows: list[dict[str, Any]], counters: dict[str, Any]) -> dict[str, Any]:
-    output: dict[str, Any] = {"counters": counters, "latencies": {}}
-    for latency in sorted({float(row["evaluation_ms"]) for row in rows}):
+def summarize(
+    rows: list[dict[str, Any]],
+    counters: dict[str, Any],
+    suppressed_unsent: Counter[tuple[float, str, str]] | None = None,
+) -> dict[str, Any]:
+    visible_counters = {key: value for key, value in counters.items()
+                        if key != "_suppressed_unsent"}
+    output: dict[str, Any] = {"counters": visible_counters, "latencies": {}}
+    if suppressed_unsent is None:
+        suppressed_unsent = Counter({
+            (float(item["evaluation_ms"]), str(item["reason"]), str(item["source"])):
+                int(item["count"])
+            for item in counters.get("_suppressed_unsent", [])
+        })
+    latencies = {float(row["evaluation_ms"]) for row in rows}
+    latencies.update(key[0] for key in suppressed_unsent)
+    for latency in sorted(latencies):
         sample = [row for row in rows if float(row["evaluation_ms"]) == latency]
         fills = [row for row in sample if row["filled"] and row["winner"] is not None]
         sent = sum(bool(row["sent"]) for row in sample)
         total_shares = sum(float(row["filled_shares"]) for row in fills)
         total_pnl = sum(float(row["pnl"]) for row in fills)
         days = sorted({str(row["day"]) for row in fills})
+        suppressed = {
+            (reason, source): count
+            for (delay, reason, source), count in suppressed_unsent.items()
+            if delay == latency
+        }
+        suppressed_count = sum(suppressed.values())
         reasons = Counter(str(row["reason"]) for row in sample)
+        reasons.update({reason: count for (reason, _source), count in suppressed.items()})
         sent_sources = Counter(str(row.get("signal_source") or "unknown") for row in sample if row["sent"])
         fill_sources = Counter(str(row.get("signal_source") or "unknown") for row in fills)
         mean_ev = total_pnl / total_shares if total_shares else None
         wins = sum(bool(row["won"]) for row in fills)
         losses = len(fills) - wins
+        signal_count = len(sample) + suppressed_count
         output["latencies"][str(int(latency))] = {
-            "signals": len(sample),
+            "signals": signal_count,
             "sent": sent,
             "fills": len(fills),
             "filled_shares": total_shares,
-            "fill_rate_per_signal": len(fills) / len(sample) if sample else 0.0,
+            "fill_rate_per_signal": len(fills) / signal_count if signal_count else 0.0,
             "fill_rate_per_send": len(fills) / sent if sent else 0.0,
             "net_ev_per_share": mean_ev,
             "pnl": total_pnl,
@@ -817,6 +854,7 @@ def replay_archive(archive_dir: str | Path, freeze_path: str | Path = replay.FRE
         "fill_qualification": frozen["semantics"]["fill_qualification"],
         "endpoint_move_sensitivity": frozen["semantics"]["endpoint_move_sensitivity"],
         "candidate_sources": frozen["semantics"]["candidate_sources"],
+        "evaluation_clock": frozen["timing"]["signal_time_basis"],
         "active_trigger_sources": sorted(DEFAULT_TRIGGER_SOURCES if trigger_sources is None
                                           else trigger_sources),
     }

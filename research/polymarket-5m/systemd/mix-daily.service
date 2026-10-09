@@ -1,7 +1,7 @@
 [Unit]
 Description=Build one closed UTC day of formal Polymarket MIX evidence
-After=network-online.target time-sync.target archive-rec.service source-race-daily.service settlement-proxy-daily.service
-Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target archive-rec.service strict-artifact-daily.service source-race-daily.service settlement-proxy-daily.service
+Wants=network-online.target time-sync.target strict-artifact-daily.service
 
 [Service]
 Type=oneshot
@@ -10,10 +10,11 @@ WorkingDirectory=/home/ubuntu/rec/h-race
 Environment=PYTHONPATH=/home/ubuntu/rec/h-race
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=OMP_NUM_THREADS=1
+Environment=STRICT_SHARED_ROOT=/home/ubuntu/rec/formal/strict-days
 Environment=EXPECTED_PROTOCOL_SHA256=c979e02a2155b5af81050a79cc088008ecfc102256ddcfed26123af4b4a45326
 Environment=EXPECTED_PROJECTION_PROTOCOL_SHA256=b1d71910adece9b2af76a608f6a625fbc9ceb4f92fdbe005a4cb5db2deaad92f
-ExecStart=/usr/bin/timeout 600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/mix_daily.py
+ExecStart=/usr/bin/timeout 3600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/mix_daily.py
 Nice=15
 IOSchedulingClass=idle
 MemoryMax=4G
-TimeoutStartSec=610s
+TimeoutStartSec=3610s

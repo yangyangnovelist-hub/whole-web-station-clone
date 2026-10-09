@@ -587,7 +587,8 @@ def process_day(
     _atomic_json(complete_path, complete)
     _upload_evidence(s3, bucket, day, day_root, [*evidence, complete_path])
     commit_state(complete, state, staged, archive_daily._sha256(complete_path))
-    for temporary in (artifact, day_root / "latency", staged):
+    archive_daily._discard_local_artifact(artifact, day_root)
+    for temporary in (day_root / "latency", staged):
         if temporary.exists():
             shutil.rmtree(temporary)
     return complete

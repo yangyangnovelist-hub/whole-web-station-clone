@@ -6,6 +6,7 @@ import datetime as dt
 import fcntl
 import hashlib
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -54,6 +55,18 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _raw_archive_identity(archive_snapshot: Path) -> str:
+    payload = json.loads(archive_snapshot.read_text(encoding="utf-8"))
+    rec = payload.get("rec") or payload.get("current_rec")
+    poly = payload.get("poly") or payload.get("current_poly")
+    if not isinstance(rec, Mapping) or not isinstance(poly, Mapping):
+        raise ValueError("archive snapshot lacks current rec/poly manifests")
+    encoded = json.dumps(
+        {"rec": rec, "poly": poly}, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def validate_archive_manifest(manifest: Mapping[str, Any], day: str, group: str) -> None:
@@ -137,10 +150,16 @@ def _valid_artifact(path: Path, day: str, archive_snapshot: Path) -> bool:
     except (OSError, ValueError):
         return False
     manifest_path = path / "manifest.json"
+    if binding.get("schema") == "eu-strict-input-binding-v1":
+        archive_matches = (
+            binding.get("raw_archive_manifests_sha256") == _raw_archive_identity(archive_snapshot)
+        )
+    else:
+        archive_matches = binding.get("archive_manifests_sha256") == _sha256(archive_snapshot)
     return bool(
         result["manifest"].get("run_id") == f"eu-west-{day}"
         and binding.get("day") == day
-        and binding.get("archive_manifests_sha256") == _sha256(archive_snapshot)
+        and archive_matches
         and binding.get("strict_manifest_sha256") == _sha256(manifest_path)
     )
 
@@ -152,6 +171,12 @@ def _build_artifact(
     day: str,
     archive_snapshot: Path,
 ) -> Path:
+    shared_root = os.environ.get("STRICT_SHARED_ROOT")
+    if shared_root:
+        shared = Path(shared_root) / day / "artifact"
+        if _valid_artifact(shared, day, archive_snapshot):
+            return shared
+        raise ValueError(f"shared strict artifact is absent or invalid for {day}")
     artifact = day_dir / "artifact"
     if _valid_artifact(artifact, day, archive_snapshot):
         return artifact
@@ -169,11 +194,17 @@ def _build_artifact(
         "schema": "current-h-source-race-input-v1",
         "day": day,
         "archive_manifests_sha256": _sha256(archive_snapshot),
+        "raw_archive_manifests_sha256": _raw_archive_identity(archive_snapshot),
         "strict_manifest_sha256": _sha256(built / "manifest.json"),
     })
     built.replace(artifact)
     staging.rmdir()
     return artifact
+
+
+def _discard_local_artifact(artifact: Path, day_dir: Path) -> None:
+    if artifact == day_dir / "artifact" and artifact.exists():
+        shutil.rmtree(artifact)
 
 
 def _load_or_compare(
@@ -468,7 +499,7 @@ def process_day(
     _atomic_json(complete_path, complete)
     _upload_evidence(s3, bucket, day, day_dir, [*evidence, complete_path])
     _commit_completed_day(complete, complete_path, state_dir, day_dir)
-    shutil.rmtree(artifact)
+    _discard_local_artifact(artifact, day_dir)
     return complete
 
 

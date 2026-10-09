@@ -1,5 +1,6 @@
 numpy>=1.26
 orjson>=3.10
+isal==1.8.0
 boto3>=1.35
 scipy>=1.11
 pandas>=2.1

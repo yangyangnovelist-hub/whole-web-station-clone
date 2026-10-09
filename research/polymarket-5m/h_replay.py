@@ -5,6 +5,7 @@ import math
 import json
 import heapq
 from bisect import bisect_right
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from pathlib import Path
@@ -248,6 +249,7 @@ class HReplay:
         self._sent_by_evaluation: dict[float, list[float]] = {
             float(value): [] for value in self.config.evaluation_ms
         }
+        self.suppressed_unsent: Counter[tuple[float, str, str]] = Counter()
         self.records: list[dict[str, Any]] = []
 
     def _market(self, market_id: str) -> _Market:
@@ -373,6 +375,8 @@ class HReplay:
         raw_source_ms = event.get("source_ms")
         if self.config.signal_time_basis == "exchange_source_timestamp" and raw_source_ms is not None:
             signal_ms = float(raw_source_ms)
+        elif self.config.signal_time_basis == "local_receipt_timestamp":
+            signal_ms = receive_ms
         else:
             signal_ms = receive_ms - self.config.book_lag_ms
         send_ms = receive_ms + self.config.local_path_ms
@@ -410,6 +414,13 @@ class HReplay:
                     len(sent_times) >= self.config.max_orders_per_min):
                 branch_sent = False
                 decision_gate = "rate"
+            if not branch_sent and event.get("suppress_unsent_record"):
+                if not self.config.retry_after_no_send_or_kill:
+                    raise ValueError("cannot suppress an unsent attempt that changes first-lock state")
+                self.suppressed_unsent[
+                    (float(evaluation_ms), decision_gate, str(event.get("signal_source") or "unknown"))
+                ] += 1
+                continue
             attempt = _Attempt(
                 market_id=market_id,
                 signal_receive_ms=receive_ms,

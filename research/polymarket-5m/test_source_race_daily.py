@@ -100,6 +100,28 @@ def test_local_archive_must_match_verified_manifest(tmp_path):
         daily.validate_local_archive(manifest, tmp_path, DAY, "poly")
 
 
+def test_build_artifact_reuses_only_a_valid_shared_day(tmp_path, monkeypatch):
+    shared = tmp_path / "shared"
+    artifact = shared / DAY / "artifact"
+    artifact.mkdir(parents=True)
+    snapshot = tmp_path / "archive.json"
+    snapshot.write_text(json.dumps({
+        "rec": archived_manifest("rec"), "poly": archived_manifest("poly"),
+    }), encoding="utf-8")
+    monkeypatch.setenv("STRICT_SHARED_ROOT", str(shared))
+    monkeypatch.setattr(daily, "_valid_artifact", lambda path, day, archive: path == artifact)
+
+    assert daily._build_artifact(
+        tmp_path / "data", tmp_path / "poly", tmp_path / "work", DAY, snapshot,
+    ) == artifact
+
+    monkeypatch.setattr(daily, "_valid_artifact", lambda *_args: False)
+    with pytest.raises(ValueError, match="shared strict artifact"):
+        daily._build_artifact(
+            tmp_path / "data", tmp_path / "poly", tmp_path / "work", DAY, snapshot,
+        )
+
+
 def test_process_day_is_idempotent_and_updates_ledger_once(tmp_path, monkeypatch):
     calls = {"build": 0, "compare": 0, "update": 0}
 

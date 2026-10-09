@@ -109,6 +109,31 @@ def test_normalized_strict_stream_validates_family_sequence_and_epoch(tmp_path):
         list(archive.iter_normalized_events(clob, family="clob"))
 
 
+def test_normalized_stream_expands_batched_price_changes_causally(tmp_path):
+    archive = importlib.import_module("h_replay_archive")
+    clob = tmp_path / "clob.jsonl.gz"
+    _write_jsonl_gz(clob, [
+        {"kind": "clob_connection", "recv_ms": 1_000.0, "source_ts_ms": None,
+         "connection_epoch": 1, "seq": 0},
+        {"kind": "clob_price_change_batch", "recv_ms": 1_001.0,
+         "source_ts_ms": 990.0, "connection_epoch": 1, "seq": 1,
+         "connection_id": 2, "market_id": "market", "changes": [
+             {"asset_id": "up", "price": "0.40", "size": "5", "side": "SELL"},
+             {"asset_id": "down", "price": "0.60", "size": "6", "side": "BUY"},
+         ]},
+        {"kind": "clob_error", "recv_ms": 1_002.0, "source_ts_ms": None,
+         "connection_epoch": 1, "seq": 3, "error": "segment_boundary"},
+    ])
+
+    events = list(archive.iter_normalized_events(clob, family="clob"))
+
+    assert [row["kind"] for row in events] == [
+        "clob_connection", "clob_price_change", "clob_price_change", "clob_error",
+    ]
+    assert [row["seq"] for row in events] == [0, 1, 2, 3]
+    assert [row.get("asset_id") for row in events[1:3]] == ["up", "down"]
+
+
 def test_normalized_clob_preserves_receive_order_when_one_token_source_clock_regresses(tmp_path):
     archive = importlib.import_module("h_replay_archive")
     clob = tmp_path / "clob.jsonl.gz"

@@ -372,8 +372,7 @@ def process_day(
     })
     _upload_evidence(s3, bucket, day, day_root, [*evidence, complete_path])
     _commit_state(staged_state, state)
-    if artifact.exists():
-        shutil.rmtree(artifact)
+    archive_daily._discard_local_artifact(artifact, day_root)
     if staged_state.exists():
         shutil.rmtree(staged_state)
     return json.loads(complete_path.read_text(encoding="utf-8"))
