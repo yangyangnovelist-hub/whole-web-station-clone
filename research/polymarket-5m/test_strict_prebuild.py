@@ -95,3 +95,69 @@ def test_invalid_existing_shared_artifact_fails_closed(monkeypatch, tmp_path):
         prebuild.run_phase(
             DAY, "source", tmp_path / "data", tmp_path / "poly", tmp_path / "formal", s3=object(),
         )
+
+
+def _write_admission(state: Path, day: str) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "admission.json").write_text(
+        json.dumps({"day": day}) + "\n", encoding="utf-8",
+    )
+
+
+def test_pending_day_tracks_the_slowest_nonterminal_lane(tmp_path):
+    source = tmp_path / "source"
+    settlement = tmp_path / "settlement"
+    mix = tmp_path / "mix"
+    _write_admission(source, "20261011")
+    _write_admission(settlement, "20261010")
+    _write_admission(mix, "20261012")
+    lanes = {
+        "source": prebuild.Lane(source, ("verdict.json",)),
+        "settlement": prebuild.Lane(settlement, ("verdict.json",)),
+        "mix": prebuild.Lane(mix, ("control-verdict.json", "projection-verdict.json")),
+    }
+
+    progress = prebuild.read_lane_progress(lanes, "20261010")
+
+    assert prebuild.pending_day(progress) == "20261011"
+    assert progress["settlement"]["next_day"] == "20261011"
+
+    (settlement / "verdict.json").write_text("{}\n", encoding="utf-8")
+    progress = prebuild.read_lane_progress(lanes, "20261010")
+    assert prebuild.pending_day(progress) == "20261012"
+
+
+def test_pending_day_starts_at_cutoff_and_stops_when_every_lane_terminal(tmp_path):
+    lanes = {
+        name: prebuild.Lane(tmp_path / name, ("verdict.json",))
+        for name in ("source", "settlement", "mix")
+    }
+
+    progress = prebuild.read_lane_progress(lanes, "20261010")
+    assert prebuild.pending_day(progress) == "20261010"
+
+    for lane in lanes.values():
+        _write_admission(lane.state, "20261012")
+        (lane.state / "verdict.json").write_text("{}\n", encoding="utf-8")
+    progress = prebuild.read_lane_progress(lanes, "20261010")
+    assert prebuild.pending_day(progress) is None
+
+
+def test_gc_waits_for_all_lanes_and_removes_only_admitted_artifacts(tmp_path):
+    root = tmp_path / "strict"
+    for day in ("20261010", "20261011", "20261012"):
+        (root / day / "artifact").mkdir(parents=True)
+        (root / day / "artifact.tmp").mkdir()
+    progress = {
+        "source": {"admitted_day": "20261012", "next_day": "20261013", "terminal": False},
+        "settlement": {"admitted_day": "20261010", "next_day": "20261011", "terminal": False},
+        "mix": {"admitted_day": "20261011", "next_day": "20261012", "terminal": False},
+    }
+
+    removed = prebuild.gc_admitted_artifacts(root, progress)
+
+    assert removed == ["20261010"]
+    assert not (root / "20261010" / "artifact").exists()
+    assert not (root / "20261010" / "artifact.tmp").exists()
+    assert (root / "20261011" / "artifact").is_dir()
+    assert (root / "20261012" / "artifact").is_dir()

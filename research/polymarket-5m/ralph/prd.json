@@ -2,6 +2,13 @@
   "project": "Polymarket BTC 5m executable alpha search",
   "branchName": "ralph/polymarket-executable-alpha",
   "description": "Continuously collect independent data, reject false positives, and identify a statistically significant strategy that remains profitable at executable prices and measured latency.",
+  "formalInfrastructure": {
+    "cutoffUtc": "2026-10-10T00:00:00Z",
+    "sourceRaceEvaluatorSha256": "22f20351695b608b8ff462bb3fe8fe95b3c7b73a7ee2336dc1488cc51c9be193",
+    "settlementProxyEvaluatorSha256": "c6a063f59c369951183bb19eb720241f56582e35239bd767319156a960abc540",
+    "mixEvaluatorSha256": "109e7f97b32bc83e318ae4b1f9fb0241f1107dc03b5d65bdf837df0cfa6b7dc3",
+    "strictPrebuildSha256": "023461238e52f918cda476e11f61755388490fd6a1dfc034629aa97696cb3b13"
+  },
   "userStories": [
     {
       "id": "US-001",

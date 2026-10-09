@@ -21,7 +21,7 @@
     "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",
     "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
     "source_race_daily.py": "9b24b22ec80edd36f4d4ac3f654ed1d8c3cf9b9344516618c41810e7cf333859",
-    "strict_prebuild.py": "be6b48a3a3ece74f9670acc4ac6c526408788f8dbc4781ecdb2534d45f98baaa",
+    "strict_prebuild.py": "023461238e52f918cda476e11f61755388490fd6a1dfc034629aa97696cb3b13",
     "systemd/mix-agg-recorder.service": "a58f64f3789d4603161f61d464c570fd23b6e8521fde679446f48fd769fef38c",
     "systemd/mix-daily.service": "e095d62b69c35dd2ec7ab620a14a78af00a64317841f00662bb140fd7d48b717",
     "systemd/mix-daily.timer": "87b651fbad05b23f49604c114bcda6842d67eaef05fe129fc561cd2dec43754b",
@@ -29,7 +29,7 @@
     "systemd/strict-artifact-daily.timer": "453abc98f24a32a88620e2b21a942f3f3df08d9a8aefd3a0838f2be124fca2cb"
   },
   "holdout_start_utc": "2026-10-10T00:00:00Z",
-  "made": "2026-10-09T16:13:45Z",
+  "made": "2026-10-09T16:36:59Z",
   "orders": "paper_only",
   "pre_roll_hours": 5,
   "projection_protocol_sha256": "26f64d5332186ef53f4e1e5e1a1ab7b50fcd45b544770d5b1268fcc42808145c",

@@ -1,6 +1,6 @@
 {
   "schema": "settlement-proxy-evaluator-freeze-v1",
-  "frozen_at": "2026-10-09T16:32:17Z",
+  "frozen_at": "2026-10-09T16:36:59Z",
   "holdout_start": "2026-10-10T00:00:00Z",
   "collector_region": "eu-west-1",
   "strategy_fingerprint": "2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee",
@@ -50,7 +50,7 @@
     "settlement_proxy_daily.py": "046ade601bdc0c7682cf42c226d9d3032e1a036c3e2b53c195c7ff986bd69fd3",
     "settlement_proxy_forward.py": "9629ffc433aa111619844fe89a8f7541e3b4c3e8c7409c65276eba878630f47d",
     "source_race_daily.py": "9b24b22ec80edd36f4d4ac3f654ed1d8c3cf9b9344516618c41810e7cf333859",
-    "strict_prebuild.py": "be6b48a3a3ece74f9670acc4ac6c526408788f8dbc4781ecdb2534d45f98baaa",
+    "strict_prebuild.py": "023461238e52f918cda476e11f61755388490fd6a1dfc034629aa97696cb3b13",
     "systemd/settlement-proxy-daily.service": "2d70ef3227ce005585ce1d6bacd1aba14c3f6c25a48b2455d726c29850423323",
     "systemd/settlement-proxy-daily.timer": "3c0fdf526a2e5a76673a459d3baf2260c7c6bb569c736e0ebb267e4ffe8a6eb7",
     "systemd/strict-artifact-daily.service": "e95b41e45a171287f1004fabcbc56b921632faa68f05ed7f385cfa262eaa1cc4",
