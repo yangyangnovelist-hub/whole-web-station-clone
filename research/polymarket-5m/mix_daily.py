@@ -514,6 +514,7 @@ def process_day(
         config=config,
         rows_out=rows_path,
         source_protocol_sha256=frozen["protocol_sha256"],
+        aggregate_tape_path=tape,
     )
     if replay.get("dataset", {}).get("paper_gate_eligible") is not True:
         raise ValueError("MIX replay is not eu-west formal-sample eligible")

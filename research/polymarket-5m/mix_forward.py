@@ -1037,11 +1037,14 @@ def _aggregate_spot_path(archive_dir: str | Path) -> Optional[Path]:
     return next((candidate for candidate in candidates if candidate.exists()), None)
 
 
-def iter_aggregate_spot_events(archive_dir: str | Path,
-                               profile: Optional[dict[str, Any]] = None) -> Iterable[dict[str, Any]]:
+def iter_aggregate_spot_events(
+    archive_dir: str | Path,
+    profile: Optional[dict[str, Any]] = None,
+    aggregate_tape_path: str | Path | None = None,
+) -> Iterable[dict[str, Any]]:
     """Yield the aggregate-trade tape used by frozen MIX, preserving its receipt order."""
-    path = _aggregate_spot_path(archive_dir)
-    if path is None:
+    path = Path(aggregate_tape_path) if aggregate_tape_path is not None else _aggregate_spot_path(archive_dir)
+    if path is None or not path.is_file():
         raise FileNotFoundError(f"MIX aggregate trade tape missing under {Path(archive_dir)}")
     previous_receive = -math.inf
     first_receive: Optional[float] = None
@@ -1104,10 +1107,16 @@ def iter_aggregate_spot_events(archive_dir: str | Path,
            "source_ts_ms": None, "stream": "mix_aggregate"}
 
 
-def iter_mix_source_events(archive_dir: str | Path, standard_dir: str | Path,
-                           profile: Optional[dict[str, Any]] = None) -> Iterable[dict[str, Any]]:
+def iter_mix_source_events(
+    archive_dir: str | Path,
+    standard_dir: str | Path,
+    profile: Optional[dict[str, Any]] = None,
+    aggregate_tape_path: str | Path | None = None,
+) -> Iterable[dict[str, Any]]:
     """Merge frozen aggregate spot with only the causal DVOL lifecycle from the strict source tape."""
-    spot = iter_aggregate_spot_events(archive_dir, profile=profile)
+    spot = iter_aggregate_spot_events(
+        archive_dir, profile=profile, aggregate_tape_path=aggregate_tape_path,
+    )
     standard_source = archive.iter_normalized_events(
         Path(standard_dir) / "source_events.jsonl.gz", family="source"
     )
@@ -1359,14 +1368,20 @@ def summarize(rows: list[dict[str, Any]], counters: Counter) -> dict[str, Any]:
 
 def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
                    rows_out: str | Path | None = None,
-                   source_protocol_sha256: str | None = None) -> dict[str, Any]:
+                   source_protocol_sha256: str | None = None,
+                   aggregate_tape_path: str | Path | None = None) -> dict[str, Any]:
     archive_dir = Path(archive_dir)
     standard = archive_dir / "strict" if (archive_dir / "strict" / "manifest.json").exists() else archive_dir
     checked = archive.validate_standard_artifact(standard)
     mappings = list(archive.iter_market_mappings(standard / "market_registry.csv.gz"))
     outcomes = {row["market_id"]: row["winner"] for row in archive.iter_outcomes(standard / "market_outcomes.csv.gz")}
     signal_tape_profile: dict[str, Any] = {}
-    source = iter_mix_source_events(archive_dir, standard, profile=signal_tape_profile)
+    source = iter_mix_source_events(
+        archive_dir,
+        standard,
+        profile=signal_tape_profile,
+        aggregate_tape_path=aggregate_tape_path,
+    )
     clob = archive.iter_normalized_events(standard / "clob_events.jsonl.gz", family="clob")
     rows, counters = replay_normalized(source, clob, mappings, outcomes, config)
     if source_protocol_sha256 is not None:
@@ -1405,6 +1420,7 @@ def replay_archive(archive_dir: str | Path, config: ControlConfig | None = None,
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--archive", required=True)
+    parser.add_argument("--aggregate-tape")
     parser.add_argument("--rows-out")
     parser.add_argument("--freeze")
     parser.add_argument("--append")
@@ -1418,8 +1434,13 @@ def main() -> None:
         parser.error("--append requires --rows-out")
     freeze, config = load_control_freeze(args.freeze) if args.freeze else (None, ControlConfig())
     rows_out = args.rows_out
-    result = replay_archive(args.archive, config=config, rows_out=rows_out,
-                            source_protocol_sha256=freeze["protocol_sha256"] if freeze else None)
+    result = replay_archive(
+        args.archive,
+        config=config,
+        rows_out=rows_out,
+        source_protocol_sha256=freeze["protocol_sha256"] if freeze else None,
+        aggregate_tape_path=args.aggregate_tape,
+    )
     if args.append:
         if result["dataset"]["paper_gate_eligible"]:
             pooled = append_observations(args.append, rows_out, args.verdict_out)

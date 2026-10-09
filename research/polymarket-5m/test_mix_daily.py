@@ -166,9 +166,9 @@ def test_stage_is_not_committed_before_evidence_upload(tmp_path, monkeypatch):
 def test_evaluator_freeze_binds_dependencies(tmp_path):
     frozen, digest = daily.load_evaluator_freeze()
 
-    assert digest == "fb57ac3800d0465c14eee7f0250ad242a0d62f9d0074a294f21ad039d2a78f7d"
+    assert digest == "af4b24cac10486266f1aba97a487e23d5f82954dfc9743036fb25238765d125b"
     assert frozen["control_protocol_sha256"] == (
-        "31f49eed5d3fdb39afb791ee54f645f59601788921bb336fcc81312699ff3cf4"
+        "28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45"
     )
     frozen["dependencies_sha256"]["mix_daily.py"] = "0" * 64
     path = tmp_path / "mix-evaluator-freeze.json"
@@ -225,8 +225,9 @@ def _install_daily_fakes(tmp_path, monkeypatch, calls):
             stream.write('{}\n')
         return {"tape_sha256": daily.archive_daily._sha256(destination)}
 
-    def replay(_artifact, *, config, rows_out, source_protocol_sha256):
+    def replay(_artifact, *, config, rows_out, source_protocol_sha256, aggregate_tape_path):
         calls["replay"] += 1
+        calls["aggregate_tape_path"] = Path(aggregate_tape_path)
         Path(rows_out).write_text('{"market_id":"m"}\n', encoding="utf-8")
         return {"dataset": {"paper_gate_eligible": True}, "verdict": {"status": "collecting"}}
 
@@ -252,7 +253,7 @@ def _install_daily_fakes(tmp_path, monkeypatch, calls):
 
 
 def test_process_day_is_transactional_and_idempotent(tmp_path, monkeypatch):
-    calls = {"build": 0, "replay": 0, "upload": 0}
+    calls = {"build": 0, "replay": 0, "upload": 0, "aggregate_tape_path": None}
     _install_daily_fakes(tmp_path, monkeypatch, calls)
 
     def upload(*_args):
@@ -275,7 +276,12 @@ def test_process_day_is_transactional_and_idempotent(tmp_path, monkeypatch):
     second = daily.process_day(**kwargs)
 
     assert first == second
-    assert calls == {"build": 1, "replay": 1, "upload": 2}
+    assert calls == {
+        "build": 1,
+        "replay": 1,
+        "upload": 2,
+        "aggregate_tape_path": tmp_path / "work" / DAY / "latency" / "binance_trades.jsonl.gz",
+    }
     assert (tmp_path / "state" / daily.CONTROL_LEDGER).is_file()
     assert (tmp_path / "state" / daily.PROJECTION_LEDGER).is_file()
     assert not (tmp_path / "work" / DAY / "state-next").exists()
@@ -283,7 +289,7 @@ def test_process_day_is_transactional_and_idempotent(tmp_path, monkeypatch):
 
 
 def test_failed_upload_preserves_staging_without_admission(tmp_path, monkeypatch):
-    calls = {"build": 0, "replay": 0}
+    calls = {"build": 0, "replay": 0, "aggregate_tape_path": None}
     _install_daily_fakes(tmp_path, monkeypatch, calls)
     monkeypatch.setattr(
         daily,
@@ -321,7 +327,11 @@ def test_failed_upload_preserves_staging_without_admission(tmp_path, monkeypatch
     )
 
     assert recovered["status"] == "complete"
-    assert calls == {"build": 1, "replay": 1}
+    assert calls == {
+        "build": 1,
+        "replay": 1,
+        "aggregate_tape_path": tmp_path / "work" / DAY / "latency" / "binance_trades.jsonl.gz",
+    }
     assert (state / daily.ADMISSION).is_file()
     assert (state / daily.CONTROL_LEDGER).is_file()
 

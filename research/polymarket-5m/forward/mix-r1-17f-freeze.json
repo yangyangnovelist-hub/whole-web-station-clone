@@ -24,7 +24,7 @@
     "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
     "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
     "jump2s.py": "4e6052accd807d190156e418a4c940d50863eb3c31a254dca38f639372e2e1d7",
-    "mix_forward.py": "ab421241fcb398163b9596be284f6e10826fa07ac23c05cc081d23d6506d416c",
+    "mix_forward.py": "e1bdc7774bef55bfe33d8b7c66d3916708b73fb5b4930dc1d8261ebb338e8dcc",
     "mix_hf.py": "be5ee28d60d463795e7a2f58f4a0abe514071ffae7dd1bac8587556f31803d40",
     "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407"
   },
@@ -33,7 +33,7 @@
   "historical_frozen_file": "../real/cross-mix-frozen.json",
   "historical_frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
   "holdout_start_utc": "2026-10-10T00:00:00Z",
-  "made": "2026-10-09T15:53:39+00:00",
+  "made": "2026-10-09T16:13:45+00:00",
   "min_days": 7,
   "min_fills": 1000,
   "model_anchor_file": "../real/cross-mix-model-anchor.json",
@@ -52,7 +52,7 @@
     "f_hgb15"
   ],
   "projection_missing_policy": "frozen_ridge_raw_training_mean",
-  "protocol_sha256": "51241df6897a0f16e066b69630c286ab83301842418fb9b43cb5e40248f1ef8a",
+  "protocol_sha256": "26f64d5332186ef53f4e1e5e1a1ab7b50fcd45b544770d5b1268fcc42808145c",
   "rule": {
     "cut": 0.052917894565120874,
     "id": "R1",
@@ -63,8 +63,8 @@
   "runner_sha256": "6fc104123dc4f286c61fd3be064652ec2d3c0f6a57bf86040120cb0e2b7f0739",
   "schema": "polymarket-mix-r1-17f-projection-v1",
   "source_control_freeze_file": "mix-control-freeze.json",
-  "source_control_freeze_sha256": "a5d03cc05b9fba8e50e6f3ca41fcc7ff539cabafedc091b654b43c87abc2550d",
-  "source_control_protocol_sha256": "31f49eed5d3fdb39afb791ee54f645f59601788921bb336fcc81312699ff3cf4",
+  "source_control_freeze_sha256": "9bff030e6e703861b5e4935fa74cea51c76fe948cae84ca6dd340f7087be0c6a",
+  "source_control_protocol_sha256": "28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45",
   "source_jump_z_cut": 5.834074974060059,
   "source_protocol_mismatch_policy": "fail_closed_for_rows_at_or_after_projection_holdout",
   "source_strategy_id": "mix-r1-jump-z-settle-control",

@@ -141,6 +141,26 @@ def test_aggregate_spot_adapter_preserves_the_frozen_mix_tape_and_rejects_regres
         list(F.iter_aggregate_spot_events(tmp_path))
 
 
+def test_aggregate_spot_adapter_accepts_an_explicit_daily_tape(tmp_path):
+    path = tmp_path / "daily" / "binance_trades.jsonl.gz"
+    path.parent.mkdir()
+    with gzip.open(path, "wt") as stream:
+        stream.write(json.dumps({
+            "event": "BINANCE_WS_TRADE",
+            "trade_ts": 100.0,
+            "receive_ts": 100.1,
+            "price": 60_000,
+        }) + "\n")
+
+    rows = list(F.iter_aggregate_spot_events(
+        tmp_path / "shared-strict-artifact", aggregate_tape_path=path,
+    ))
+
+    assert [row["kind"] for row in rows] == [
+        "spot_connection", "spot_trade", "spot_disconnect",
+    ]
+
+
 def test_strict_control_replay_fills_five_direct_shares_and_scores_afterward():
     source, signal_ms = quiet_then_jump_events()
     due = signal_ms + 500.0
@@ -545,7 +565,8 @@ def test_archive_replay_merges_only_dvol_into_the_frozen_spot_tape(tmp_path, mon
         source_event("spot_disconnect", 2, 1_300.0, stream="mix_aggregate"),
     ]
 
-    def spot_tape(_, profile=None):
+    def spot_tape(_, profile=None, aggregate_tape_path=None):
+        assert aggregate_tape_path is None
         profile.update(_mix_signal_profile())
         return iter(aggregate_spot)
 
