@@ -1,0 +1,56 @@
+{
+  "schema": "current-h-source-race-freeze-v1",
+  "created_at": "2026-10-09T09:05:00Z",
+  "cutoff": "2026-10-10T00:00:00Z",
+  "cutoff_ms": 1791590400000,
+  "collector_region": "eu-west-1",
+  "strategy_id": "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3",
+  "arms": {
+    "baseline": [
+      "futures_book_ticker",
+      "spot_trade"
+    ],
+    "candidate": [
+      "deribit_quote",
+      "futures_book_ticker",
+      "spot_trade"
+    ]
+  },
+  "diagnostic_only_sources": [
+    "futures_trade"
+  ],
+  "execution": {
+    "evaluation_ms": [
+      300.0,
+      350.0,
+      400.0,
+      500.0
+    ],
+    "primary_evaluation_ms": 500.0,
+    "venue_hold_ms": 150.0,
+    "minimum_direct_depth_shares": 5.0,
+    "real_taker_fee": true,
+    "full_utc_day_only": true,
+    "maximum_leading_carryover_ms": 60000
+  },
+  "statistics": {
+    "minimum_fills": 1000,
+    "minimum_utc_days": 7,
+    "one_sided_alpha": 0.01,
+    "family_tests": 100,
+    "require_positive_net_ev": true,
+    "require_positive_day_cluster_lower_99": true,
+    "require_corrected_exact_p_below_alpha": true,
+    "require_incremental_fill_or_ev_improvement": true,
+    "require_loss_rate_not_worse": true
+  },
+  "dependencies_sha256": {
+    "eu_strict.py": "7e3784ccd9a375e35eb33e9d523fb4ab3c4b6c08d7c071ac66f61803daefa9c8",
+    "forward/current-h-freeze.json": "fdad7b7d919a9018c4a75df9561d27fe8c13cfe23d42aec7d79fdb450eb0df8d",
+    "h_replay.py": "6d37ce5f892ac3a57f8c350b57c975e2f165f4320043dd0e6ec6f8fd6d9349e3",
+    "h_replay_archive.py": "461fd1cd6afda138806b592cc5637f805778a03123576a8e219be6d01f557657",
+    "h_replay_run.py": "16188390cee0def98ae4ceac9605933bb6a16aafced57475a01d7e9ee0b4d2a4",
+    "poly_clob_rec.py": "6168815604114ac689a736c29aed059e8db65e9e72efbd7dd3c3a443be134cc5",
+    "raw_rec.py": "fd75f9b728fd601128faacaa8c055375078efd1b850d9058b8b9009820e169a2"
+  }
+}

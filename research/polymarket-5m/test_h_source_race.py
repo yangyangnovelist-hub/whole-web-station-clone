@@ -119,7 +119,8 @@ def test_compare_archive_runs_independent_source_arms_and_reports_execution_delt
                         lambda _: ({"files": {"manifest.json": "sha"}}, {}, tmp_path))
     monkeypatch.setattr(race, "_artifact_stats", lambda _: {})
 
-    result = race.compare_archive(tmp_path)
+    rows_dir = tmp_path / "rows"
+    result = race.compare_archive(tmp_path, rows_dir=rows_dir)
 
     assert calls == [race.BASELINE_SOURCES, race.CANDIDATE_SOURCES]
     assert result["comparison_method"] == "independent_full_state_replays_no_signal_pairing"
@@ -139,6 +140,10 @@ def test_compare_archive_runs_independent_source_arms_and_reports_execution_delt
     assert changes["changed_market_id_samples"] == ["m1"]
     assert len(changes["changed_market_ids_sha256"]) == 64
     assert result["activation_gate"]["passes"] is False
+    assert (rows_dir / "baseline.jsonl").is_file()
+    assert (rows_dir / "candidate.jsonl").is_file()
+    assert result["observation_files"]["baseline"]["bytes"] > 0
+    assert len(result["observation_files"]["candidate"]["sha256"]) == 64
 
 
 def test_compare_archive_rejects_dataset_identity_drift(tmp_path, monkeypatch):
@@ -194,3 +199,23 @@ def test_compare_archive_rejects_manifest_without_complete_receipt_race(tmp_path
 
     with pytest.raises(ValueError, match="receipt-race-ready"):
         race.compare_archive(tmp_path)
+
+
+def test_formal_eligibility_requires_frozen_region_and_full_post_cutoff_day():
+    frozen, _digest = race._load_source_race_freeze()
+    cutoff = frozen["cutoff_ms"]
+    identity = {
+        "collector_region": "eu-west-1",
+        "receipt_race_ready": True,
+        "started_ms": cutoff + 5_000,
+        "ended_ms": cutoff + 86_400_000 - 1,
+    }
+
+    assert race._formal_eligibility(identity, frozen) is True
+    assert race._formal_eligibility({
+        **identity,
+        "started_ms": cutoff + 86_400_000 + 5_000,
+        "ended_ms": cutoff + 2 * 86_400_000 - 1,
+    }, frozen) is True
+    assert race._formal_eligibility({**identity, "collector_region": "unknown"}, frozen) is False
+    assert race._formal_eligibility({**identity, "started_ms": cutoff - 1}, frozen) is False

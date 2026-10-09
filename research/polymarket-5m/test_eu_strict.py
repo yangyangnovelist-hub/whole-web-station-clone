@@ -1,0 +1,111 @@
+import gzip
+import json
+
+import eu_strict as eu
+import h_replay_archive as archive
+
+
+DAY = "20261010"
+START_NS = 1_791_590_400_000_000_000
+SOURCE_MS = START_NS // 1_000_000 + 1_000
+
+
+def _raw(path, rows):
+    with gzip.open(path, "wt", encoding="utf-8") as stream:
+        for receive_ns, payload in rows:
+            stream.write(f"{receive_ns}\t{json.dumps(payload, separators=(',', ':'))}\n")
+
+
+def _marker(kind, epoch):
+    return {"_recorder": {
+        "schema": "recorder-lifecycle-v1", "kind": kind, "epoch": epoch,
+    }}
+
+
+def test_builds_valid_receipt_race_artifact_from_eu_recorders(tmp_path):
+    data = tmp_path / "data"
+    poly = tmp_path / "poly"
+    out = tmp_path / "out"
+    data.mkdir()
+    poly.mkdir()
+    routes = {
+        "bn_spot": {"e": "trade", "T": SOURCE_MS, "p": "80000", "q": "0.1", "t": 1},
+        "bn_spot_2": {"e": "trade", "T": SOURCE_MS, "p": "80000", "q": "0.1", "t": 1},
+        "bn_spot_3": {"e": "trade", "T": SOURCE_MS, "p": "80000", "q": "0.1", "t": 1},
+        "bn_fut_pub": {"e": "bookTicker", "E": SOURCE_MS, "T": SOURCE_MS,
+                       "u": 1, "b": "79999", "a": "80001"},
+        "bn_fut_pub_2": {"e": "bookTicker", "E": SOURCE_MS, "T": SOURCE_MS,
+                         "u": 1, "b": "79999", "a": "80001"},
+        "bn_fut_trade": {"e": "trade", "E": SOURCE_MS, "T": SOURCE_MS,
+                         "t": 1, "p": "80000", "q": "0.1"},
+        "bn_fut_trade_2": {"e": "trade", "E": SOURCE_MS, "T": SOURCE_MS,
+                           "t": 1, "p": "80000", "q": "0.1"},
+    }
+    for offset, (route, frame) in enumerate(routes.items()):
+        epoch = START_NS + 100 + offset
+        _raw(data / f"{route}.{DAY}T00.txt.gz", [
+            (START_NS + offset, frame),
+            (epoch, _marker("connection", epoch)),
+            (START_NS + 1_000_000_000 + offset, frame),
+            (START_NS + 86_399_000_000_000 + offset, _marker("disconnect", epoch)),
+        ])
+    epoch = START_NS + 199
+    quote = {"params": {"channel": "quote.BTC-PERPETUAL", "data": {
+        "timestamp": SOURCE_MS, "best_bid_price": 79999,
+        "best_ask_price": 80001, "best_bid_amount": 10, "best_ask_amount": 11,
+    }}}
+    _raw(data / f"deribit.{DAY}T00.txt.gz", [
+        (START_NS + 99, quote),
+        (epoch, _marker("connection", epoch)),
+        (START_NS + 1_000_000_099, quote),
+        (START_NS + 86_399_000_000_099, _marker("disconnect", epoch)),
+    ])
+
+    up, down, market = "up-token", "down-token", "condition"
+    rows = [
+        {"rn": START_NS + 100, "c": -1, "k": "meta", "m": {
+            "meta": f"btc-updown-5m-{START_NS // 1_000_000_000}", "cid": market,
+            "tokens": json.dumps([up, down]), "outcomes": json.dumps(["Up", "Down"]),
+        }},
+        {"rn": START_NS + 200, "c": 0, "e": START_NS - 1, "s": 99,
+         "k": "message", "m": {"event_type": "book", "timestamp": str(SOURCE_MS),
+                                    "market": market, "asset_id": up,
+                                    "bids": [], "asks": []}},
+    ]
+    for connection in range(4):
+        epoch = START_NS + 1_000 + connection
+        rows.append({"rn": epoch, "c": connection, "e": epoch, "s": 0,
+                     "k": "connection", "assets": [up, down]})
+    book_time = START_NS + 2_000_000_000
+    for sequence, token in enumerate((up, down), 1):
+        rows.append({
+            "rn": book_time + sequence, "c": 0, "e": START_NS + 1_000, "s": sequence,
+            "k": "message", "m": {
+                "event_type": "book", "timestamp": str(book_time // 1_000_000),
+                "market": market, "asset_id": token,
+                "bids": [{"price": "0.4", "size": "10"}],
+                "asks": [{"price": "0.6", "size": "10"}],
+            },
+        })
+    for connection in range(4):
+        epoch = START_NS + 1_000 + connection
+        rows.append({"rn": START_NS + 86_399_000_001_000 + connection, "c": connection,
+                     "e": epoch, "s": 3 if connection == 0 else 1, "k": "disconnect"})
+    with gzip.open(poly / f"poly_clob.{DAY}T00.jsonl.gz", "wt", encoding="utf-8") as stream:
+        for row in sorted(rows, key=lambda item: item["rn"]):
+            stream.write(json.dumps(row, separators=(",", ":")) + "\n")
+    outcomes = {market: {
+        "market_id": market, "winner": "Up", "resolution_ts": START_NS / 1e9 + 300,
+        "source": "gamma", "recorded_at": START_NS / 1e9 + 400,
+    }}
+
+    manifest = eu.build(data, poly, out, DAY, outcomes=outcomes)
+    validated = archive.validate_standard_artifact(out)
+
+    assert manifest["complete"] is True
+    assert manifest["receipt_race_ready"] is True
+    assert manifest["counts"]["spot_trade"] == 1
+    assert manifest["source_integrity"]["spot"]["deduplicated_frames"] == 2
+    assert manifest["source_integrity"]["spot"]["leading_carryover_frames"] == 3
+    assert manifest["clob_integrity"]["leading_carryover_frames"] == 1
+    assert validated["manifest"]["collector_region"] == "eu-west-1"

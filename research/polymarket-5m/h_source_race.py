@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -22,6 +23,8 @@ REQUIRED_STRATEGY_ID = "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3"
 BASELINE_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
 CANDIDATE_SOURCES = frozenset({*BASELINE_SOURCES, "deribit_quote"})
 SCHEMA = "current-h-source-race-v2"
+SOURCE_RACE_FREEZE_PATH = Path(__file__).with_name("forward") / "source-race-freeze.json"
+SOURCE_RACE_FREEZE_SHA256 = "c37941027d6002cd6a2a9344881d863442f66669d29151b26fd2365bc3b42809"
 
 _SIGNATURE_FIELDS = (
     "signal_receive_ms", "signal_source_ms", "signal_source", "signal_ms", "direction",
@@ -52,6 +55,47 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _load_source_race_freeze(path: str | Path = SOURCE_RACE_FREEZE_PATH) -> tuple[dict[str, Any], str]:
+    path = Path(path)
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != SOURCE_RACE_FREEZE_SHA256:
+        raise ValueError("source-race freeze fingerprint drift")
+    frozen = json.loads(raw)
+    if frozen.get("schema") != "current-h-source-race-freeze-v1":
+        raise ValueError("unknown source-race freeze schema")
+    if frozen.get("strategy_id") != REQUIRED_STRATEGY_ID:
+        raise ValueError("source-race freeze strategy drift")
+    arms = frozen.get("arms") or {}
+    if frozenset(arms.get("baseline") or ()) != BASELINE_SOURCES:
+        raise ValueError("source-race baseline drift")
+    if frozenset(arms.get("candidate") or ()) != CANDIDATE_SOURCES:
+        raise ValueError("source-race candidate drift")
+    root = Path(__file__).resolve().parent
+    for relative, expected in (frozen.get("dependencies_sha256") or {}).items():
+        dependency = root / relative
+        if not dependency.is_file() or _file_sha256(dependency) != expected:
+            raise ValueError(f"source-race dependency drift: {relative}")
+    return frozen, digest
+
+
+def _formal_eligibility(identity: dict[str, Any], frozen: dict[str, Any]) -> bool:
+    cutoff = float(frozen["cutoff_ms"])
+    maximum_leading = float(frozen["execution"]["maximum_leading_carryover_ms"])
+    started = identity.get("started_ms")
+    ended = identity.get("ended_ms")
+    day_start = (float(started) // 86_400_000.0) * 86_400_000.0 if isinstance(started, (int, float)) else None
+    return bool(
+        identity.get("collector_region") == frozen.get("collector_region")
+        and identity.get("receipt_race_ready") is True
+        and day_start is not None
+        and day_start >= cutoff
+        and day_start <= float(started) <= day_start + maximum_leading
+        and isinstance(ended, (int, float))
+        and float(ended) >= day_start + 86_400_000.0 - maximum_leading
+    )
+
+
 def _artifact_stats(root: Path) -> dict[str, tuple[int, int, int]]:
     stats = {}
     for name in _ARTIFACT_FILES:
@@ -77,6 +121,9 @@ def _capture_artifact_identity(
     identity = {
         "run_id": manifest.get("run_id"),
         "collector_region": manifest.get("collector_region"),
+        "receipt_race_ready": manifest.get("receipt_race_ready"),
+        "started_ms": manifest.get("started_ms"),
+        "ended_ms": manifest.get("ended_ms"),
         "files": file_hashes,
     }
     return identity, _artifact_stats(root), root
@@ -278,12 +325,27 @@ def _activation_gate(
 def compare_archive(
     archive_dir: str | Path,
     freeze_path: str | Path = replay.FREEZE_PATH,
+    rows_dir: str | Path | None = None,
+    source_race_freeze_path: str | Path = SOURCE_RACE_FREEZE_PATH,
+    require_formal: bool = False,
 ) -> dict[str, Any]:
     archive_dir = Path(archive_dir)
     freeze_path = Path(freeze_path)
     freeze_bytes = freeze_path.read_bytes()
     frozen = json.loads(freeze_bytes)
+    source_race_frozen, source_race_freeze_sha256 = _load_source_race_freeze(source_race_freeze_path)
+    if float(frozen["timing"]["primary_evaluation_ms"]) != float(
+        source_race_frozen["execution"]["primary_evaluation_ms"]
+    ):
+        raise ValueError("source-race primary latency drift")
+    if int(frozen["statistics"]["family_tests"]) != int(
+        source_race_frozen["statistics"]["family_tests"]
+    ):
+        raise ValueError("source-race multiplicity drift")
     artifact_identity, artifact_stats, artifact_root = _capture_artifact_identity(archive_dir)
+    formal_eligible = _formal_eligibility(artifact_identity, source_race_frozen)
+    if require_formal and not formal_eligible:
+        raise ValueError("artifact is outside the frozen eu-west formal source-race sample")
     with tempfile.TemporaryDirectory(prefix="h-source-race-") as temporary:
         temporary_dir = Path(temporary)
         frozen_snapshot = temporary_dir / "freeze.json"
@@ -308,13 +370,31 @@ def compare_archive(
             raise ValueError("dataset identity drift between source-race arms")
         baseline_audit, baseline_sequences = _read_row_audit(baseline_rows)
         candidate_audit, candidate_sequences = _read_row_audit(candidate_rows)
+        observation_files = None
+        if rows_dir is not None:
+            destination = Path(rows_dir)
+            destination.mkdir(parents=True, exist_ok=True)
+            observation_files = {}
+            for name, source in (("baseline", baseline_rows), ("candidate", candidate_rows)):
+                target = destination / f"{name}.jsonl"
+                temporary_target = target.with_suffix(".jsonl.tmp")
+                shutil.copyfile(source, temporary_target)
+                temporary_target.replace(target)
+                observation_files[name] = {
+                    "path": target.name,
+                    "sha256": _file_sha256(target),
+                    "bytes": target.stat().st_size,
+                }
     baseline["loss_controls"] = baseline_audit
     candidate["loss_controls"] = candidate_audit
-    return {
+    result = {
         "schema": SCHEMA,
         "comparison_method": "independent_full_state_replays_no_signal_pairing",
         "strategy_id": REQUIRED_STRATEGY_ID,
         "freeze_sha256": hashlib.sha256(freeze_bytes).hexdigest(),
+        "source_race_freeze_sha256": source_race_freeze_sha256,
+        "formal_sample_eligible": formal_eligible,
+        "artifact_identity": artifact_identity,
         "artifact_files_sha256": _canonical_digest(artifact_identity),
         "dataset_identity_sha256": _canonical_digest(baseline_dataset),
         "arms": {"baseline": baseline, "candidate": candidate},
@@ -324,6 +404,9 @@ def compare_archive(
             baseline, candidate, baseline_audit, candidate_audit, frozen,
         ),
     }
+    if observation_files is not None:
+        result["observation_files"] = observation_files
+    return result
 
 
 def main() -> None:
@@ -331,9 +414,14 @@ def main() -> None:
     parser.add_argument("--archive", required=True)
     parser.add_argument("--freeze", default=str(replay.FREEZE_PATH))
     parser.add_argument("--out")
+    parser.add_argument("--rows-dir", help="persist validated baseline/candidate observation JSONL")
+    parser.add_argument("--source-race-freeze", default=str(SOURCE_RACE_FREEZE_PATH))
+    parser.add_argument("--require-formal", action="store_true")
     parser.add_argument("--pretty", action="store_true")
     args = parser.parse_args()
-    result = compare_archive(args.archive, args.freeze)
+    result = compare_archive(
+        args.archive, args.freeze, args.rows_dir, args.source_race_freeze, args.require_formal,
+    )
     encoded = json.dumps(result, indent=2 if args.pretty else None, sort_keys=True, allow_nan=False) + "\n"
     if args.out:
         destination = Path(args.out)
