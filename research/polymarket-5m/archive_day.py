@@ -71,15 +71,25 @@ def files_for_day(group: Group, day: str, current_hour: str) -> list[Path]:
     return output
 
 
-def remote_ok(s3: Any, key: str, size: int, digest: str) -> bool:
+def remote_ok(
+    s3: Any,
+    key: str,
+    size: int,
+    digest: str,
+    *,
+    require_valid_gzip: bool = False,
+) -> bool:
     try:
         result = s3.head_object(Bucket=BUCKET, Key=key)
     except ClientError:
         return False
-    return (
+    matches = (
         result["ContentLength"] == size
         and result.get("Metadata", {}).get("sha256") == digest
     )
+    if require_valid_gzip:
+        matches = matches and result.get("Metadata", {}).get("gzip_ok") == "True"
+    return matches
 
 
 def gzip_ok(path: Path) -> bool:
@@ -140,7 +150,7 @@ def prune(s3: Any, group: Group, keep_days: int, today: dt.date) -> tuple[int, i
             continue
         size = path.stat().st_size
         key = f"{group.prefix}/{parsed[0]}/{path.name}"
-        if remote_ok(s3, key, size, sha256(path)):
+        if remote_ok(s3, key, size, sha256(path), require_valid_gzip=True):
             path.unlink()
             freed += size
             deleted += 1

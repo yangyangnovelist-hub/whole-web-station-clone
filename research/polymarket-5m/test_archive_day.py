@@ -23,7 +23,13 @@ def test_prune_deletes_only_verified_old_files(tmp_path, monkeypatch):
     recent = tmp_path / "poly_clob.20261008T01.jsonl.gz"
     for path in (verified, unverified, recent):
         path.write_bytes(path.name.encode())
-    monkeypatch.setattr(archive, "remote_ok", lambda _s3, key, _size, _digest: "T01" in key)
+    calls = []
+
+    def fake_remote_ok(_s3, key, _size, _digest, *, require_valid_gzip=False):
+        calls.append(require_valid_gzip)
+        return "T01" in key
+
+    monkeypatch.setattr(archive, "remote_ok", fake_remote_ok)
     monkeypatch.setattr(archive, "log", lambda _message: None)
 
     deleted, freed = archive.prune(object(), group, 2, archive.dt.date(2026, 10, 9))
@@ -33,6 +39,7 @@ def test_prune_deletes_only_verified_old_files(tmp_path, monkeypatch):
     assert not verified.exists()
     assert unverified.exists()
     assert recent.exists()
+    assert calls == [True, True]
 
 
 def test_gzip_check_marks_corrupt_stream_without_crashing(tmp_path, monkeypatch):
