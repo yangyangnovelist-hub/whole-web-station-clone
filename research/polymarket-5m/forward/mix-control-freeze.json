@@ -1,7 +1,7 @@
 {
   "schema": "polymarket-mix-control-forward-v1",
   "strategy_id": "mix-r1-jump-z-settle-control",
-  "made": "2026-10-09T06:27:51.078284+00:00",
+  "made": "2026-10-09T08:22:34.689696+00:00",
   "holdout_start_utc": "2026-10-10T00:00:00Z",
   "historical_frozen_file": "../real/cross-mix-frozen.json",
   "historical_frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
@@ -44,12 +44,12 @@
   "orders": "paper only",
   "dependency_sha256": {
     "binary.py": "54068fdc9f707fb9f2722e7ac2f54126fdd192d9fe6575c016b3f27c9fdb9246",
-    "h_replay_archive.py": "81b2a23ca58326b2fc7e0b753fc906b5282e5cb0de3827d44527aa24a9f63688",
-    "h_replay_run.py": "d94d7137c47d22516c420d87fa69a31441dadf896de715e1694965ff3618ed80",
+    "h_replay_archive.py": "461fd1cd6afda138806b592cc5637f805778a03123576a8e219be6d01f557657",
+    "h_replay_run.py": "16188390cee0def98ae4ceac9605933bb6a16aafced57475a01d7e9ee0b4d2a4",
     "jump2s.py": "4e6052accd807d190156e418a4c940d50863eb3c31a254dca38f639372e2e1d7",
     "mix_hf.py": "be5ee28d60d463795e7a2f58f4a0abe514071ffae7dd1bac8587556f31803d40",
     "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407"
   },
   "runner_sha256": "ab421241fcb398163b9596be284f6e10826fa07ac23c05cc081d23d6506d416c",
-  "protocol_sha256": "ae7a29e149fd405d0df78ea6c2f2e18ff9fde5a63a307cee203e98eedd109a53"
+  "protocol_sha256": "c979e02a2155b5af81050a79cc088008ecfc102256ddcfed26123af4b4a45326"
 }

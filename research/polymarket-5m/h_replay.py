@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import json
+import heapq
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
@@ -256,19 +257,13 @@ class HReplay:
         return market
 
     def _drain(self, receive_ms: float, inclusive: bool, force: bool = False) -> None:
-        due = []
-        future = []
-        for item in self._pending:
-            if item[0] < receive_ms or (inclusive and item[0] == receive_ms):
-                due.append(item)
-            else:
-                future.append(item)
-        self._pending = future
-        for due_ms, sequence, evaluation_ms, attempt in sorted(due):
-            target_ms = attempt.signal_ms + evaluation_ms
-            if not force and self._source_watermark <= target_ms:
-                self._pending.append((due_ms, sequence, evaluation_ms, attempt))
-                continue
+        while self._pending:
+            due_ms, sequence, evaluation_ms, attempt = self._pending[0]
+            receive_ready = due_ms < receive_ms or (inclusive and due_ms == receive_ms)
+            source_ready = self._source_watermark > due_ms
+            if not force and not (receive_ready and source_ready):
+                break
+            heapq.heappop(self._pending)
             self.records.append(self._evaluate(attempt, evaluation_ms))
 
     def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -296,10 +291,18 @@ class HReplay:
         if kind == "snapshot":
             if "up_asks" in event and "down_asks" in event:
                 source_ms = float(event.get("source_ms") or receive_ms)
+                if event.get("levels_normalized"):
+                    up_asks = event["up_asks"]
+                    down_asks = event["down_asks"]
+                    if not isinstance(up_asks, tuple) or not isinstance(down_asks, tuple):
+                        raise ValueError("normalized replay levels must be immutable tuples")
+                else:
+                    up_asks = _levels(event["up_asks"])
+                    down_asks = _levels(event["down_asks"])
                 market.book = _Book(
                     ready=True,
-                    up_asks=_levels(event["up_asks"]),
-                    down_asks=_levels(event["down_asks"]),
+                    up_asks=up_asks,
+                    down_asks=down_asks,
                     receive_ms=receive_ms,
                     source_ms=source_ms,
                     epoch=market.book_epoch,
@@ -432,7 +435,10 @@ class HReplay:
                 branch.pending = True
                 sent_times.append(send_ms)
             self._sequence += 1
-            self._pending.append((signal_ms + evaluation_ms, self._sequence, evaluation_ms, attempt))
+            heapq.heappush(
+                self._pending,
+                (signal_ms + evaluation_ms, self._sequence, evaluation_ms, attempt),
+            )
 
     def _evaluate(self, attempt: _Attempt, evaluation_ms: float) -> dict[str, Any]:
         market = self._market(attempt.market_id)
@@ -560,6 +566,10 @@ class HReplay:
             }
             for _, _, evaluation_ms, attempt in sorted(self._pending)
         ]
+
+    def has_pending_evaluations(self) -> bool:
+        """Cheap hot-path check used to avoid materializing books while no order is in flight."""
+        return bool(self._pending)
 
 
 def replay_events(events: Iterable[dict[str, Any]], config: ReplayConfig | None = None) -> list[dict[str, Any]]:

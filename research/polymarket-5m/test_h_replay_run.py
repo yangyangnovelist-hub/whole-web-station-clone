@@ -115,6 +115,21 @@ def test_direct_token_book_quarantines_an_unreproducible_venue_bba():
     assert token.ready is False
 
 
+def test_direct_token_book_prunes_only_when_venue_bba_moves_past_local_levels():
+    token = run.TokenBook()
+    token.replace(
+        [{"price": "0.30", "size": "5"}, {"price": "0.31", "size": "4"}],
+        [{"price": "0.40", "size": "5"}, {"price": "0.41", "size": "4"}],
+        1_000,
+    )
+
+    token.change("SELL", 0.42, 2.0, 1_001, 0.30, 0.41)
+
+    assert token.ready is True
+    assert token.bids == {0.30: 5.0}
+    assert token.asks == {0.41: 4.0, 0.42: 2.0}
+
+
 def test_strict_normalized_replay_generates_and_scores_one_executable_signal():
     mappings = [{
         "market_id": "m",
@@ -190,7 +205,14 @@ def test_strict_normalized_replay_generates_and_scores_one_executable_signal():
     )
 
     rows, counters = run.replay_normalized(spot, clob, mappings, {"m": "Up"}, execution, signal)
+    eager_rows, eager_counters = run.replay_normalized(
+        spot, clob, mappings, {"m": "Up"}, execution, signal,
+        materialize_idle_books=True,
+    )
     report = run.summarize(rows, counters)["latencies"]["300"]
+
+    assert rows == eager_rows
+    assert counters == eager_counters
 
     assert report["signals"] == 1
     assert report["sent"] == 1
@@ -296,8 +318,15 @@ def test_effective_book_uses_mirrored_opposite_bid_without_double_counting():
     market.down.replace([{"price": "0.60", "size": "7"}],
                         [{"price": "0.70", "size": "5"}], 1.0)
 
-    assert market.effective_asks("Up") == [[0.4, 7.0]]
-    assert market.effective_asks("Down") == [[0.7, 5.0]]
+    assert market.effective_asks("Up") == ((0.4, 7.0),)
+    assert market.effective_asks("Down") == ((0.7, 5.0),)
+    assert market.midpoint() == pytest.approx(0.35)
+
+    cached_up = market.effective_asks("Up")
+    market.up.change("BUY", 0.31, 3.0, 2.0, 0.31, 0.40)
+    assert market.effective_asks("Up") is cached_up
+    market.down.change("BUY", 0.61, 8.0, 3.0, 0.61, 0.70)
+    assert market.effective_asks("Up") == ((0.39, 8.0), (0.4, 7.0))
     assert market.midpoint() == pytest.approx(0.35)
 
 

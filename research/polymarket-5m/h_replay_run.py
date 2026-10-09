@@ -276,10 +276,14 @@ class TokenBook:
     asks: dict[float, float] = field(default_factory=dict)
     source_ms: float = -math.inf
     ready: bool = False
+    bid_version: int = 0
+    ask_version: int = 0
 
     def replace(self, bids: Iterable[dict[str, Any]], asks: Iterable[dict[str, Any]], source_ms: float) -> None:
         self.bids = {float(level["price"]): float(level["size"]) for level in bids if float(level["size"]) > 0}
         self.asks = {float(level["price"]): float(level["size"]) for level in asks if float(level["size"]) > 0}
+        self.bid_version += 1
+        self.ask_version += 1
         self.source_ms = source_ms
         self.ready = True
 
@@ -294,11 +298,18 @@ class TokenBook:
     ) -> bool:
         if not self.ready or source_ms < self.source_ms:
             return False
-        levels = self.bids if side.upper() == "BUY" else self.asks
+        buy = side.upper() == "BUY"
+        levels = self.bids if buy else self.asks
+        previous = levels.get(price)
         if size > 0:
             levels[price] = size
         else:
             levels.pop(price, None)
+        if previous != (size if size > 0 else None):
+            if buy:
+                self.bid_version += 1
+            else:
+                self.ask_version += 1
         self.source_ms = source_ms
         try:
             venue_bid = float(best_bid)
@@ -307,10 +318,24 @@ class TokenBook:
             return True
         if not 0 < venue_bid < venue_ask < 1:
             return True
-        self.bids = {level: amount for level, amount in self.bids.items() if level <= venue_bid + 1e-9}
-        self.asks = {level: amount for level, amount in self.asks.items() if level >= venue_ask - 1e-9}
         local_bid = max(self.bids, default=math.nan)
         local_ask = min(self.asks, default=math.nan)
+        if local_bid > venue_bid + 1e-9:
+            bid_count = len(self.bids)
+            self.bids = {
+                level: amount for level, amount in self.bids.items()
+                if level <= venue_bid + 1e-9
+            }
+            self.bid_version += int(len(self.bids) != bid_count)
+            local_bid = max(self.bids, default=math.nan)
+        if local_ask < venue_ask - 1e-9:
+            ask_count = len(self.asks)
+            self.asks = {
+                level: amount for level, amount in self.asks.items()
+                if level >= venue_ask - 1e-9
+            }
+            self.ask_version += int(len(self.asks) != ask_count)
+            local_ask = min(self.asks, default=math.nan)
         if not (math.isclose(local_bid, venue_bid, abs_tol=1e-9)
                 and math.isclose(local_ask, venue_ask, abs_tol=1e-9)):
             self.ready = False
@@ -328,6 +353,8 @@ class DirectMarketBook:
     down_token_id: str
     up: TokenBook = field(default_factory=TokenBook)
     down: TokenBook = field(default_factory=TokenBook)
+    _effective_cache: dict[str, tuple[tuple[int, int, int, int], tuple[tuple[float, float], ...]]] = \
+        field(default_factory=dict, repr=False)
 
     @property
     def ready(self) -> bool:
@@ -341,9 +368,13 @@ class DirectMarketBook:
     def _key(price: float) -> int:
         return int(round(price * 10_000))
 
-    def effective_asks(self, direction: str) -> list[list[float]]:
+    def effective_asks(self, direction: str) -> tuple[tuple[float, float], ...]:
         own = self.up if direction == "Up" else self.down
         opposite = self.down if direction == "Up" else self.up
+        signature = (id(own), own.ask_version, id(opposite), opposite.bid_version)
+        cached = self._effective_cache.get(direction)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
         levels: dict[int, float] = {}
         for price, size in own.asks.items():
             key = self._key(price)
@@ -351,18 +382,26 @@ class DirectMarketBook:
         for price, size in opposite.bids.items():
             key = 10_000 - self._key(price)
             levels[key] = max(levels.get(key, 0.0), size)
-        return [[key / 10_000.0, levels[key]] for key in sorted(levels)]
+        result = tuple((key / 10_000.0, levels[key]) for key in sorted(levels))
+        self._effective_cache[direction] = (signature, result)
+        return result
 
-    def midpoint(self) -> float:
+    def midpoint(self, up_asks: Optional[tuple[tuple[float, float], ...]] = None) -> float:
         if not self.ready:
             return math.nan
-        direct_bids = [self._key(price) for price in self.up.bids]
-        mirrored_bids = [10_000 - self._key(price) for price in self.down.asks]
-        asks = self.effective_asks("Up")
-        if not (direct_bids or mirrored_bids) or not asks:
+        direct_bid = self._key(max(self.up.bids)) if self.up.bids else None
+        mirrored_bid = 10_000 - self._key(min(self.down.asks)) if self.down.asks else None
+        bids = [value for value in (direct_bid, mirrored_bid) if value is not None]
+        if up_asks is None:
+            direct_ask = self._key(min(self.up.asks)) if self.up.asks else None
+            mirrored_ask = 10_000 - self._key(max(self.down.bids)) if self.down.bids else None
+            ask_keys = [value for value in (direct_ask, mirrored_ask) if value is not None]
+            ask = min(ask_keys) / 10_000.0 if ask_keys else math.nan
+        else:
+            ask = up_asks[0][0] if up_asks else math.nan
+        if not bids or not math.isfinite(ask):
             return math.nan
-        bid = max([*direct_bids, *mirrored_bids]) / 10_000.0
-        ask = asks[0][0]
+        bid = max(bids) / 10_000.0
         return (bid + ask) / 2.0 if bid < ask else math.nan
 
 
@@ -432,12 +471,40 @@ def _mapping_dict(rows: Iterable[dict[str, Any]]) -> tuple[dict[int, DirectMarke
     return markets, tokens
 
 
+def _publish_market_book(
+    machine: replay.HReplay,
+    market: DirectMarketBook,
+    receive_ms: float,
+) -> None:
+    """Synchronize the execution engine only when a decision or evaluation needs full depth."""
+    if not market.ready:
+        machine.feed({
+            "kind": "invalidate",
+            "market_id": market.market_id,
+            "receive_ms": receive_ms,
+            "source_ms": market.source_ms if math.isfinite(market.source_ms) else receive_ms,
+            "advance_watermark": False,
+        })
+        return
+    machine.feed({
+        "kind": "snapshot",
+        "market_id": market.market_id,
+        "receive_ms": receive_ms,
+        "source_ms": market.source_ms,
+        "up_asks": market.effective_asks("Up"),
+        "down_asks": market.effective_asks("Down"),
+        "levels_normalized": True,
+        "advance_watermark": False,
+    })
+
+
 def _apply_clob_batch(
     batch: dict[str, Any],
     machine: replay.HReplay,
     token_index: dict[str, tuple[DirectMarketBook, str]],
     rings: dict[int, SourceRing],
     connected: bool,
+    materialize_idle_books: bool = False,
 ) -> bool:
     receive_ms = float(batch["recv_ms"])
     touched: dict[str, DirectMarketBook] = {}
@@ -487,24 +554,12 @@ def _apply_clob_batch(
         if market.ready:
             midpoint = market.midpoint()
             ring.push(RingState(market.source_ms, midpoint, math.isfinite(midpoint)))
-            machine.feed({
-                "kind": "snapshot",
-                "market_id": market.market_id,
-                "receive_ms": receive_ms,
-                "source_ms": market.source_ms,
-                "up_asks": market.effective_asks("Up"),
-                "down_asks": market.effective_asks("Down"),
-                "advance_watermark": False,
-            })
+            if materialize_idle_books or machine.has_pending_evaluations():
+                _publish_market_book(machine, market, receive_ms)
         else:
             ring.push(RingState(max(market.source_ms, receive_ms), math.nan, False))
-            machine.feed({
-                "kind": "invalidate",
-                "market_id": market.market_id,
-                "receive_ms": receive_ms,
-                "source_ms": market.source_ms if math.isfinite(market.source_ms) else receive_ms,
-                "advance_watermark": False,
-            })
+            if materialize_idle_books or machine.has_pending_evaluations():
+                _publish_market_book(machine, market, receive_ms)
     if source_values:
         machine.feed({
             "kind": "watermark",
@@ -548,6 +603,7 @@ def replay_normalized(
     execution_config: replay.ReplayConfig,
     signal_config: SignalConfig,
     trigger_sources: frozenset[str] | set[str] | None = None,
+    materialize_idle_books: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     markets, tokens = _mapping_dict(mappings)
     rings: dict[int, SourceRing] = {}
@@ -563,7 +619,10 @@ def replay_normalized(
     for event in _merged_events(source_events, clob_events):
         kind = event["kind"]
         if kind == "clob_batch":
-            connected = _apply_clob_batch(event, machine, tokens, rings, connected)
+            connected = _apply_clob_batch(
+                event, machine, tokens, rings, connected,
+                materialize_idle_books=materialize_idle_books,
+            )
             counters["clob_batches"] += 1
             continue
         candidate = None
@@ -615,6 +674,8 @@ def replay_normalized(
         counters[f"candidate_source_{source}"] += 1
         if reason != "trigger":
             continue
+        if not materialize_idle_books:
+            _publish_market_book(machine, market, float(event["recv_ms"]))
         machine.feed({
             "kind": "signal",
             "market_id": market.market_id,

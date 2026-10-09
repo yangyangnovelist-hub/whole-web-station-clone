@@ -12,11 +12,16 @@ from typing import Any
 import h_replay as replay
 import h_replay_run as run
 
+try:
+    import orjson
+except ImportError:  # pragma: no cover - compatibility fallback outside the research environment
+    orjson = None
+
 
 REQUIRED_STRATEGY_ID = "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3"
 BASELINE_SOURCES = frozenset({"spot_trade", "futures_book_ticker"})
-COMBINED_SOURCES = frozenset({*BASELINE_SOURCES, "futures_trade", "deribit_quote"})
-SCHEMA = "current-h-source-race-v1"
+CANDIDATE_SOURCES = frozenset({*BASELINE_SOURCES, "deribit_quote"})
+SCHEMA = "current-h-source-race-v2"
 
 _SIGNATURE_FIELDS = (
     "signal_receive_ms", "signal_source_ms", "signal_source", "signal_ms", "direction",
@@ -107,11 +112,14 @@ def _read_row_audit(path: Path) -> tuple[dict[str, dict[str, Any]], dict[tuple[s
         "worst_pnl_per_share": None,
     })
     sequences: dict[tuple[str, str], bytes] = {}
-    with path.open(encoding="utf-8") as stream:
+    loads = orjson.loads if orjson is not None else json.loads
+    mode = "rb" if orjson is not None else "r"
+    options = {} if orjson is not None else {"encoding": "utf-8"}
+    with path.open(mode, **options) as stream:
         for line_number, line in enumerate(stream, 1):
             try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
+                row = loads(line)
+            except (json.JSONDecodeError, ValueError) as exc:
                 raise ValueError(f"{path}:{line_number}: invalid replay row") from exc
             if not isinstance(row, dict) or "market_id" not in row or "evaluation_ms" not in row:
                 raise ValueError(f"{path}:{line_number}: replay row lacks market/evaluation identity")
@@ -158,25 +166,25 @@ def _validate_arm(name: str, result: dict[str, Any], expected_sources: frozenset
 
 def _causal_changes(
     baseline: dict[tuple[str, str], bytes],
-    combined: dict[tuple[str, str], bytes],
+    candidate: dict[tuple[str, str], bytes],
 ) -> dict[str, dict[str, int]]:
-    latencies = sorted({key[0] for key in baseline} | {key[0] for key in combined}, key=float)
+    latencies = sorted({key[0] for key in baseline} | {key[0] for key in candidate}, key=float)
     output: dict[str, dict[str, int]] = {}
     for latency in latencies:
         base = {market: digest for (delay, market), digest in baseline.items() if delay == latency}
-        combo = {market: digest for (delay, market), digest in combined.items() if delay == latency}
+        combo = {market: digest for (delay, market), digest in candidate.items() if delay == latency}
         common = set(base) & set(combo)
         changed_common = {market for market in common if base[market] != combo[market]}
         baseline_only = set(base) - set(combo)
-        combined_only = set(combo) - set(base)
-        changed = sorted(changed_common | baseline_only | combined_only)
+        candidate_only = set(combo) - set(base)
+        changed = sorted(changed_common | baseline_only | candidate_only)
         output[latency] = {
             "baseline_markets": len(base),
-            "combined_markets": len(combo),
+            "candidate_markets": len(combo),
             "identical_markets": len(common - changed_common),
             "changed_common_markets": len(changed_common),
             "baseline_only_markets": len(baseline_only),
-            "combined_only_markets": len(combined_only),
+            "candidate_only_markets": len(candidate_only),
             "changed_markets": len(changed),
             "changed_market_ids_sha256": _canonical_digest(changed),
             "changed_market_id_samples": changed[:_CHANGED_MARKET_SAMPLE_LIMIT],
@@ -184,28 +192,28 @@ def _causal_changes(
     return output
 
 
-def _number_delta(combined: object, baseline: object) -> float | int | None:
-    if not isinstance(combined, (int, float)) or not isinstance(baseline, (int, float)):
+def _number_delta(candidate: object, baseline: object) -> float | int | None:
+    if not isinstance(candidate, (int, float)) or not isinstance(baseline, (int, float)):
         return None
-    value = combined - baseline
-    return int(value) if isinstance(combined, int) and isinstance(baseline, int) else float(value)
+    value = candidate - baseline
+    return int(value) if isinstance(candidate, int) and isinstance(baseline, int) else float(value)
 
 
 def _latency_deltas(
     baseline: dict[str, Any],
-    combined: dict[str, Any],
+    candidate: dict[str, Any],
     baseline_audit: dict[str, dict[str, Any]],
-    combined_audit: dict[str, dict[str, Any]],
+    candidate_audit: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     base_rows = baseline.get("latencies", {})
-    combo_rows = combined.get("latencies", {})
-    latencies = sorted(set(base_rows) | set(combo_rows) | set(baseline_audit) | set(combined_audit), key=float)
+    combo_rows = candidate.get("latencies", {})
+    latencies = sorted(set(base_rows) | set(combo_rows) | set(baseline_audit) | set(candidate_audit), key=float)
     output: dict[str, dict[str, Any]] = {}
     for latency in latencies:
         base = base_rows.get(latency, {})
         combo = combo_rows.get(latency, {})
         base_loss = baseline_audit.get(latency, {})
-        combo_loss = combined_audit.get(latency, {})
+        combo_loss = candidate_audit.get(latency, {})
         output[latency] = {
             metric: _number_delta(combo.get(metric), base.get(metric))
             for metric in (
@@ -224,18 +232,18 @@ def _latency_deltas(
 
 def _activation_gate(
     baseline: dict[str, Any],
-    combined: dict[str, Any],
+    candidate: dict[str, Any],
     baseline_audit: dict[str, dict[str, Any]],
-    combined_audit: dict[str, dict[str, Any]],
+    candidate_audit: dict[str, dict[str, Any]],
     frozen: dict[str, Any],
 ) -> dict[str, Any]:
     primary = _latency_key(frozen["timing"]["primary_evaluation_ms"])
     required_fills = int(frozen["statistics"]["paper_gate_min_fills"])
     required_days = int(frozen["statistics"]["paper_gate_min_utc_days"])
     base = baseline.get("latencies", {}).get(primary, {})
-    combo = combined.get("latencies", {}).get(primary, {})
+    combo = candidate.get("latencies", {}).get(primary, {})
     base_loss = baseline_audit.get(primary, {})
-    combo_loss = combined_audit.get(primary, {})
+    combo_loss = candidate_audit.get(primary, {})
     base_fills = int(base.get("fills", 0))
     combo_fills = int(combo.get("fills", 0))
     base_ev = base.get("net_ev_per_share")
@@ -244,11 +252,11 @@ def _activation_gate(
     checks = {
         "both_arms_paper_gate_eligible": bool(
             baseline.get("dataset", {}).get("paper_gate_eligible")
-            and combined.get("dataset", {}).get("paper_gate_eligible")
+            and candidate.get("dataset", {}).get("paper_gate_eligible")
         ),
-        "combined_min_fills": combo_fills >= required_fills,
-        "combined_min_days": int(combo.get("days", 0)) >= required_days,
-        "combined_positive_net_ev": isinstance(combo_ev, (int, float)) and combo_ev > 0,
+        "candidate_min_fills": combo_fills >= required_fills,
+        "candidate_min_days": int(combo.get("days", 0)) >= required_days,
+        "candidate_positive_net_ev": isinstance(combo_ev, (int, float)) and combo_ev > 0,
         "incremental_fill_or_ev_improvement": bool(
             combo_fills > base_fills
             or (isinstance(combo_ev, (int, float)) and isinstance(base_ev, (int, float)) and combo_ev > base_ev)
@@ -281,27 +289,27 @@ def compare_archive(
         frozen_snapshot = temporary_dir / "freeze.json"
         frozen_snapshot.write_bytes(freeze_bytes)
         baseline_rows = temporary_dir / "baseline.jsonl"
-        combined_rows = temporary_dir / "combined.jsonl"
+        candidate_rows = temporary_dir / "candidate.jsonl"
         baseline = run.replay_archive(
             archive_dir, frozen_snapshot, baseline_rows, trigger_sources=BASELINE_SOURCES,
         )
-        combined = run.replay_archive(
-            archive_dir, frozen_snapshot, combined_rows, trigger_sources=COMBINED_SOURCES,
+        candidate = run.replay_archive(
+            archive_dir, frozen_snapshot, candidate_rows, trigger_sources=CANDIDATE_SOURCES,
         )
         if _artifact_stats(artifact_root) != artifact_stats:
             raise ValueError("strict artifact changed during source-race replay")
         _validate_arm("baseline", baseline, BASELINE_SOURCES)
-        _validate_arm("combined", combined, COMBINED_SOURCES)
-        if _protocol_identity(baseline["protocol"]) != _protocol_identity(combined["protocol"]):
+        _validate_arm("candidate", candidate, CANDIDATE_SOURCES)
+        if _protocol_identity(baseline["protocol"]) != _protocol_identity(candidate["protocol"]):
             raise ValueError("protocol identity drift between source-race arms")
         baseline_dataset = _dataset_identity(baseline["dataset"])
-        combined_dataset = _dataset_identity(combined["dataset"])
-        if baseline_dataset != combined_dataset:
+        candidate_dataset = _dataset_identity(candidate["dataset"])
+        if baseline_dataset != candidate_dataset:
             raise ValueError("dataset identity drift between source-race arms")
         baseline_audit, baseline_sequences = _read_row_audit(baseline_rows)
-        combined_audit, combined_sequences = _read_row_audit(combined_rows)
+        candidate_audit, candidate_sequences = _read_row_audit(candidate_rows)
     baseline["loss_controls"] = baseline_audit
-    combined["loss_controls"] = combined_audit
+    candidate["loss_controls"] = candidate_audit
     return {
         "schema": SCHEMA,
         "comparison_method": "independent_full_state_replays_no_signal_pairing",
@@ -309,11 +317,11 @@ def compare_archive(
         "freeze_sha256": hashlib.sha256(freeze_bytes).hexdigest(),
         "artifact_files_sha256": _canonical_digest(artifact_identity),
         "dataset_identity_sha256": _canonical_digest(baseline_dataset),
-        "arms": {"baseline": baseline, "combined": combined},
-        "latency_deltas": _latency_deltas(baseline, combined, baseline_audit, combined_audit),
-        "causal_sequence_changes": _causal_changes(baseline_sequences, combined_sequences),
+        "arms": {"baseline": baseline, "candidate": candidate},
+        "latency_deltas": _latency_deltas(baseline, candidate, baseline_audit, candidate_audit),
+        "causal_sequence_changes": _causal_changes(baseline_sequences, candidate_sequences),
         "activation_gate": _activation_gate(
-            baseline, combined, baseline_audit, combined_audit, frozen,
+            baseline, candidate, baseline_audit, candidate_audit, frozen,
         ),
     }
 

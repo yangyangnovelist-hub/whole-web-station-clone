@@ -13,6 +13,20 @@ def test_live_fee_limit_is_frozen_at_decision():
     assert fair - 0.50 - hr.taker_fee(0.50) < 0.12
 
 
+def test_normalized_snapshot_reuses_immutable_levels_without_resorting():
+    up = ((0.33, 10.0), (0.34, 5.0))
+    down = ((0.67, 10.0),)
+    machine = hr.HReplay(hr.ReplayConfig(evaluation_ms=(300.0,)))
+
+    machine.feed({
+        "kind": "snapshot", "market_id": "m", "receive_ms": 100, "source_ms": 100,
+        "up_asks": up, "down_asks": down, "levels_normalized": True,
+    })
+
+    assert machine._markets["m"].book.up_asks is up
+    assert machine._markets["m"].book.down_asks is down
+
+
 def test_first_trigger_no_fill_is_not_replaced_by_later_executable_trigger():
     events = [
         {"kind": "snapshot", "market_id": "m", "receive_ms": 100, "source_ms": 100,

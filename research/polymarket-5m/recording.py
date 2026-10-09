@@ -389,13 +389,14 @@ def _strict_spot_events(records, symbol):
 def _source_stats():
     return {"explicit_order": True, "sequence_regressions": 0, "receive_time_regressions": 0,
             "epoch_mismatches": 0, "dropped_outside_epoch": 0, "open_epoch_at_eof": None,
-            "max_active_connections": 0}
+            "max_active_connections": 0, "dropped_nonpositive_trades": 0}
 
 
 def _strict_binance_stream(records, source, symbol, stats):
     """Normalize one independently ordered price-source socket without loading it into memory."""
     active_epoch = None
     last_epoch = 0
+    emitted_sequence = 0
     previous_sequence = -1
     previous_receive_ms = -float("inf")
     for row in records:
@@ -417,7 +418,7 @@ def _strict_binance_stream(records, source, symbol, stats):
                                                   int(row.get("max_active_connections") or 0))
         kind = row.get("kind")
         event = {"recv_ms": receive_ms, "source_ts_ms": None, "connection_epoch": epoch,
-                 "stream_sequence": sequence, "stream": source}
+                 "raw_stream_sequence": sequence, "stream": source}
         if kind == "connection":
             if active_epoch is not None or epoch <= last_epoch:
                 stats["epoch_mismatches"] += 1
@@ -440,10 +441,16 @@ def _strict_binance_stream(records, source, symbol, stats):
                 bid = ask = math.nan
             if source == "spot" and kind == "trade":
                 try:
-                    event.update(kind="spot_trade", source_ts_ms=float(row["T"]),
-                                 price=float(row["p"]), size=float(row.get("q") or 0))
+                    price, size = float(row["p"]), float(row.get("q") or 0)
+                    source_ts_ms = float(row["T"])
                 except (KeyError, TypeError, ValueError) as exc:
                     raise ValueError("malformed strict spot trade") from exc
+                if not all(math.isfinite(value) for value in (price, size, source_ts_ms)) or \
+                        price <= 0 or size <= 0:
+                    stats["dropped_nonpositive_trades"] += 1
+                    continue
+                event.update(kind="spot_trade", source_ts_ms=source_ts_ms,
+                             price=price, size=size)
             elif source == "spot" and kind == "bookTicker" and 0 < bid < ask:
                 event.update(kind="spot_bbo", bid=bid, ask=ask)
             elif source == "futures" and kind == "bookTicker" and 0 < bid < ask:
@@ -454,11 +461,16 @@ def _strict_binance_stream(records, source, symbol, stats):
                     raise ValueError("malformed strict futures bookTicker") from exc
             elif source == "futures_trade" and kind == "trade":
                 try:
-                    event.update(kind="futures_trade", source_ts_ms=float(row["T"]),
-                                 event_ts_ms=float(row["E"]), price=float(row["p"]),
-                                 size=float(row.get("q") or 0))
+                    price, size = float(row["p"]), float(row.get("q") or 0)
+                    source_ts_ms, event_ts_ms = float(row["T"]), float(row["E"])
                 except (KeyError, TypeError, ValueError) as exc:
                     raise ValueError("malformed strict futures trade") from exc
+                if not all(math.isfinite(value) for value in
+                           (price, size, source_ts_ms, event_ts_ms)) or price <= 0 or size <= 0:
+                    stats["dropped_nonpositive_trades"] += 1
+                    continue
+                event.update(kind="futures_trade", source_ts_ms=source_ts_ms,
+                             event_ts_ms=event_ts_ms, price=price, size=size)
             elif source == "deribit" and kind == "quote":
                 try:
                     bid, ask = float(row["bid"]), float(row["ask"])
@@ -481,6 +493,8 @@ def _strict_binance_stream(records, source, symbol, stats):
                     raise ValueError("invalid strict Deribit DVOL")
             else:
                 raise ValueError(f"unknown {source} strict source row")
+        event["stream_sequence"] = emitted_sequence
+        emitted_sequence += 1
         source_rank = {"spot": 0, "futures": 1, "futures_trade": 2, "deribit": 3}[source]
         yield (receive_ms, source_rank, sequence), event
     stats["open_epoch_at_eof"] = active_epoch

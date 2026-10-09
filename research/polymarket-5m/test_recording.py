@@ -439,6 +439,30 @@ def test_strict_streams_reject_missing_receipt_timestamps(tmp_path):
         list(rc._strict_clob_inputs(tmp_path, "btc"))
 
 
+def test_strict_source_filters_nonpositive_trade_without_hiding_raw_sequence():
+    stats = rc._source_stats()
+    records = [
+        {"kind": "connection", "recv_ms": 1, "sequence": 0, "connection_epoch": 1,
+         "max_active_connections": 2},
+        {"kind": "trade", "recv_ms": 2, "sequence": 1, "connection_epoch": 1,
+         "s": "BTCUSDT", "T": 1, "E": 1, "p": "0", "q": "0"},
+        {"kind": "trade", "recv_ms": 3, "sequence": 2, "connection_epoch": 1,
+         "s": "BTCUSDT", "T": 2, "E": 2, "p": "80000", "q": "0.1"},
+        {"kind": "disconnect", "recv_ms": 4, "sequence": 3, "connection_epoch": 1},
+    ]
+
+    events = [event for _, event in
+              rc._strict_binance_stream(records, "futures_trade", "BTCUSDT", stats)]
+
+    assert [event["kind"] for event in events] == [
+        "futures_trade_connection", "futures_trade", "futures_trade_disconnect",
+    ]
+    assert [event["stream_sequence"] for event in events] == [0, 1, 2]
+    assert [event["raw_stream_sequence"] for event in events] == [0, 2, 3]
+    assert stats["dropped_nonpositive_trades"] == 1
+    assert stats["sequence_regressions"] == 0
+
+
 def test_strict_clob_integrity_rejects_duplicate_source_sequence(tmp_path):
     day = tmp_path / "raw" / "2026-10-04"
     day.mkdir(parents=True)

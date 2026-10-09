@@ -14,20 +14,25 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import orjson
+except ImportError:  # pragma: no cover - compatibility fallback outside the research environment
+    orjson = None
+
 
 class ArchiveFormatError(ValueError):
     """A source archive record does not match the replay boundary contract."""
 
 
 @contextmanager
-def _open_text(path):
+def _open_json_stream(path):
     path = Path(path)
     if path.suffix == ".gz":
-        with gzip.open(path, "rt", encoding="utf-8") as stream:
+        with gzip.open(path, "rb") as stream:
             yield stream
         return
     if path.suffix != ".zst":
-        with path.open("rt", encoding="utf-8") as stream:
+        with path.open("rb") as stream:
             yield stream
         return
 
@@ -38,15 +43,13 @@ def _open_text(path):
         [zstd, "-q", "-dc", str(path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
     )
     assert process.stdout is not None
     assert process.stderr is not None
     try:
         yield process.stdout
         process.stdout.close()
-        error = process.stderr.read()
+        error = process.stderr.read().decode("utf-8", errors="replace")
         if process.wait() != 0:
             raise OSError(f"zstd could not read {path}: {error.strip()}")
     finally:
@@ -58,11 +61,13 @@ def _open_text(path):
 
 
 def _iter_json_objects(path):
-    with _open_text(path) as stream:
+    loads = orjson.loads if orjson is not None else json.loads
+    decode_error = orjson.JSONDecodeError if orjson is not None else json.JSONDecodeError
+    with _open_json_stream(path) as stream:
         for line_number, line in enumerate(stream, 1):
             try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
+                row = loads(line)
+            except decode_error as exc:
                 raise ArchiveFormatError(f"{Path(path).name}:{line_number}: invalid JSON") from exc
             if not isinstance(row, dict):
                 raise ArchiveFormatError(f"{Path(path).name}:{line_number}: expected a JSON object")

@@ -96,20 +96,18 @@ def test_compare_archive_runs_independent_source_arms_and_reports_execution_delt
             rows = [
                 _row("m1", "deribit_quote", signal_ms=850.0, filled=True, won=True,
                      pnl_per_share=0.59, filled_shares=5.0),
-                _row("m2", "futures_trade", signal_ms=2_000.0, filled=True, won=False,
-                     pnl_per_share=-0.41, filled_shares=10.0),
             ]
             summary = _summary(sources)
             summary["latencies"]["500"].update({
-                "signals": 2,
-                "sent": 2,
-                "fills": 2,
-                "filled_shares": 15.0,
+                "signals": 1,
+                "sent": 1,
+                "fills": 1,
+                "filled_shares": 5.0,
                 "fill_rate_per_signal": 1.0,
                 "fill_rate_per_send": 1.0,
-                "net_ev_per_share": -0.07666666666666666,
-                "pnl": -1.15,
-                "fills_by_source": {"deribit_quote": 1, "futures_trade": 1},
+                "net_ev_per_share": 0.59,
+                "pnl": 2.95,
+                "fills_by_source": {"deribit_quote": 1},
             })
         with open(rows_out, "w", encoding="utf-8") as stream:
             for row in rows:
@@ -123,23 +121,22 @@ def test_compare_archive_runs_independent_source_arms_and_reports_execution_delt
 
     result = race.compare_archive(tmp_path)
 
-    assert calls == [race.BASELINE_SOURCES, race.COMBINED_SOURCES]
+    assert calls == [race.BASELINE_SOURCES, race.CANDIDATE_SOURCES]
     assert result["comparison_method"] == "independent_full_state_replays_no_signal_pairing"
     assert result["arms"]["baseline"]["protocol"]["active_trigger_sources"] == sorted(race.BASELINE_SOURCES)
-    assert result["arms"]["combined"]["latencies"]["500"]["fills_by_source"] == {
+    assert result["arms"]["candidate"]["latencies"]["500"]["fills_by_source"] == {
         "deribit_quote": 1,
-        "futures_trade": 1,
     }
     delta = result["latency_deltas"]["500"]
-    assert delta["fills"] == 2
-    assert delta["filled_shares"] == 15.0
-    assert delta["pnl"] == pytest.approx(-1.15)
-    assert delta["loss_rate"] == pytest.approx(0.5)
+    assert delta["fills"] == 1
+    assert delta["filled_shares"] == 5.0
+    assert delta["pnl"] == pytest.approx(2.95)
+    assert delta["loss_rate"] == pytest.approx(0.0)
     changes = result["causal_sequence_changes"]["500"]
-    assert changes["changed_markets"] == 2
+    assert changes["changed_markets"] == 1
     assert changes["baseline_only_markets"] == 0
-    assert changes["combined_only_markets"] == 1
-    assert changes["changed_market_id_samples"] == ["m1", "m2"]
+    assert changes["candidate_only_markets"] == 0
+    assert changes["changed_market_id_samples"] == ["m1"]
     assert len(changes["changed_market_ids_sha256"]) == 64
     assert result["activation_gate"]["passes"] is False
 
