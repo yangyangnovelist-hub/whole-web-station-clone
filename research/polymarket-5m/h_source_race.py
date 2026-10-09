@@ -177,6 +177,13 @@ def _receipt_clock_replay_freeze(
     return frozen
 
 
+def _validate_multiplicity(current_h: dict[str, Any], source_race: dict[str, Any]) -> None:
+    current_tests = int(current_h["statistics"]["family_tests"])
+    source_race_tests = int(source_race["statistics"]["family_tests"])
+    if source_race_tests < current_tests:
+        raise ValueError("source-race multiplicity weakens current-H correction")
+
+
 def _read_row_audit(path: Path) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], bytes]]:
     counts: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "rows": 0,
@@ -365,10 +372,7 @@ def compare_archive(
     freeze_bytes = freeze_path.read_bytes()
     frozen = json.loads(freeze_bytes)
     source_race_frozen, source_race_freeze_sha256 = _load_source_race_freeze(source_race_freeze_path)
-    if int(frozen["statistics"]["family_tests"]) != int(
-        source_race_frozen["statistics"]["family_tests"]
-    ):
-        raise ValueError("source-race multiplicity drift")
+    _validate_multiplicity(frozen, source_race_frozen)
     replay_frozen = _receipt_clock_replay_freeze(frozen, source_race_frozen)
     artifact_identity, artifact_stats, artifact_root = _capture_artifact_identity(archive_dir)
     formal_eligible = _formal_eligibility(artifact_identity, source_race_frozen)

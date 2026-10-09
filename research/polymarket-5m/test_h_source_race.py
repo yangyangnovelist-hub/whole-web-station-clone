@@ -195,6 +195,15 @@ def test_source_race_replay_uses_one_local_receipt_clock_for_all_sources():
     assert frozen["signal"]["source_z0"] == {"deribit_quote": 3.0}
 
 
+def test_source_race_multiplicity_may_strengthen_but_never_weaken_current_h():
+    current_h = {"statistics": {"family_tests": 100}}
+
+    race._validate_multiplicity(current_h, {"statistics": {"family_tests": 200}})
+
+    with pytest.raises(ValueError, match="weakens current-H correction"):
+        race._validate_multiplicity(current_h, {"statistics": {"family_tests": 99}})
+
+
 def test_compare_archive_rejects_dataset_identity_drift(tmp_path, monkeypatch):
     calls = 0
 
