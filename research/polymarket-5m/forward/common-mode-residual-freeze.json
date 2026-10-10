@@ -84,8 +84,9 @@
   },
   "promotion": {
     "production_activation": false,
-    "forward_evaluator_ready": false,
-    "next_required_work": "bind the dedicated raw Binance spot-BBO and Deribit-index adapters to a checksum-bound chronological daily evaluator without changing the shared post-cutoff strict converter",
+    "forward_evaluator_ready": true,
+    "evaluator_frozen_at": "2026-10-10T03:24:35Z",
+    "next_required_work": "accumulate the untouched post-2026-10-11 checksum-bound paper sample until the frozen common stopping rule is reached",
     "live_fak_calibration_requires_separate_authorization": true,
     "paper_pass_is_not_live_profitability_proof": true
   },

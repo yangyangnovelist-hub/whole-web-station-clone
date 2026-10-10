@@ -90,7 +90,7 @@ def test_frozen_protocol_matches_detector_and_dependency_bytes() -> None:
         encoding="ascii",
     ).strip()
     assert frozen["holdout_start_ms"] == 1_791_676_800_000
-    assert frozen["promotion"]["forward_evaluator_ready"] is False
+    assert frozen["promotion"]["forward_evaluator_ready"] is True
     assert frozen["signal"]["common_move_window_ms"] == config.window_ms
     assert (
         frozen["signal"]["benchmark_confirmation_timeout_ms"]
