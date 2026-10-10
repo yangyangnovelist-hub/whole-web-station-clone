@@ -190,3 +190,44 @@ def test_existing_receipt_clock_executor_prices_400_and_500ms_from_direct_depth(
     assert rows[1]["entry_shares"] == pytest.approx(4.0)
     assert rows[0]["entry_book_recv_ms"] == BASE_MS + 850
     assert rows[0]["pnl"] is not None
+
+
+@pytest.mark.parametrize("token", [UP, DOWN])
+@pytest.mark.parametrize("fault", ["empty", "crossed", "malformed_change", "malformed_snapshot"])
+def test_invalid_book_cannot_be_healed_into_a_continuously_pinned_window(token, fault):
+    detector = _ready()
+    detector.on_event(_trade(BASE_MS, 5))
+    detector.on_event(_trade(BASE_MS + 100, 5))
+    detector.on_event(_trade(BASE_MS + 200, 5))
+    if fault == "empty":
+        event = _snapshot(token, BASE_MS + 250, [(0.47, 20)], [])
+    elif fault == "crossed":
+        event = _change(token, BASE_MS + 250, "BUY", 0.60, 20)
+    elif fault == "malformed_change":
+        event = _change(token, BASE_MS + 250, "SELL", 0.50, 10)
+        event["changes"][0]["size"] = "not-a-size"
+    else:
+        event = _snapshot(token, BASE_MS + 250, [(0.47, 20)], [(0.50, 10)])
+        del event["asks"][0]["size"]
+    detector.on_event(event)
+    detector.on_event(_snapshot(UP, BASE_MS + 300, [(0.49, 20)], [(0.50, 10)]))
+    detector.on_event(_snapshot(DOWN, BASE_MS + 301, [(0.47, 20)], [(0.48, 10)]))
+
+    assert detector.flush(BASE_MS + 500.001) == []
+    assert MARKET in detector.tainted_markets
+    assert detector.outcomes[-1]["reason"] == "invalid_book_during_window"
+    # The first market attempt stays invalid after apparent recovery.
+    detector.on_event(_trade(BASE_MS + 1_000, 100))
+    assert detector.flush(BASE_MS + 1_501) == []
+
+
+def test_removing_the_entire_ask_then_restoring_snapshot_cannot_hide_depletion():
+    detector = _ready()
+    detector.on_event(_snapshot(UP, BASE_MS - 1, [(0.49, 20)], [(0.50, 10)]))
+    for offset in (0, 100, 200):
+        detector.on_event(_trade(BASE_MS + offset, 5))
+    detector.on_event(_change(UP, BASE_MS + 250, "SELL", 0.50, 0))
+    detector.on_event(_snapshot(UP, BASE_MS + 300, [(0.49, 20)], [(0.50, 10)]))
+
+    assert detector.flush(BASE_MS + 500.001) == []
+    assert detector.outcomes[-1]["reason"] == "invalid_book_during_window"

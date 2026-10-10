@@ -160,7 +160,7 @@ class PinnedFlowDetector:
             book.replace(event.get("bids") or (), event.get("asks") or (), float(event["recv_ms"]))
         except (KeyError, TypeError, ValueError):
             book.ready = False
-        self._observe_depth(token)
+        self._observe_depth(token, float(event["recv_ms"]))
 
     def _price_change(self, event: Mapping[str, Any]) -> None:
         recv_ms = float(event["recv_ms"])
@@ -168,20 +168,33 @@ class PinnedFlowDetector:
         for change in event.get("changes") or ():
             token = str(change.get("asset_id") or "")
             book = self.books.setdefault(token, TokenBook())
-            book.change(
-                str(change.get("side") or ""),
-                change.get("price"),
-                change.get("size"),
-                recv_ms,
-            )
+            try:
+                book.change(
+                    str(change.get("side") or ""),
+                    change.get("price"),
+                    change.get("size"),
+                    recv_ms,
+                )
+            except (TypeError, ValueError):
+                book.ready = False
             touched.add(token)
         for token in touched:
-            self._observe_depth(token)
+            self._observe_depth(token, recv_ms)
 
-    def _observe_depth(self, token: str) -> None:
-        window = self.windows.get(token)
+    def _observe_depth(self, token: str, recv_ms: float) -> None:
         book = self.books.get(token)
-        if window is None or book is None or not book.ready:
+        market_id = self.token_market.get(token)
+        if book is not None and not book.ready:
+            # A later snapshot cannot certify continuous depth across a gap.
+            # Invalidate either token's active market window, including when
+            # the complementary execution book loses its valid state.
+            if market_id is not None and any(
+                window.market_id == market_id for window in self.windows.values()
+            ):
+                self._taint(market_id, recv_ms, "invalid_book_during_window")
+            return
+        window = self.windows.get(token)
+        if window is None or book is None:
             return
         window.trough_ask_depth = min(
             window.trough_ask_depth,
