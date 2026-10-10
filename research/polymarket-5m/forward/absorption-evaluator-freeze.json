@@ -1,9 +1,9 @@
 {
   "schema": "post-sweep-absorption-evaluator-freeze-v1",
   "strategy_id": "BTC-5M-POST-SWEEP-ASK-ABSORPTION-V1",
-  "created_at": "2026-10-10T12:41:11Z",
+  "created_at": "2026-10-10T14:40:00Z",
   "holdout_start": "2026-10-11T00:00:00Z",
-  "protocol_sha256": "f36529ecff54ea1c61f26676a48dd563df07f33a445fdf666700f49c673f4eaf",
+  "protocol_sha256": "3680ddb1acf242a9ac64d84a71f92936fe4e4d323dc306c1b9db72956eb9a130",
   "collector_region": "eu-west-1",
   "paper_only": true,
   "variants": [
@@ -33,7 +33,7 @@
     "statistics": "positive net EV, positive one-sided 99 percent day-cluster lower bound and Bonferroni-adjusted exact sign p-value at both latencies"
   },
   "dependencies_sha256": {
-    "absorption.py": "637d601af61eae14d6ecb775a8325067ea881db8808ce866a221156b7ad07e29",
+    "absorption.py": "e76338213a9c145a9d93b2b79af7b6c543ea4466301dd0bad76521246fe924e5",
     "absorption_daily.py": "e3357a19ba9650d706a88520318b23c93c9a7840330dac3b7f6a5f48de1eed7f",
     "absorption_forward.py": "aff2c7d0ee59b0cbc132e39c683676ff5cc6cd987d0ad8c490980d2808c10994",
     "absorption_run.py": "4fb28266dfe94db75188fccaf86755c1ab0039ab3e81939cbc126b7a33da5d31",

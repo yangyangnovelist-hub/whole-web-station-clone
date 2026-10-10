@@ -110,6 +110,20 @@ def test_first_buy_burst_depletion_and_same_price_refill_freezes_direct_opposite
     assert signal["fill_levels"] == [{"price": 0.48, "shares": 5.0}]
 
 
+def test_absorption_infers_aggressor_from_pretrade_book_not_reported_side():
+    detector = _ready_detector()
+    detector.on_event(_trade(BASE_MS, 5, side="SELL", price=0.50))
+    detector.on_event(_change(UP, BASE_MS + 40, "SELL", 0.50, 2))
+    detector.on_event(_change(UP, BASE_MS + 100, "SELL", 0.50, 8))
+
+    signal = detector.flush(BASE_MS + 250.001)[0]
+    assert signal["variant"] == "base"
+
+    in_spread = _ready_detector()
+    assert in_spread.on_event(_trade(BASE_MS, 10, side="BUY", price=0.495)) == []
+    assert in_spread.bursts == {}
+
+
 def test_depleted_burst_without_refill_emits_only_matched_no_refill_control():
     detector = _ready_detector()
     detector.on_event(_trade(BASE_MS, 5))

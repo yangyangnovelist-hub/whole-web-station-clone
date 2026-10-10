@@ -90,6 +90,22 @@ class TokenBook:
     def ask_depth(self, cap: float) -> float:
         return sum(size for price, size in self.asks.items() if price <= cap + 1e-12)
 
+    def aggressor_side(self, price: float) -> str | None:
+        """Infer taker direction from the already-received direct book.
+
+        Polymarket publishes a ``side`` on ``last_trade_price`` but does not
+        document whether that side names the maker or taker.  A print at/above
+        the current ask is therefore the only accepted BUY and one at/below the
+        current bid the only accepted SELL; in-spread prints fail closed.
+        """
+        if not self.ready or not self.bids or not self.asks:
+            return None
+        if price >= min(self.asks) - 1e-12:
+            return "BUY"
+        if price <= max(self.bids) + 1e-12:
+            return "SELL"
+        return None
+
 
 @dataclass
 class Burst:
@@ -590,13 +606,21 @@ class AbsorptionDetector:
             return []
         recv_ms = float(event["recv_ms"])
         self.last_trade_ms[asset_id] = recv_ms
-        if (
-            str(event.get("side") or "").upper() != "BUY"
-            or market_id in self.locked_markets
-        ):
-            return []
         price = float(event["price"])
         size = float(event["size"])
+        swept_book = self.books.get(asset_id)
+        if market_id in self.locked_markets:
+            return []
+        if swept_book is None or not swept_book.valid_at(recv_ms, self.config.book_fresh_ms):
+            self.locked_markets.add(market_id)
+            self.outcomes.append({
+                "market_id": market_id,
+                "recv_ms": recv_ms,
+                "reason": "stale_or_invalid_book",
+            })
+            return []
+        if swept_book.aggressor_side(price) != "BUY":
+            return []
         burst = self.bursts.get(asset_id)
         if burst is None or recv_ms - burst.last_ms > self.config.max_interprint_ms:
             burst = Burst(

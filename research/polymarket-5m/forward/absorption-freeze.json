@@ -1,7 +1,7 @@
 {
   "schema": "post-sweep-absorption-protocol-v1",
   "strategy_id": "BTC-5M-POST-SWEEP-ASK-ABSORPTION-V1",
-  "created_at": "2026-10-10T12:01:25Z",
+  "created_at": "2026-10-10T14:40:00Z",
   "holdout_start": "2026-10-11T00:00:00Z",
   "holdout_start_ms": 1791676800000,
   "collector_region": "eu-west-1",
@@ -13,7 +13,7 @@
       20.0,
       240.0
     ],
-    "aggressor_side": "BUY prints on one direct token",
+    "aggressor_side": "a print at or above the already-received direct ask; published last_trade_price.side is audit-only and an in-spread or otherwise unknown direction fails closed",
     "maximum_interprint_ms": 50.0,
     "minimum_burst_shares": 5.0,
     "depletion_deadline_ms": 50.0,
@@ -28,6 +28,7 @@
   "causality": {
     "primary_clock": "local receipt time",
     "exchange_timestamps": "audit only",
+    "trade_direction": "infer from the print price against the already-received direct bid and ask; never trust the undocumented last_trade_price.side field",
     "equal_receipt_batches": "apply atomically before a decision due at the same receipt time",
     "book_fresh_ms": 2000.0,
     "direct_dual_token_l2_only": true,
@@ -82,7 +83,7 @@
     "paper_pass_is_not_live_profitability_proof": true
   },
   "dependencies_sha256": {
-    "absorption.py": "637d601af61eae14d6ecb775a8325067ea881db8808ce866a221156b7ad07e29",
+    "absorption.py": "e76338213a9c145a9d93b2b79af7b6c543ea4466301dd0bad76521246fe924e5",
     "absorption_run.py": "4fb28266dfe94db75188fccaf86755c1ab0039ab3e81939cbc126b7a33da5d31",
     "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
     "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe"
