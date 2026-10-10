@@ -13,6 +13,7 @@ import common_mode_run as replay
 
 
 DAY = "20261011"
+ROOT = Path(__file__).resolve().parent
 
 
 def _sha256(path: Path) -> str:
@@ -149,6 +150,31 @@ def test_daily_loader_rejects_evaluator_semantic_drift(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="execution/statistics drift"):
         daily.load_evaluator_freeze(protocol, protocol_sha, path)
     assert calls == [(evaluator, protocol)]
+
+
+def test_frozen_daily_units_run_paper_evaluator_after_shared_prebuild() -> None:
+    service_path = ROOT / "systemd" / "common-mode-daily.service"
+    timer_path = ROOT / "systemd" / "common-mode-daily.timer"
+    service = service_path.read_text(encoding="utf-8")
+    timer = timer_path.read_text(encoding="utf-8")
+    evaluator = json.loads(daily.EVALUATOR_FREEZE.read_text(encoding="utf-8"))
+    dependencies = evaluator["dependencies_sha256"]
+
+    assert "User=ubuntu" in service
+    assert "STRICT_SHARED_ROOT=/home/ubuntu/rec/formal/strict-days" in service
+    assert "common_mode_daily.py" in service
+    assert "MemoryMax=4G" in service
+    assert "OnCalendar=*-*-* 03:30:00 UTC" in timer
+    assert "Persistent=true" in timer
+    assert dependencies["forward/current-h-freeze.json"] == _sha256(
+        ROOT / "forward" / "current-h-freeze.json"
+    )
+    assert dependencies["h_source_race.py"] == _sha256(ROOT / "h_source_race.py")
+    assert dependencies["source_race_forward.py"] == _sha256(
+        ROOT / "source_race_forward.py"
+    )
+    assert dependencies["systemd/common-mode-daily.service"] == _sha256(service_path)
+    assert dependencies["systemd/common-mode-daily.timer"] == _sha256(timer_path)
 
 
 def _install_process_fakes(tmp_path, monkeypatch, calls):

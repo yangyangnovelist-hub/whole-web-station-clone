@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the formal Polymarket common-mode residual replay after daily archival
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+Unit=common-mode-daily.service
+
+[Install]
+WantedBy=timers.target
