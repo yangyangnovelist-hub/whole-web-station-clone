@@ -451,6 +451,25 @@
       "priority": 18,
       "passes": true,
       "notes": "This is economic family 26. Retaining the maker hedge preserved the Family 24 result: 14 full pairs, three residual one-leg cases and -$2.76540 total (-1.7972 cents per filled share). Two material residuals reached the deadline. Both 300 and 400 millisecond hedge attempts were blocked by stale or invalid direct books; unwind correctly refused to submit for the same reason, so no deadline rescue filled and PnL was unchanged. The high-resolution audit corrected one false equal-cross-transport taint: a warning arrived 89 nanoseconds before the CLOB price change, not simultaneously. Removing the false taint made the order lifecycle auditable but did not create an opposite fill; that five-share Down leg still settled for -$2.30, and its deadline book was stale. There were no unknown live orders or exposures. This exact deadline-rescue mechanism is rejected without a fresh holdout or production authority."
+    },
+    {
+      "id": "US-026",
+      "title": "Test externally delta-hedged complementary maker residuals",
+      "description": "As the account owner, I want a filled Polymarket maker leg delta-hedged immediately on Binance perpetuals so that toxic one-leg settlement risk is replaced by measured cross-venue spread, fee and basis risk.",
+      "acceptanceCriteria": [
+        "Preserve every inferred maker fill with its exact integer public-CLOB receipt nanosecond, observed sequence, side, price and shares; label it public_clob_trade_queue_inference rather than private account confirmation, and never reconstruct its clock from rounded row aggregates",
+        "Adapt the MIT-licensed polybot-market-maker digital-delta structure to this market's Asian 60-second-TWAP binary using the existing binary.py model, with causal Polymarket-implied probability, received spot and trailing per-second volatility",
+        "Freeze a static inventory hedge at each maker fill, execute or resize it after 200 milliseconds with 100 and 150 millisecond sensitivities on the first valid received Binance perpetual BBO, sell at bid, buy at ask, fail closed on stale or disconnected market data, and execute the hedge first on an exact-time tie",
+        "Cancel or replace a pending hedge when a later maker fill neutralizes or changes inventory before its due time; close the remaining perpetual position at the first valid BBO after market end using the same latency and fee semantics",
+        "Charge 5 basis points per perpetual taker execution with 4 basis points as a sensitivity, and report spread PnL, fees, Polymarket settlement PnL, combined PnL, peak BTC quantity, peak USD notional and invalid-execution reasons",
+        "Compare against the unchanged unhedged Family 24 rows over the same five closed pre-cutoff development hours; do not tune on the three observed residual outcomes or spend a fresh holdout unless combined PnL is positive",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": true,
+      "notes": "Family 27 is complete and rejected. The external-hedge implementation reuses the public MIT polybot-market-maker structure but replaces its European-digital delta and fill assumptions with the project's Asian-TWAP model, exact public-CLOB queue-inferred maker-fill clocks and receipt-causal Binance perpetual BBO execution. Five closed pre-cutoff hours produced 55 quote cycles, 51 resolved cycles and 18 maker-filled cycles totalling 153.87 shares; the unchanged Polymarket legs lost $2.76540 (-1.7972 cents per filled share). Under the primary 200 millisecond and 5 basis-point perpetual-taker arm, one inferred maker fill correctly failed closed because no fresh causal spot state existed, so the strict all-cycle aggregate is invalid rather than imputed. The remaining valid 143.87 shares lost $55.27079 combined (-38.4172 cents per share) across 44 perpetual fills and $71.79216 of taker fees, while requiring peak exposure of 0.202319 BTC or $16,698.92. Reducing latency to 100 or 150 milliseconds still lost $55.49886 (-38.5757 cents per valid share); reducing fees to 4 basis points at 200 milliseconds still lost $42.42821 (-29.4907 cents per valid share). One hour was profitable, but latency did not rescue the five-hour economics. All 42 inferred fill events retain exact receipt nanoseconds, observed order and the public_clob_trade_queue_inference label. No fresh holdout or production path was used."
     }
   ]
 }

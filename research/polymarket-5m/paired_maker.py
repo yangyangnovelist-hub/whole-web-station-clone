@@ -103,6 +103,7 @@ class MakerOrder:
     activation_ms: float | None = None
     cancelled_ms: float | None = None
     reprice_count: int = 0
+    fill_events: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def remaining(self) -> float:
@@ -112,11 +113,25 @@ class MakerOrder:
     def average_fill_price(self) -> float | None:
         return self.fill_cost / self.filled if self.filled > EPS else None
 
-    def fill(self, shares: float, fee_curve_rate: float = 0.07) -> float:
+    def fill(
+        self,
+        shares: float,
+        recv_ns: int,
+        sequence: int,
+        fee_curve_rate: float = 0.07,
+    ) -> float:
         take = min(max(0.0, shares), self.remaining)
         if take > EPS:
             self.filled += take
             self.fill_cost += take * self.price
+            self.fill_events.append({
+                "recv_ns": int(recv_ns),
+                "sequence": int(sequence),
+                "observation_basis": "public_clob_trade_queue_inference",
+                "side": self.side,
+                "price": self.price,
+                "shares": take,
+            })
             self.fill_fee_equivalent += (
                 take * fee_curve_rate * self.price * (1.0 - self.price)
             )
@@ -203,6 +218,7 @@ class PairedMakerReplay:
         self._pending_stamp_ns: int | None = None
         self._pending_events: list[dict[str, Any]] = []
         self._seen_trade_events: set[tuple[str, str, float, float]] = set()
+        self._fill_sequence = 0
 
     def market(self, market_id: str) -> MarketState:
         return self.markets[market_id]
@@ -353,6 +369,11 @@ class PairedMakerReplay:
             rebate_sensitivity = fee_equivalent * self.config.maker_rebate_fraction
             up_average = up.average_fill_price if up is not None else None
             down_average = down.average_fill_price if down is not None else None
+            maker_fill_events = sorted(
+                (up.fill_events if up is not None else [])
+                + (down.fill_events if down is not None else []),
+                key=lambda event: (event["recv_ns"], event["sequence"]),
+            )
             locked_edge = (
                 1.0 - (up_cost + down_cost + rescue_fee) / paired
                 if paired > EPS and abs(up_filled - down_filled) <= EPS
@@ -376,6 +397,8 @@ class PairedMakerReplay:
                 "down_filled": down_filled,
                 "up_fill_price": up_average,
                 "down_fill_price": down_average,
+                "maker_fill_events": maker_fill_events,
+                "maker_fill_observation_basis": "public_clob_trade_queue_inference",
                 "up_cost": up_cost,
                 "down_cost": down_cost,
                 "paired_shares": paired,
@@ -611,8 +634,15 @@ class PairedMakerReplay:
             consumed = min(order.queue_ahead, size)
             order.queue_ahead -= consumed
             fillable = size - consumed
-        filled = order.fill(fillable, self.config.fee_curve_rate)
+        next_sequence = self._fill_sequence + 1
+        filled = order.fill(
+            fillable,
+            _receipt_ns(event),
+            next_sequence,
+            self.config.fee_curve_rate,
+        )
         if filled > EPS:
+            self._fill_sequence = next_sequence
             self._after_fill(state, float(event["recv_ms"]))
 
     def _after_fill(self, state: MarketState, recv_ms: float) -> None:

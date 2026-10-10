@@ -100,6 +100,41 @@ def test_equal_complementary_fills_lock_complete_set_profit() -> None:
     assert row["pnl"] == pytest.approx(0.30)
 
 
+def test_maker_fill_events_preserve_exact_cross_transport_order() -> None:
+    replay = _ready()
+    first_ns = int((BASE_MS + 40) * 1_000_000)
+    up = _sell(UP, BASE_MS + 40, size=15)
+    down = _sell(DOWN, BASE_MS + 40, size=13)
+    up["recv_ns"] = first_ns
+    down["recv_ns"] = first_ns + 89
+
+    replay.on_event(up)
+    replay.on_event(down)
+    row = replay.finish({MARKET: "Down"})[0]
+
+    assert row["maker_fill_events"] == [
+        {"recv_ns": first_ns, "sequence": 1, "observation_basis": "public_clob_trade_queue_inference", "side": "Up", "price": 0.47, "shares": 5.0},
+        {"recv_ns": first_ns + 89, "sequence": 2, "observation_basis": "public_clob_trade_queue_inference", "side": "Down", "price": 0.47, "shares": 5.0},
+    ]
+    assert row["maker_fill_observation_basis"] == "public_clob_trade_queue_inference"
+
+
+def test_same_nanosecond_maker_fills_preserve_observed_input_order() -> None:
+    replay = _ready()
+    recv_ns = int((BASE_MS + 40) * 1_000_000)
+    down = _sell(DOWN, BASE_MS + 40, size=13)
+    up = _sell(UP, BASE_MS + 40, size=15)
+    down["recv_ns"] = recv_ns
+    up["recv_ns"] = recv_ns
+
+    replay.on_event(down)
+    replay.on_event(up)
+    row = replay.finish({MARKET: "Down"})[0]
+
+    assert [event["side"] for event in row["maker_fill_events"]] == ["Down", "Up"]
+    assert [event["sequence"] for event in row["maker_fill_events"]] == [1, 2]
+
+
 def test_displayed_queue_cancellation_gives_no_priority_credit() -> None:
     replay = _ready()
     replay.on_event(_change(UP, BASE_MS + 31, price=0.47, size=2))
