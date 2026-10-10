@@ -27,10 +27,17 @@ def archive(tmp_path):
     f5 = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
                        "up_best_bid": 0.40, "up_best_ask": np.where(cheap, 0.30, 0.42),
                        "down_best_bid": 0.58, "down_best_ask": 0.60,
-                       "up_ask_sizes": [[25.0, 5.0]] * len(ts), "down_ask_sizes": [[30.0]] * len(ts)})
+                       "up_side_asks": [[float(ask), 0.50] for ask in np.where(cheap, 0.30, 0.42)],
+                       "up_ask_sizes": [[25.0, 5.0]] * len(ts),
+                       "down_side_asks": [[0.60]] * len(ts), "down_ask_sizes": [[30.0]] * len(ts),
+                       "up_side_bids": [[0.40]] * len(ts), "up_bid_sizes": [[15.0]] * len(ts),
+                       "down_side_bids": [[0.58]] * len(ts), "down_bid_sizes": [[18.0]] * len(ts)})
     f15 = pd.DataFrame({"timestamp_ms": ts, "market_id": "m15", "lifecycle_state": "active",
                         "up_best_bid": 0.38, "up_best_ask": 0.40, "down_best_bid": 0.58, "down_best_ask": 0.60,
-                        "up_ask_sizes": [[10.0]] * len(ts), "down_ask_sizes": [[40.0]] * len(ts)})
+                        "up_side_asks": [[0.40]] * len(ts), "up_ask_sizes": [[10.0]] * len(ts),
+                        "down_side_asks": [[0.60]] * len(ts), "down_ask_sizes": [[40.0]] * len(ts),
+                        "up_side_bids": [[0.38]] * len(ts), "up_bid_sizes": [[12.0]] * len(ts),
+                        "down_side_bids": [[0.58]] * len(ts), "down_bid_sizes": [[14.0]] * len(ts)})
     mk = pd.DataFrame({"timestamp_ms": [E, E], "market_id": ["m5", "m15"], "slug": ["btc-updown-5m-x", "btc-updown-15m-x"],
                        "session_start_ts": [E - 300_000, E - 900_000], "session_end_ts": [E, E],
                        "chainlink_open_price": [100.0, 101.0], "up_won": [1.0, 0.0], "lifecycle_state": ["closed"] * 2})
@@ -559,7 +566,9 @@ def test_read_day_keeps_the_ask_ladders(tmp_path):
     f = pd.DataFrame({"timestamp_ms": ts, "market_id": "m5", "lifecycle_state": "active",
                       "up_best_bid": 0.40, "up_best_ask": 0.42, "down_best_bid": 0.57, "down_best_ask": 0.59,
                       "up_side_asks": [[0.45, 0.42, 0.50]] * len(ts), "up_ask_sizes": [[7.0, 20.0, 3.0]] * len(ts),
-                      "down_side_asks": [[0.59]] * len(ts), "down_ask_sizes": [[11.0]] * len(ts)})
+                      "down_side_asks": [[0.59]] * len(ts), "down_ask_sizes": [[11.0]] * len(ts),
+                      "up_side_bids": [[0.35, 0.40]] * len(ts), "up_bid_sizes": [[4.0, 13.0]] * len(ts),
+                      "down_side_bids": [[0.50, 0.57]] * len(ts), "down_bid_sizes": [[8.0, 17.0]] * len(ts)})
     path = tmp_path / "market_parquet_2026-08-19.tar.gz"
     with tarfile.open(path, "w:gz") as tar:
         raw = parquet_bytes(f)
@@ -570,4 +579,7 @@ def test_read_day_keeps_the_ask_ladders(tmp_path):
     r = feat.iloc[0]
     assert (r["up_ask_p1"], r["up_ask_s1"], r["up_ask_p2"], r["up_ask_s2"]) == (0.42, 20.0, 0.45, 7.0)
     assert r["down_ask_p1"] == 0.59 and np.isnan(r["down_ask_p2"])
-    assert "up_ask_p1" not in cross.read_day(path)[0]
+    plain = cross.read_day(path)[0].iloc[0]
+    assert "up_ask_p1" not in plain
+    assert plain.up_ask_size == 20.0 and plain.up_bid_size == 13.0
+    assert plain.down_ask_size == 11.0 and plain.down_bid_size == 17.0

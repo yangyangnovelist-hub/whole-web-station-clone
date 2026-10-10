@@ -487,6 +487,28 @@
       "priority": 20,
       "passes": true,
       "notes": "Family 28 is complete and rejected using the already-finished 67-day full-data workflow rather than rebuilding the mechanism. The immutable CSV contains 632,304 public-snapshot withdrawal signals across 15,302 markets and 66 days. Withdrawals genuinely preceded a same-direction two-sigma Binance move more often than chance when such a move appeared within 500 milliseconds: 85.8% of 14,954 labelled discovery signals, 70.0% of 619 confirmation signals and 83.3% of 4,238 locked signals, with median same-direction leads of 185, 197 and 216 milliseconds. That predictive fact did not create executable profit. At the primary 200 millisecond horizon, only the first executable signal per market was retained: 11,839 discovery fills lost 0.3715 cents per share, 919 confirmation fills lost 0.7440 cents and 2,504 locked fills lost 1.1929 cents; every exact profit p value was 1.0. Results worsened at 250-400 milliseconds and were already negative at 170 milliseconds. Therefore fast makers do reveal some upcoming jumps, but the remaining displayed quote is adversely selected or repriced before it can be captured. The negative result does not require spending direct-L2 forward data and receives no production access."
+    },
+    {
+      "id": "US-028",
+      "title": "Test same-expiry 5m-15m strike boxes with independent batch legs",
+      "description": "As the account owner, I want to buy Up on the lower Chainlink opening strike and Down on the higher strike for two BTC markets ending together, while measuring the non-atomic two-leg execution risk rather than calling a displayed box risk-free.",
+      "acceptanceCriteria": [
+        "Reuse the existing 67-day cross-horizon archive reader and preserve both market IDs, horizons, opening strikes, exact outcome sides, source annotations and aligned 100 millisecond receipt snapshots; do not create another downloader",
+        "Restrict the mechanism to same-expiry BTC 5m-15m pairs with different opening strikes and matching authoritative resolution semantics: both point-price before 2026-08-07, reject the 5m 30-second versus 15m 60-second mismatch from 2026-08-07 through 2026-08-13, and admit both 60-second TWAP from 2026-08-14; unresolved, fallback or source-conflicted pairs remain diagnostic and cannot pass",
+        "Freeze the first decision after two consecutive exact aligned snapshots show active non-halted books, fresh continuity, at least five shares at each scalar best ask, and total price plus order-rounded historical taker fees at or below 0.98; each fixed five-share buy must also meet Polymarket's one-dollar minimum and otherwise remain an explicit blocked candidate",
+        "Replay one parallel batch of independent five-share FOK legs at exact 200, 300, 400 and 500 millisecond snapshots, with 400 milliseconds primary; each leg fills only inside the common open interval when its ask is no higher than its frozen limit and direct displayed top depth remains at least five shares",
+        "Classify paired, lower-strike-only, higher-strike-only and neither outcomes separately because Polymarket documents that batch entries are processed in parallel but independently; never impute atomicity from a batch request",
+        "For a one-leg fill, attempt a receipt-causal five-share taker unwind 100 milliseconds later at the observed bid, charge both entry and exit fees, and mark the cycle invalid rather than profitable when bid depth or source continuity is unavailable",
+        "Keep discovery through 2026-07-15, confirmation through 2026-08-16 and locked history from 2026-08-17 separate; all 67 historical days were previously inspected and therefore constitute an audit screen rather than a fresh holdout",
+        "Report eligible pair and candidate counts, paired rate, lower and upper orphan risk, invalid exits, deterministic floor edge, stochastic between-strike bonus, exact rounded fees, worst orphan, net PnL, net EV per attempted share, one-sided 99% UTC-day-cluster lower bound, maximum drawdown and capital",
+        "Qualify only when confirmation and locked 400 millisecond EV and their day-cluster lower bounds are positive, the exact one-sided sign p value remains below 0.01 after Bonferroni correction across 100 families, no required execution is unresolved, and confirmation and locked 500 millisecond EV are nonnegative",
+        "Historical 100 millisecond snapshots are an upper-bound screen; even a qualifying audit may only freeze a genuinely fresh direct receipt-ordered L2 forward protocol, not authorise production or wallet access",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "Family 29's implementation and adversarial preflight are complete before the full outcome replay. Archive metadata and the existing Gamma-validated rule-window fingerprint show that both horizons used point Chainlink before 2026-08-07, differed from 2026-08-07 through 2026-08-13, and both used the 60-second TWAP from 2026-08-14; mismatched days are excluded rather than treated as a deterministic box. The legacy 60-row result had discarded identities, assumed atomic legs and used already-inspected history. The replacement preserves identities and source authority, requires exact live snapshots and scalar-best depth, enforces the five-share one-dollar minimum, replays independent FOK legs and bounded orphan exits, and treats the 67-day result only as an audit screen for a future direct-L2 holdout."
     }
   ]
 }

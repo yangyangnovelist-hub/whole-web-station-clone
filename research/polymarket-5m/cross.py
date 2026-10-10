@@ -132,8 +132,12 @@ def probe(workdir, out):
 
 FEAT_COLS = ["timestamp_ms", "market_id", "lifecycle_state", "up_best_bid", "up_best_ask", "down_best_bid",
              "down_best_ask", "up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes", "observed_halt_flag"]
+FEAT_COLS += ["up_side_asks", "down_side_asks", "up_side_bids", "down_side_bids"]
 MKT_COLS = ["market_id", "slug", "session_start_ts", "session_end_ts", "chainlink_open_price", "up_won",
             "outcome_direction", "lifecycle_state", "up_token_id", "down_token_id"]
+MKT_COLS += ["oracle_source", "chainlink_open_price_source", "resolution_price_source"]
+MKT_COLS += ["open_boundary_source", "close_boundary_source", "open_boundary_fallback_used",
+             "close_boundary_fallback_used", "usable_for_backtest", "resolution_consistency"]
 
 
 def _ladder(prices, sizes, depth):
@@ -147,6 +151,24 @@ def _ladder(prices, sizes, depth):
         for i, (p, q) in enumerate(lv):
             ps[i][r], ss[i][r] = p, q
     return ps, ss
+
+
+def _size_at_best(best, prices, sizes):
+    """Displayed size at the scalar best price; None when the ladder cannot prove it."""
+    out = []
+    for target, level_prices, level_sizes in zip(best, prices, sizes):
+        if target is None or not level_prices or not level_sizes:
+            out.append(None)
+            continue
+        matched = [
+            float(size)
+            for price, size in zip(level_prices, level_sizes)
+            if price is not None and size is not None
+            and abs(float(price) - float(target)) <= 1e-9
+            and float(size) > 0
+        ]
+        out.append(sum(matched) if matched else None)
+    return out
 
 
 def read_day(path, depth=0):
@@ -172,15 +194,29 @@ def read_day(path, depth=0):
                         if pc in t.column_names and sc in t.column_names:
                             ladders[side] = _ladder(t[pc].to_pylist(), t[sc].to_pylist(), depth)
                 t = t.select(have)
-                cols = {c: t[c] for c in have if not c.endswith("_sizes")}
+                cols = {
+                    c: t[c]
+                    for c in have
+                    if not c.endswith("_sizes") and "_side_" not in c
+                }
                 for side, (ps, ss) in ladders.items():
                     for i in range(depth):
                         cols[f"{side}_ask_p{i + 1}"] = pa.array(ps[i], pa.float64())
                         cols[f"{side}_ask_s{i + 1}"] = pa.array(ss[i], pa.float64())
-                for c in ("up_ask_sizes", "down_ask_sizes", "up_bid_sizes", "down_bid_sizes"):  # size at the best price
-                    if c in have:
-                        cols[c.replace("_sizes", "_size")] = pa.array([(v[0] if v else None) for v in t[c].to_pylist()],
-                                                                      pa.float64())
+                for side in ("up", "down"):
+                    for book_side in ("ask", "bid"):
+                        pc = f"{side}_side_{book_side}s"
+                        sc = f"{side}_{book_side}_sizes"
+                        bc = f"{side}_best_{book_side}"
+                        if pc in have and sc in have and bc in have:
+                            values = _size_at_best(
+                                t[bc].to_pylist(),
+                                t[pc].to_pylist(),
+                                t[sc].to_pylist(),
+                            )
+                        else:
+                            values = [None] * len(t)
+                        cols[f"{side}_{book_side}_size"] = pa.array(values, pa.float64())
                 feats.append(pa.table({k: (v.cast(pa.string()) if k in ("market_id", "lifecycle_state") else v)
                                        for k, v in cols.items()}))
             elif table == "polymarket_market_100ms":
@@ -922,24 +958,77 @@ def market_table(mk, rs):
     g = mk.sort_values("session_end_ts").groupby("market_id")
     out = g.agg(slug=("slug", "last"), start=("session_start_ts", "last"), end=("session_end_ts", "last"),
                 k=("chainlink_open_price", lambda x: x.dropna().iloc[-1] if x.notna().any() else np.nan))
+    for c in ("oracle_source", "chainlink_open_price_source", "resolution_price_source"):
+        if c in mk:
+            out[c] = g[c].agg(
+                lambda x: str(x.dropna().iloc[-1]).strip() if x.notna().any() else None
+            )
+    source_columns = [c for c in ("resolution_price_source", "oracle_source") if c in out]
+    out["resolution_source"] = (
+        out[source_columns].bfill(axis=1).iloc[:, 0]
+        if source_columns else None
+    )
+    out["resolution_source_basis"] = np.where(
+        out["resolution_source"].notna(), "market_snapshot", None
+    )
     for c in ("up_token_id", "down_token_id"):
         if c in mk:
             out[c.replace("_id", "")] = g[c].agg(lambda x: str(x.dropna().iloc[-1]) if x.notna().any() else None)
-    won = pd.Series(np.nan, index=out.index)
+    snapshot_won = pd.Series(np.nan, index=out.index)
     if "up_won" in mk:
         w = mk.dropna(subset=["up_won"]).groupby("market_id")["up_won"].last()
-        won.loc[w.index.intersection(won.index)] = w
-    if not rs.empty:  # resolution records: take whatever column says who won
+        snapshot_won.loc[w.index.intersection(snapshot_won.index)] = w
+    out["snapshot_up_won"] = snapshot_won
+    out["settlement_conflict"] = False
+    out["resolution_source_conflict"] = False
+    won = snapshot_won.copy()
+    if not rs.empty:  # latest resolution revision is authoritative; conflicts remain explicit
         rs = rs.copy()
         key = next((c for c in ("market_id", "condition_id", "slug") if c in rs), None)
         col = next((c for c in ("up_won", "outcome_direction", "winner", "winning_outcome") if c in rs), None)
-        if key == "market_id" and col:
-            rs[col] = rs[col].map(lambda x: (x[0] if len(x) else None) if isinstance(x, (list, tuple, np.ndarray)) else x)
-            v = rs.dropna(subset=[col]).groupby(rs["market_id"].astype(str))[col].last()
-            v = v.map(lambda x: 1.0 if str(x).lower() in ("1", "1.0", "up", "true") else
-                      0.0 if str(x).lower() in ("0", "0.0", "-1", "-1.0", "down", "false") else np.nan)
-            fill = won.isna() & won.index.isin(v.index)
-            won.loc[fill] = v.reindex(won.index[fill]).to_numpy()
+        if key == "market_id":
+            rs["market_id"] = rs["market_id"].astype(str)
+            order = [c for c in ("revision", "emitted_at_ts", "resolution_ts") if c in rs]
+            latest = rs.sort_values(order, kind="stable") if order else rs
+            latest = latest.drop_duplicates("market_id", keep="last").set_index("market_id")
+            if col:
+                authority = latest[col].map(
+                    lambda x: (x[0] if len(x) else None)
+                    if isinstance(x, (list, tuple, np.ndarray)) else x
+                )
+                authority = authority.map(
+                    lambda x: 1.0 if str(x).lower() in ("1", "1.0", "up", "true") else
+                    0.0 if str(x).lower() in ("0", "0.0", "-1", "-1.0", "down", "false") else np.nan
+                ).reindex(out.index)
+                conflict = authority.notna() & snapshot_won.notna() & (authority != snapshot_won)
+                out["settlement_conflict"] = conflict
+                won = authority.combine_first(snapshot_won)
+            for c in (
+                "resolution_price_source", "oracle_source", "open_boundary_source",
+                "close_boundary_source", "open_boundary_fallback_used",
+                "close_boundary_fallback_used", "usable_for_backtest", "consistency_check",
+            ):
+                if c in latest:
+                    out[f"resolution_{c}" if c in out else c] = latest[c].reindex(out.index)
+            rs_source_columns = [
+                c for c in ("resolution_price_source", "oracle_source") if c in latest
+            ]
+            if rs_source_columns:
+                rs_source = latest[rs_source_columns].bfill(axis=1).iloc[:, 0].reindex(out.index)
+                old_source = out["resolution_source"].copy()
+                out["resolution_source_conflict"] = (
+                    rs_source.notna() & old_source.notna()
+                    & (rs_source.astype(str).str.rstrip("/").str.lower()
+                       != old_source.astype(str).str.rstrip("/").str.lower())
+                )
+                out["resolution_source"] = rs_source.combine_first(old_source)
+                out["resolution_source_basis"] = np.where(
+                    rs_source.notna(), "resolution_record", out["resolution_source_basis"]
+                )
+            if "revision" in latest:
+                out["resolution_revision"] = latest["revision"].reindex(out.index)
+            if "emitted_at_ts" in latest:
+                out["resolution_emitted_at_ts"] = latest["emitted_at_ts"].reindex(out.index)
     out["up_won"] = won
     out["horizon"] = ((out["end"] - out["start"]) / 60000).round().astype("Int64")
     return out.reset_index()
@@ -2506,6 +2595,7 @@ def main(argv=None):
                           ("makers", "real/cross-makers.md"), ("gated", "real/cross-gated.md"),
                           ("openmis", "real/cross-open.md"), ("hourly", "real/cross-hourly.md"),
                           ("fade", "real/cross-fade.md"), ("follow", "real/cross-follow.md"),
+                          ("boxbatch", "real/cross-box-batch.md"),
                           ("cancel", "real/cross-cancel-lead.md"),
                           ("jitter", "real/cross-jitter.md"), ("zoo", "real/cross-zoo100.md"),
                           ("leadlag", "real/cross-leadlag-eth.md"), ("jump2s", "real/cross-jump2s.md"),
@@ -2570,6 +2660,9 @@ def main(argv=None):
         fadefollow(a.cmd, a.workdir, a.out, a.days)
     elif a.cmd == "cancel":
         cancel_lead(a.workdir, a.out, a.days)
+    elif a.cmd == "boxbatch":
+        import cross_box_batch
+        cross_box_batch.run(a.workdir, a.out, a.days, dataset=a.dataset)
     elif a.cmd == "jump2s":
         import jump2s_hf
         jump2s_hf.run(a.workdir, a.out, a.days, dataset=DS)  # JUMP2S.md; as a script this module is not `cross`
