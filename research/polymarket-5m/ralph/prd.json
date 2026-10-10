@@ -376,6 +376,25 @@
       "priority": 14,
       "passes": true,
       "notes": "This is economic family 22. The exact digital-option transform holds settlement distance fixed and isolates only the direct vega channel under a one-for-one proportional mapping from 30-day DVOL to the binary's remaining volatility; the analytic supremum prevents a favourable starting-price choice from hiding a larger move. All 72 hourly gzip inputs passed integrity checks, and the receipt-causal audit read 258,899 DVOL points spanning the closed 2026-10-07 through 2026-10-09 interval. Maximum possible binary-probability displacement was 0.00677 cents at 1 second, 0.02003 cents at 5 seconds, 0.02671 cents at 10 seconds, 0.07340 cents at 30 seconds, 0.11340 cents at 60 seconds, 0.16658 cents at 120 seconds and 0.34862 cents at 300 seconds. Even the five-minute maximum is only 0.349 of a one-cent quote tick before spread or taker fee, so this direct proportional DVOL-shock repricing order cannot be expressed on the market. The family is rejected structurally without consuming CLOB holdout capacity or receiving production authority; an amplified short-dated-volatility transmission would be a separate hypothesis, while hourly DVOL-minus-realised-volatility remains only an already-tested regime feature."
+    },
+    {
+      "id": "US-022",
+      "title": "Reject synchronized cross-venue BTC OI exhaustion",
+      "description": "As the account owner, I want synchronized BTC perpetual open-interest contraction tested as a deleveraging-exhaustion reversal signal on directly executable Polymarket books.",
+      "acceptanceCriteria": [
+        "Normalize only relative OI changes from Deribit BTC-PERPETUAL USD contracts, OKX BTC-USDT-SWAP coin OI and Bybit BTCUSDT OI while retaining each venue's native level unit",
+        "Order all source and CLOB events by local receipt time, require explicit source lifecycles and full direct-token book snapshots, and use venue timestamps only for audit",
+        "Freeze the first signal per market during 240 to 20 seconds remaining when at least two venues lose 5 basis points of OI over a strict trailing ten seconds and Binance index price moves at least one basis point",
+        "Buy the opposite side of the price move, freeze a direct five-share limit, and replay at 400 and 500 milliseconds with real taker fees and hold-to-settlement PnL",
+        "Report a matched same-direction control and a parent-linked five-second delayed reversal under identical execution semantics",
+        "Reject on closed development data when the treatment is sparse and negative; do not tune thresholds or spend a fresh holdout",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "This is economic family 23. The frozen rule used a strict pre-window baseline and required two of Deribit, OKX and Bybit BTC perpetual OI series to fall at least 5 basis points over ten receipt-clock seconds while Binance index price moved at least 1 basis point. Fourteen valid 2026-10-09 UTC development hours contained 168 target five-minute windows, of which 158 had uninterrupted four-source coverage throughout the 240-to-20-second decision interval; the corrupt 14:00-15:00 CLOB gzip was excluded as an unavailable gap rather than a negative interval. Four covered markets signalled. Three base reversals had five-share decision depth, two fully filled at both 400 and 500 milliseconds, both lost, and net PnL was -$0.37349 or -3.7349 cents per share. One additional base was blocked above its frozen limit and one intent lacked five-share decision depth. The same-direction control filled 3/3 for +$0.01965 or +0.1310 cents per share, while the five-second reversal filled 2/3 and lost -3.2030 cents per share; neither tiny control sample is evidence of alpha. This exact rule is rejected from further allocation for sparse capacity plus negative development fills, not as statistical proof that all OI signals lack alpha; no threshold was tuned and no fresh holdout or production authority was used."
     }
   ]
 }

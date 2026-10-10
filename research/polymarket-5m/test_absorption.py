@@ -290,6 +290,62 @@ def test_adapter_preserves_trade_receipt_order_and_rejects_equal_receipts(tmp_pa
         list(absorption.iter_raw_clob_events([path], segment_end_ms=1_001.0))
 
 
+def test_adapter_can_seed_a_segment_carryover_only_from_a_full_snapshot(tmp_path: Path):
+    path = tmp_path / "poly_clob.20261010T00.jsonl.gz"
+    rows = [
+        {"rn": 1_000_000_000, "c": -1, "k": "meta", "m": {
+            "meta": f"btc-updown-5m-{SLOT}", "cid": MARKET,
+            "tokens": json.dumps([UP, DOWN]), "outcomes": json.dumps(["Up", "Down"]),
+        }},
+        {"rn": 1_000_000_001, "c": 3, "e": 8, "s": 500, "k": "message", "m": {
+            "event_type": "price_change", "market": MARKET, "timestamp": "999",
+            "price_changes": [{"asset_id": UP, "side": "SELL", "price": "0.50", "size": "8"}],
+        }},
+        {"rn": 1_000_000_002, "c": 3, "e": 8, "s": 501, "k": "message", "m": {
+            "event_type": "book", "asset_id": UP, "market": MARKET, "timestamp": "1000",
+            "bids": [{"price": "0.49", "size": "5"}],
+            "asks": [{"price": "0.50", "size": "8"}],
+        }},
+    ]
+    with gzip.open(path, "wt") as stream:
+        for row in rows:
+            stream.write(json.dumps(row) + "\n")
+
+    events = list(absorption.iter_raw_clob_events(
+        [path], segment_end_ms=1_001.0, allow_leading_carryover=True,
+    ))
+
+    assert [event["kind"] for event in events] == [
+        "market", "connection", "price_change", "snapshot", "disconnect",
+    ]
+    assert events[1]["reason"] == "segment_carryover"
+    assert events[2]["epoch"] == events[3]["epoch"] == 1
+
+
+def test_segment_disconnect_never_precedes_a_rotation_spill_frame(tmp_path: Path):
+    path = tmp_path / "poly_clob.20261010T00.jsonl.gz"
+    rows = [
+        {"rn": 1_000_000_000, "c": -1, "k": "meta", "m": {
+            "meta": f"btc-updown-5m-{SLOT}", "cid": MARKET,
+            "tokens": json.dumps([UP, DOWN]), "outcomes": json.dumps(["Up", "Down"]),
+        }},
+        {"rn": 1_000_000_001, "c": 0, "e": 7, "s": 0, "k": "connection"},
+        {"rn": 1_001_001_000, "c": 0, "e": 7, "s": 1, "k": "message", "m": {
+            "event_type": "book", "asset_id": UP, "market": MARKET, "timestamp": "1001",
+            "bids": [{"price": "0.49", "size": "5"}],
+            "asks": [{"price": "0.50", "size": "8"}],
+        }},
+    ]
+    with gzip.open(path, "wt") as stream:
+        for row in rows:
+            stream.write(json.dumps(row) + "\n")
+
+    events = list(absorption.iter_raw_clob_events([path], segment_end_ms=1_001.0))
+
+    assert events[-1]["kind"] == "disconnect"
+    assert events[-1]["recv_ms"] > events[-2]["recv_ms"]
+
+
 def test_same_frame_dual_snapshot_is_atomic_but_trade_quote_mix_is_ambiguous():
     markets = {MARKET: {"market_id": MARKET}}
     tokens = {UP: MARKET, DOWN: MARKET}

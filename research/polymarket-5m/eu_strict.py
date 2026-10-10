@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pm_outcomes
 
 try:
     import orjson
@@ -107,6 +106,8 @@ def _known_irrelevant_frame(role: str, raw: str | bytes) -> bool:
     encoded = raw.encode() if isinstance(raw, str) else raw
     if b'"_recorder"' in encoded:
         return False
+    if role == "okx_oi":
+        return encoded.strip() in {b"ping", b"pong"}
     if role == "spot":
         relevant = b"@trade" in encoded or b'"e":"trade"' in encoded or b'"e": "trade"' in encoded
         irrelevant = b"@bookTicker" in encoded or b"@depth20" in encoded
@@ -152,7 +153,12 @@ def _iter_route(
                 if _known_irrelevant_frame(role, raw):
                     stats["skipped_irrelevant_frames"] += 1
                     continue
-                payload = _loads(raw)
+                try:
+                    payload = _loads(raw)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"{path.name}:{line_number}: invalid JSON frame"
+                    ) from exc
                 if not isinstance(payload, dict):
                     raise TypeError(f"{path.name}:{line_number}: frame is not an object")
                 yield receive_ns, route, payload
@@ -597,6 +603,8 @@ def iter_clob_events(paths: Iterable[Path], segment_end_ms: float):
 
 
 def fetch_official_outcomes(markets: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    import pm_outcomes
+
     by_slug = {str(market["slug"]): market for market in markets.values()}
     output = {}
     slugs = sorted(by_slug)

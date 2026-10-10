@@ -250,14 +250,22 @@ def iter_raw_clob_events(
     segment_end_ms: float,
     *,
     preserve_input_order: bool = False,
+    allow_leading_carryover: bool = False,
 ) -> Iterator[dict[str, Any]]:
-    """Yield direct-CLOB lifecycle, L2 and trade events in strict local receipt order."""
+    """Yield direct-CLOB lifecycle, L2 and trade events in strict local receipt order.
+
+    ``allow_leading_carryover`` is only for a recording segment cut while a
+    socket was already connected.  It seeds physical sequence tracking from
+    the first received frame; books remain unusable until a full snapshot is
+    observed, so leading deltas cannot manufacture depth.
+    """
     markets: dict[str, dict[str, Any]] = {}
     tokens: dict[str, str] = {}
     active: set[tuple[int, int]] = set()
     physical_sequence: dict[tuple[int, int], int] = {}
     logical_epoch = 0
     last_receive_ns = -1
+    accepting_carryover = allow_leading_carryover
     ordered_paths = tuple(Path(item) for item in paths)
     if not preserve_input_order:
         ordered_paths = tuple(sorted(ordered_paths))
@@ -303,14 +311,28 @@ def iter_raw_clob_events(
                 continue
             if kind not in {"connection", "disconnect", "message"}:
                 continue
-            if logical_epoch == 0 and kind != "connection":
+            if logical_epoch == 0 and kind != "connection" and not accepting_carryover:
                 continue
             try:
                 connection = (int(row["c"]), int(row["e"]))
                 physical = int(row["s"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(f"{path.name}:{line_number}: missing CLOB lifecycle") from exc
-            if kind != "connection" and connection not in active:
+            if kind in {"connection", "disconnect"}:
+                accepting_carryover = False
+            if kind == "message" and connection not in active and accepting_carryover:
+                was_empty = not active
+                active.add(connection)
+                physical_sequence[connection] = physical - 1
+                if was_empty:
+                    logical_epoch += 1
+                    yield {
+                        "kind": "connection",
+                        "recv_ms": receive_ms,
+                        "epoch": logical_epoch,
+                        "reason": "segment_carryover",
+                    }
+            elif kind != "connection" and connection not in active:
                 continue
             previous = physical_sequence.get(connection, -1)
             if physical != previous + 1:
@@ -345,9 +367,13 @@ def iter_raw_clob_events(
                 tokens=tokens,
             )
     if active and last_receive_ns >= 0:
+        disconnect_ms = max(
+            segment_end_ms - 0.001,
+            last_receive_ns / 1e6 + 0.001,
+        )
         yield {
             "kind": "disconnect",
-            "recv_ms": segment_end_ms - 0.001,
+            "recv_ms": disconnect_ms,
             "epoch": logical_epoch,
             "reason": "segment_boundary",
         }
