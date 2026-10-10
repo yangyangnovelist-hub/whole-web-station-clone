@@ -114,3 +114,28 @@ Identical fill signatures reveal exact duplicates; distinct signatures do not
 establish distinct economic mechanisms. Missing/no-fill rows remain explicitly
 ineligible, and every registered candidate stays in the reported denominator.
 Keep the existing frozen confirmation commit pinned when adding this module.
+
+## One shared cash account
+
+`mine500_shared_portfolio.py` combines complete attempt ledgers without replaying
+or changing their signals. A plan must pin input and catalog hashes, panel IDs,
+latencies, sizes, extra costs and the global market policy before the combined
+PnL is computed. The output inherits the input split and can never promote
+development attempts to OOS.
+
+The conservative default consumes each market at its earliest panel signal.
+The candidate ID breaks exact-time ties. Later signals are suppressed even if
+the first order is rejected or unfilled. Opposite sides are not stacked or
+netted. Thus displayed depth is used at most once per market and strategy PnLs
+are never added. At an equal timestamp, a new decision is processed before a
+match releases reservation and before a settlement payout releases capital.
+
+The engine rebuilds reservation, match cost, settlement reuse, minimum
+available cash and realized drawdown on one account. Extra costs apply only to
+filled shares and are reserved against the requested size. Results report
+suppressed signals, opposite-side conflicts and shared-cash rejections.
+Selection methods must state whether outcomes/PnL were used. A coverage-selected
+panel is an engineering baseline; a development-winner panel is explicitly
+post-hoc. Neither establishes multiple independent mechanisms, real queue fills,
+or a deployable portfolio. Future confirmation requires a separately frozen
+plan and untouched inputs; it must not rewrite the existing candidate protocol.
