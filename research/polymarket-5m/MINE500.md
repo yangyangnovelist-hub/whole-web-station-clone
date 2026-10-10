@@ -91,6 +91,24 @@ Keep private tapes, order ledgers, research results, download links and artifact
 identifiers out of this public repository. Persist them separately with source
 commit and content hashes so the research can be resumed.
 
+## Future source-field contract
+
+`mine500_source_contract.py` is a code-only gate for later recordings; it does
+not alter the frozen October evaluator or its confirmation protocol. External
+trade direction is accepted only from an explicit provider field
+(`aggressor_side`, documented trade `side`, or buyer-is-maker boolean).
+Conflicts fail closed and missing direction remains missing, so price ticks and
+book changes can never manufacture 15/60-second signed-flow features.
+
+The contract preserves source-event and local-receipt clocks but orders and
+cuts features only by local receipt. It also accepts settlement-tail samples
+only when the record explicitly identifies Chainlink Data Streams, BTC/USD,
+an exact 60-second window, both boundaries, both clocks, sequence, and raw
+provenance. Binance OHLC is not an admissible substitute. These checks make the
+220 currently blocked variants executable only after a future recorder really
+captures the missing fields; they do not turn the existing archive's nulls into
+data and do not create new OOS evidence.
+
 ## Fixed-ledger missed-fill sensitivity
 
 `mine500_fragility.py --inputs /private/size5/replay.json
