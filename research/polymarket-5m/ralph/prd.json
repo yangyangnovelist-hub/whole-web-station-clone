@@ -470,6 +470,23 @@
       "priority": 19,
       "passes": true,
       "notes": "Family 27 is complete and rejected. The external-hedge implementation reuses the public MIT polybot-market-maker structure but replaces its European-digital delta and fill assumptions with the project's Asian-TWAP model, exact public-CLOB queue-inferred maker-fill clocks and receipt-causal Binance perpetual BBO execution. Five closed pre-cutoff hours produced 55 quote cycles, 51 resolved cycles and 18 maker-filled cycles totalling 153.87 shares; the unchanged Polymarket legs lost $2.76540 (-1.7972 cents per filled share). Under the primary 200 millisecond and 5 basis-point perpetual-taker arm, one inferred maker fill correctly failed closed because no fresh causal spot state existed, so the strict all-cycle aggregate is invalid rather than imputed. The remaining valid 143.87 shares lost $55.27079 combined (-38.4172 cents per share) across 44 perpetual fills and $71.79216 of taker fees, while requiring peak exposure of 0.202319 BTC or $16,698.92. Reducing latency to 100 or 150 milliseconds still lost $55.49886 (-38.5757 cents per valid share); reducing fees to 4 basis points at 200 milliseconds still lost $42.42821 (-29.4907 cents per valid share). One hour was profitable, but latency did not rescue the five-hour economics. All 42 inferred fill events retain exact receipt nanoseconds, observed order and the public_clob_trade_queue_inference label. No fresh holdout or production path was used."
+    },
+    {
+      "id": "US-027",
+      "title": "Audit single-sided partial-cancel lead",
+      "description": "As the account owner, I want to know whether a fast Polymarket maker partially pulling only one side reveals the next BTC jump early enough to buy the slow remainder profitably.",
+      "acceptanceCriteria": [
+        "Treat the observation as a public 100 millisecond snapshot withdrawal rather than a private cancel acknowledgement: the best ask must be unchanged, at least five shares must disappear, no more than half the original size may remain, at least five shares must remain, and the opposite ask must not show the same withdrawal",
+        "Exclude a withdrawal explained by a received taker buy and allow only one signal per market within two seconds; Binance may label a later two-sigma jump but may not create or price the order",
+        "Freeze the FAK limit to the post-withdrawal displayed ask and replay 170, 200, 250, 300 and 400 millisecond signal-to-match horizons with displayed five-share depth and the historical crypto taker fee",
+        "Keep the 2026-05-25 through 2026-07-15 discovery period, 2026-07-16 through 2026-08-16 confirmation period and 2026-08-17 through 2026-08-29 locked period separate; admit no fresh forward test unless 200 millisecond EV is positive in both later periods",
+        "Report signal count, later-jump coverage and direction, first executable fill per market, fill rate, net EV per share and exact fair-price p value; do not interpret snapshot persistence as a guaranteed live FAK fill",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass"
+      ],
+      "priority": 20,
+      "passes": true,
+      "notes": "Family 28 is complete and rejected using the already-finished 67-day full-data workflow rather than rebuilding the mechanism. The immutable CSV contains 632,304 public-snapshot withdrawal signals across 15,302 markets and 66 days. Withdrawals genuinely preceded a same-direction two-sigma Binance move more often than chance when such a move appeared within 500 milliseconds: 85.8% of 14,954 labelled discovery signals, 70.0% of 619 confirmation signals and 83.3% of 4,238 locked signals, with median same-direction leads of 185, 197 and 216 milliseconds. That predictive fact did not create executable profit. At the primary 200 millisecond horizon, only the first executable signal per market was retained: 11,839 discovery fills lost 0.3715 cents per share, 919 confirmation fills lost 0.7440 cents and 2,504 locked fills lost 1.1929 cents; every exact profit p value was 1.0. Results worsened at 250-400 milliseconds and were already negative at 170 milliseconds. Therefore fast makers do reveal some upcoming jumps, but the remaining displayed quote is adversely selected or repriced before it can be captured. The negative result does not require spending direct-L2 forward data and receives no production access."
     }
   ]
 }
