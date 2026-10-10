@@ -339,6 +339,25 @@
       "priority": 12,
       "passes": true,
       "notes": "This is economic family 20 and is independent of US-018 because displayed depth must remain above half rather than deplete and refill. A causal closed-hour audit produced 10 first-window signals. At both 400 and 500 milliseconds, 9/10 entries fully filled and lost $2.35443 total, or 5.2321 cents per share. The parent-linked direction-reversal control had eight full fills and lost $0.88357, or 2.2089 cents per share; the five-second time shift had seven full fills and lost $1.78488, or 5.0997 cents per share. The treatment was worse than reversal and remained strongly negative at both latencies, so this family is rejected in development and receives no formal forward allocation or production authority."
+    },
+    {
+      "id": "US-020",
+      "title": "Reject sampled non-BTC liquidation-breadth contagion",
+      "description": "As the account owner, I want broad forced selling across non-BTC perpetuals tested as a collateral-contagion signal for BTC five-minute markets, without confusing Binance's lossy liquidation snapshots with a complete tape.",
+      "acceptanceCriteria": [
+        "Parse only the all-market Binance force-order route by local receipt time, retain source timestamps for audit only, accept USD-M product type one, exclude BTC and non-USDT symbols, and explicitly audit legacy nested product-type fields",
+        "Treat the feed as at most the latest forced order per symbol per 1000 milliseconds; count each symbol at most once per decision window and never describe sampled cumulative filled notional as exhaustive liquidation volume",
+        "Freeze the first market signal during 240 to 20 seconds remaining when a trailing one-second window contains at least four distinct forced-SELL symbols, at least $1000 sampled notional and at least two-thirds SELL sampled notional",
+        "Buy only directly quoted Down, freeze the five-share worst ask at decision time, and replay unchanged FAK limits at 400 and 500 milliseconds with direct depth, taker fees, lifecycle checks and hold-to-settlement PnL",
+        "Report parent-linked direction reversal and five-second delay controls plus a disjoint forced-BUY cohort under the same executable semantics",
+        "Use only consumed development data to reject a negative treatment; promote no opposite arm unless it is frozen first and independently clears the exact fair-price test on a future untouched sample",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "This is economic family 21. Binance's force-order feed is a lossy latest-per-symbol one-second snapshot, so the implementation preserves integer receipt time, keeps E/T audit-only, uses only the latest observation per symbol and labels z*ap as sampled cumulative filled notional. A 15-hour closed development replay, consumed before any Family 21 freeze, produced 45 first-market SELL-breadth intents. At 400 milliseconds, 34/45 fully filled and lost $3.39623, or -1.9978 cents per share; at 500 milliseconds the same 34 fills lost $3.34500, or -1.9676 cents per share. The five-second Down arm lost 7.8198 cents per share. The forced-BUY Up cohort was approximately flat at -0.1200/-0.0546 cents per share. Buying Up at the original SELL decision earned 3.0793/3.0452 cents per share across 31 fills, but exact fair-price p values were 0.4147/0.4166 on one UTC day, so this adaptive exhaustion interpretation is not evidence and was not promoted. Base source-event age was 103.53 milliseconds median while trade age was 1109.28 milliseconds median, confirming this stream is a delayed regime indicator rather than a speed feed. The original contagion treatment is rejected without a formal holdout or production authority."
     }
   ]
 }
