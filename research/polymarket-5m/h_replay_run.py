@@ -287,6 +287,18 @@ class TimestampedFirstTrigger:
             clamp_regressed=False,
         )
 
+    def reset_source(self, source: str) -> None:
+        """Drop one non-spot source history after a receipt gap.
+
+        Spot owns the shared sigma grid and is reset by replacing the whole trigger.  External
+        sources have independent one-second return histories, so retaining them across a socket
+        gap could manufacture a move and must fail closed.
+        """
+        if source == "spot_trade":
+            raise ValueError("reset the whole trigger after a spot gap")
+        self.source_timestamps[source] = []
+        self.source_log_prices[source] = []
+
 @dataclass
 class TokenBook:
     bids: dict[float, float] = field(default_factory=dict)

@@ -63,6 +63,8 @@ def _sell_direct(
     book: TokenBook,
     shares: float,
     fee_rate: float,
+    *,
+    minimum_price: float = 0.0,
 ) -> tuple[str, float, float | None, float, float, tuple[tuple[float, float], ...]]:
     if not book.ready:
         return "book_unavailable", 0.0, None, 0.0, 0.0, ()
@@ -70,6 +72,8 @@ def _sell_direct(
     levels: list[tuple[float, float]] = []
     notional = 0.0
     for price, available in sorted(book.bids.items(), reverse=True):
+        if price < minimum_price - _EPS:
+            break
         take = min(remaining, available)
         if take <= 0:
             continue
@@ -80,7 +84,8 @@ def _sell_direct(
             break
     sold = shares - remaining
     if sold <= _EPS:
-        return "no_direct_bid", 0.0, None, 0.0, 0.0, ()
+        reason = "bid_below_frozen_limit" if book.bids else "no_direct_bid"
+        return reason, 0.0, None, 0.0, 0.0, ()
     reason = "filled" if remaining <= _EPS else "partial_fill"
     return (
         reason,

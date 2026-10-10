@@ -395,6 +395,62 @@
       "priority": 15,
       "passes": true,
       "notes": "This is economic family 23. The frozen rule used a strict pre-window baseline and required two of Deribit, OKX and Bybit BTC perpetual OI series to fall at least 5 basis points over ten receipt-clock seconds while Binance index price moved at least 1 basis point. Fourteen valid 2026-10-09 UTC development hours contained 168 target five-minute windows, of which 158 had uninterrupted four-source coverage throughout the 240-to-20-second decision interval; the corrupt 14:00-15:00 CLOB gzip was excluded as an unavailable gap rather than a negative interval. Four covered markets signalled. Three base reversals had five-share decision depth, two fully filled at both 400 and 500 milliseconds, both lost, and net PnL was -$0.37349 or -3.7349 cents per share. One additional base was blocked above its frozen limit and one intent lacked five-share decision depth. The same-direction control filled 3/3 for +$0.01965 or +0.1310 cents per share, while the five-second reversal filled 2/3 and lost -3.2030 cents per share; neither tiny control sample is evidence of alpha. This exact rule is rejected from further allocation for sparse capacity plus negative development fills, not as statistical proof that all OI signals lack alpha; no threshold was tuned and no fresh holdout or production authority was used."
+    },
+    {
+      "id": "US-023",
+      "title": "Test protected complementary maker pairs",
+      "description": "As the account owner, I want complementary Up and Down maker bids tested as a complete-set capture whose toxic one-leg risk is reduced by the venue's taker delay and the earlier Binance-perpetual or Deribit warning feeds.",
+      "acceptanceCriteria": [
+        "Place one five-share post-only Up/Down pair per market from the first healthy direct dual-token book during 240 to 30 seconds remaining, use the received best bids, and require their sum to be at most 0.98",
+        "Model a frozen 30 millisecond placement path with 60 milliseconds as sensitivity, strict price-time priority, displayed same-price queue ahead, no cancellation credit and fills only from receipt-ordered directly observed sell aggression",
+        "Cancel both quotes on the first frozen receipt-clock current-H source-race warning with Deribit requiring three sigma; model 30 and 60 millisecond cancel paths, exact-time ties as fills, a no-cancel control and a five-second delayed-cancel placebo",
+        "After any fill, cancel the risk-increasing remainder and retain only the opposite quantity needed to hedge current inventory; after one leg fills completely, improve that hedge only up to the price preserving at least two cents of complete-set edge",
+        "Charge zero maker fee in the base case, report the maker-rebate pool only as an upper-bound sensitivity, and compute paired locked PnL plus outcome-dependent residual inventory PnL without treating displayed depth as guaranteed execution",
+        "Fail closed on disconnect, missing full snapshots, crossed or stale books, equal-receipt ambiguity and source-health gaps; use local receipt order and keep venue timestamps audit-only",
+        "Use closed pre-cutoff hours only for development rejection; promote a positive mechanism only under a preregistered future sample with at least seven UTC days, 1000 completed pairs, positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted p below 0.01",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": "This is economic family 24. It adapts the reservation-price and complementary-quote structure of the MIT-licensed poly-maker project but replaces its fill assumptions with direct receipt-ordered CLOB lifecycle and official settlement scoring. Adversarial review corrected four outcome-relevant issues before the result was accepted: receipt timestamps are atomic, warnings during placement are honored, partial inventory cancels its risk-increasing remainder, and connection-epoch changes fail closed. A documented SELL print is now required; a print through the quote is capped by its demonstrable size instead of filling the entire order, all known fills remain settlement-scored after a later taint, missing outcomes for filled rows fail the run, and all arms share identical market keys. Five closed pre-cutoff 2026-10-09 hours supplied 4,496 frozen current-H warnings and 55 quote cycles, with 51 resolved. The strict no-cancellation-credit 30 ms arm completed 14 full pairs for +$1.40, one partial pair for +$0.0386 and three one-leg cases for -$4.2040, leaving -$2.7654 total on 153.87 filled shares, or -1.7972 cents per share. Giving queue-ahead the full benefit of displayed same-price size reductions remained negative at -$2.8193. A 20 percent crypto maker-rebate sensitivity improved the strict result only to -$2.3177. Hourly PnL was +$0.2346, -$1.60, -$2.10, +$0.30 and +$0.40. Sixty-millisecond placement lost $2.8654, five-second delayed cancellation lost $20.1986, and no cancellation lost $33.1256; fast warnings therefore improved aggregate PnL by $30.3602 but did not make hold-to-settlement residual inventory positive. All 74,144 observed trade identities were unique. A later clock audit found one warning received 89 nanoseconds before a CLOB change that float milliseconds had collapsed into a false tie. Exact integer receipt ordering removed that taint, but the retained opposite maker order still did not fill and the aggregate PnL was unchanged. The standalone mechanism is rejected in development without spending a fresh holdout or granting production authority."
+    },
+    {
+      "id": "US-024",
+      "title": "Reject immediate taker rescue after a maker first leg",
+      "description": "As the account owner, I want the residual risk of a complementary maker pair tested with an immediate executable hedge or bounded unwind after the first five-share leg fills.",
+      "acceptanceCriteria": [
+        "After the first complete five-share maker leg, cancel both live maker orders before sending any rescue order and retain fills received during cancellation transit",
+        "For hedge rescue freeze the complementary taker limit that preserves the original two-cent post-fee complete-set edge; for unwind freeze the directly quoted best bid as a loss cap",
+        "Replay both rescue modes at 300 and 400 milliseconds against receipt-causal direct depth with exact taker fees and no over-hedging",
+        "Separate successful rescue PnL from failed rescue residual settlement PnL so a lucky naked outcome cannot be attributed to the rescue mechanism",
+        "Use only the same closed pre-cutoff five-hour development tape and do not promote a negative mechanism to a fresh holdout",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": "This is economic family 25. Sixteen first-leg exposures triggered each immediate rescue arm. The 300 and 400 millisecond complementary hedges filled zero times because every observed ask was already above the frozen profitable limit. Immediate unwind filled 13/16 at 300 milliseconds and 12/16 at 400 milliseconds. Every successful unwind lost money after spread and exact taker fee: the 300 millisecond rescued subset lost $1.97990 and the 400 millisecond subset lost $1.74529. Aggregate figures of +$1.75470 and +$0.08931 are invalid as rescue edge because they came entirely from three or four failed exits left naked into settlement; failed exits contributed +$3.70 and +$1.80 respectively. Immediate rescue also cancels maker hedges that otherwise completed 14 profitable pairs. The mechanism is rejected without a fresh holdout or production authority."
+    },
+    {
+      "id": "US-025",
+      "title": "Reject deadline taker rescue after retaining the maker hedge",
+      "description": "As the account owner, I want the opposite maker hedge retained through the market and only rescued at the frozen ten-second cancellation deadline, avoiding the opportunity destruction of immediate rescue.",
+      "acceptanceCriteria": [
+        "Keep the opposite maker order live after the first leg and preserve all normal repricing and early-warning protection until the existing ten-second cancellation deadline",
+        "At that deadline attempt either a complementary hedge or bounded unwind after a frozen 300 or 400 millisecond path, using direct five-share depth and exact taker fees",
+        "Preserve receipt timestamps as integer nanoseconds through adapters, source-event merging and replay ordering; never collapse cross-transport ordering into float milliseconds",
+        "Fail closed on stale, invalid, disconnected or ambiguous books and report every rescue block reason",
+        "Use only the same closed pre-cutoff five-hour development tape and do not spend a fresh holdout unless residual risk is actually reduced with positive net PnL",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": "This is economic family 26. Retaining the maker hedge preserved the Family 24 result: 14 full pairs, three residual one-leg cases and -$2.76540 total (-1.7972 cents per filled share). Two material residuals reached the deadline. Both 300 and 400 millisecond hedge attempts were blocked by stale or invalid direct books; unwind correctly refused to submit for the same reason, so no deadline rescue filled and PnL was unchanged. The high-resolution audit corrected one false equal-cross-transport taint: a warning arrived 89 nanoseconds before the CLOB price change, not simultaneously. Removing the false taint made the order lifecycle auditable but did not create an opposite fill; that five-share Down leg still settled for -$2.30, and its deadline book was stale. There were no unknown live orders or exposures. This exact deadline-rescue mechanism is rejected without a fresh holdout or production authority."
     }
   ]
 }

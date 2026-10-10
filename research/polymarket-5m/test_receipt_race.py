@@ -38,6 +38,25 @@ def test_timestamped_trigger_accepts_named_sources_without_changing_frozen_metho
     assert deribit is not None and deribit.direction == -1
 
 
+def test_external_source_gap_discards_the_pre_gap_return_anchor():
+    config = SignalConfig(
+        z0=1.0,
+        tau_hi_s=300.0,
+        tau_lo_s=0.0,
+        sigma_window_s=3,
+        sigma_min_observations=2,
+        forward_fill_s=1,
+    )
+    trigger = TimestampedFirstTrigger(config)
+    for timestamp_ms, price in ((0, 100.0), (1_000, 100.01), (2_000, 100.0), (3_000, 100.01)):
+        trigger.update_trade(timestamp_ms, price)
+    trigger.update_source("deribit_quote", 4_000, 100.0)
+
+    trigger.reset_source("deribit_quote")
+
+    assert trigger.update_source("deribit_quote", 5_100, 100.1) is None
+
+
 def test_extract_candidates_uses_receipt_order_and_exchange_source_clock():
     config = SignalConfig(
         z0=1.0,

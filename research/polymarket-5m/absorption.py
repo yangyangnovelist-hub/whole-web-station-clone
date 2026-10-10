@@ -142,10 +142,13 @@ def _normalized_messages(
     messages: Any,
     *,
     receive_ms: float,
+    receive_ns: int | None = None,
     epoch: int,
     markets: Mapping[str, Mapping[str, Any]],
     tokens: Mapping[str, str],
 ) -> list[dict[str, Any]]:
+    if receive_ns is None:
+        receive_ns = round(receive_ms * 1_000_000)
     raw_messages = messages if isinstance(messages, list) else [messages]
     normalized: list[dict[str, Any]] = []
     for message in raw_messages:
@@ -163,6 +166,7 @@ def _normalized_messages(
             normalized.append({
                 "kind": "snapshot",
                 "recv_ms": receive_ms,
+                "recv_ns": receive_ns,
                 "source_ts_ms": source_ms,
                 "epoch": epoch,
                 "market_id": market_id,
@@ -193,6 +197,7 @@ def _normalized_messages(
                 normalized.append({
                     "kind": "price_change",
                     "recv_ms": receive_ms,
+                    "recv_ns": receive_ns,
                     "source_ts_ms": source_ms,
                     "epoch": epoch,
                     "market_id": market_id,
@@ -218,6 +223,7 @@ def _normalized_messages(
             normalized.append({
                 "kind": "trade",
                 "recv_ms": receive_ms,
+                "recv_ns": receive_ns,
                 "source_ts_ms": source_ms,
                 "epoch": epoch,
                 "market_id": market_id,
@@ -225,6 +231,7 @@ def _normalized_messages(
                 "price": price,
                 "size": size,
                 "side": str(message.get("side") or "").upper(),
+                "transaction_hash": str(message.get("transaction_hash") or ""),
             })
     by_market: dict[str, list[dict[str, Any]]] = {}
     for event in normalized:
@@ -288,6 +295,7 @@ def iter_raw_clob_events(
                     yield {
                         "kind": "market",
                         "recv_ms": receive_ms,
+                        "recv_ns": receive_ns,
                         "market_id": market_id,
                         "slot": int(market["start_ts"]),
                         "up_token_id": str(market["up_token_id"]),
@@ -305,6 +313,7 @@ def iter_raw_clob_events(
                     yield {
                         "kind": "disconnect",
                         "recv_ms": receive_ms,
+                        "recv_ns": receive_ns,
                         "epoch": logical_epoch,
                         "reason": "recorder_error",
                     }
@@ -329,6 +338,7 @@ def iter_raw_clob_events(
                     yield {
                         "kind": "connection",
                         "recv_ms": receive_ms,
+                        "recv_ns": receive_ns,
                         "epoch": logical_epoch,
                         "reason": "segment_carryover",
                     }
@@ -346,6 +356,7 @@ def iter_raw_clob_events(
                     yield {
                         "kind": "connection",
                         "recv_ms": receive_ms,
+                        "recv_ns": receive_ns,
                         "epoch": logical_epoch,
                     }
                 continue
@@ -355,6 +366,7 @@ def iter_raw_clob_events(
                     yield {
                         "kind": "disconnect",
                         "recv_ms": receive_ms,
+                        "recv_ns": receive_ns,
                         "epoch": logical_epoch,
                         "reason": "all_warm_connections_closed",
                     }
@@ -362,6 +374,7 @@ def iter_raw_clob_events(
             yield from _normalized_messages(
                 row.get("m"),
                 receive_ms=receive_ms,
+                receive_ns=receive_ns,
                 epoch=logical_epoch,
                 markets=markets,
                 tokens=tokens,
@@ -374,6 +387,7 @@ def iter_raw_clob_events(
         yield {
             "kind": "disconnect",
             "recv_ms": disconnect_ms,
+            "recv_ns": round(disconnect_ms * 1_000_000),
             "epoch": logical_epoch,
             "reason": "segment_boundary",
         }

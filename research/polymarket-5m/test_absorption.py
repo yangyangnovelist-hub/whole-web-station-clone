@@ -265,6 +265,7 @@ def test_adapter_preserves_trade_receipt_order_and_rejects_equal_receipts(tmp_pa
         {"rn": 1_000_000_005, "c": 0, "e": 7, "s": 2, "k": "message", "m": {
             "event_type": "last_trade_price", "asset_id": UP, "market": MARKET,
             "timestamp": "1000", "price": "0.50", "size": "5.76", "side": "BUY",
+            "transaction_hash": "0xtrade",
         }},
         {"rn": 1_000_000_006, "c": 0, "e": 7, "s": 3, "k": "disconnect"},
     ]
@@ -281,6 +282,7 @@ def test_adapter_preserves_trade_receipt_order_and_rejects_equal_receipts(tmp_pa
     assert events[3]["source_ts_ms"] == 1_000.0
     assert events[3]["size"] == 5.76
     assert events[3]["side"] == "BUY"
+    assert events[3]["transaction_hash"] == "0xtrade"
 
     rows[5]["rn"] = rows[4]["rn"]
     with gzip.open(path, "wt") as stream:
@@ -320,6 +322,8 @@ def test_adapter_can_seed_a_segment_carryover_only_from_a_full_snapshot(tmp_path
     ]
     assert events[1]["reason"] == "segment_carryover"
     assert events[2]["epoch"] == events[3]["epoch"] == 1
+    assert events[2]["recv_ns"] == 1_000_000_001
+    assert events[3]["recv_ns"] == 1_000_000_002
 
 
 def test_segment_disconnect_never_precedes_a_rotation_spill_frame(tmp_path: Path):
