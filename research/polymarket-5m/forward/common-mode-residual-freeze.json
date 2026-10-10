@@ -1,0 +1,103 @@
+{
+  "schema": "common-mode-residual-protocol-v1",
+  "strategy_id": "BTC-BINANCE-COMMON-MODE-RESIDUAL-FADE-V1",
+  "created_at": "2026-10-10T02:14:42Z",
+  "holdout_start": "2026-10-11T00:00:00Z",
+  "holdout_start_ms": 1791676800000,
+  "collector_region": "eu-west-1",
+  "paper_only": true,
+  "hypothesis": "When Binance spot and perpetual move together without changing their basis, Deribit BTC-PERPETUAL and the Deribit BTCUSD index distinguish a broad BTC move from a Binance-common-mode move. If Polymarket follows the latter while the full received Deribit benchmark path stays quiet, buy the directly quoted opposite token only when the pre-impact complementary fair value leaves at least three cents after fee.",
+  "signal": {
+    "symbol": "BTC",
+    "common_move_window_ms": 500.0,
+    "benchmark_confirmation_timeout_ms": 1500.0,
+    "maximum_source_age_ms": 500.0,
+    "minimum_same_sign_spot_and_perpetual_move_bp": 1.5,
+    "maximum_absolute_basis_change_bp": 0.5,
+    "maximum_absolute_deribit_quote_and_index_path_move_bp": 0.5,
+    "minimum_polymarket_follow_move": 0.02,
+    "maximum_polymarket_direction_spread": 0.05,
+    "minimum_polymarket_direction_top_depth": 5.0,
+    "remaining_seconds": [
+      30.0,
+      240.0
+    ],
+    "first_qualifying_crossing_attempt_is_immutable": true,
+    "failed_or_censored_first_attempt_cannot_be_replaced": true,
+    "exact_us015_exclusion": "run the frozen US-015 detector independently per market on the same receipt-ordered tape and permanently reject a market as soon as its PM-book-anchored immutable wedge candidate is captured, before waiting for later source confirmation or signal emission",
+    "deribit_quote_and_index_require_strictly_post_crossing_frames": true,
+    "quiet_benchmark_path": "every received Deribit quote and index frame after the crossing through the decision must remain within the frozen absolute threshold; a later quiet frame cannot erase an earlier confirmation",
+    "decision_time": "the first local receipt when the immutable common-mode crossing, at least one strictly post-crossing Deribit quote and index frame, and a qualifying already-received direct Polymarket book are all known",
+    "fair": "one minus the direct direction-side midpoint observed before the immutable Binance crossing",
+    "buy_side": "opposite the Binance common-move direction",
+    "one_signal_per_market": true
+  },
+  "causality": {
+    "primary_clock": "local receipt time",
+    "total_order": "stable within-transport input order; exact equal receipt timestamps across transports or between source and CLOB are censored, and scheduled evaluations precede market data with an exactly equal receipt timestamp",
+    "exchange_timestamps": "audit only",
+    "clob_application_order": "apply snapshots and deltas strictly in local receipt order including later-received removals; exchange timestamps never suppress a received removal or preserve an older displayed ask",
+    "symbol_required_on_every_price_bearing_source_input": true,
+    "spot_bbo_lifecycle": "the raw bn_spot bookTicker sidecar has its own connection epoch; its disconnect fails closed independently of the strict spot-trade transport",
+    "disconnect": "any normalized source or CLOB disconnect clears all live quotes, books and pending crossings; the consumed first-attempt identity remains consumed",
+    "regressed_receipt_time": "clear all live state, reject the regressed frame and retain the prior receipt high-water mark",
+    "direct_books_only": true,
+    "mirrored_or_synthetic_books": false,
+    "raw_deribit_index_required": true,
+    "shared_strict_artifact_is_sufficient": false
+  },
+  "execution": {
+    "evaluation_ms": [
+      400.0,
+      500.0
+    ],
+    "venue_hold_ms": 150.0,
+    "minimum_full_fill_shares": 5.0,
+    "minimum_net_edge_per_share": 0.03,
+    "limit": "highest direct ask required to fill five shares at the frozen decision, unchanged afterward",
+    "order_type": "paper FAK",
+    "partial_fills": "record every positive FAK fill and PnL; only full five-share fills enter stopping",
+    "taker_fee_rate": 0.07,
+    "fee_rounding": "total USDC fee rounded to five decimals using half-up",
+    "paper_depth_is_fill_upper_bound": true
+  },
+  "controls": {
+    "benchmark_confirmation": "disjoint negative-control cohort: a separate immutable crossing with the same Binance common move and Polymarket follow, but the latest received Deribit quote and index both move more than 0.5 bp in the Binance direction; never reported as a matched arm",
+    "no_polymarket_follow": "disjoint negative-control cohort: a separate immutable quiet-benchmark crossing whose first admissible direction-side Polymarket move is greater than zero but no more than 0.5 cents; crossing above 0.5 cents permanently rejects the market and the cohort is never reported as a matched arm",
+    "direction_reversal": "matched base arm: at the identical base decision buy the directly quoted Binance-follow side instead of the frozen opposite side and retain the base parent signal id",
+    "time_shift": "matched base arm: delay the frozen base side, fair and limit exactly 5000 ms, require five direct shares still executable and retain the base parent signal id",
+    "basis_wedge_comparator": "the independent per-market US-015 state machine is an admission exclusion because source-window basis coordinates alone do not guarantee disjointness when PM-book and source anchors differ"
+  },
+  "statistics": {
+    "first_frozen_sample_only": true,
+    "minimum_full_fills_per_latency": 1000,
+    "minimum_utc_days": 7,
+    "family_tests": 256,
+    "multiple_testing": "Bonferroni",
+    "one_sided_alpha": 0.01,
+    "require_positive_net_ev_at_400_and_500_ms": true,
+    "require_positive_one_sided_99_percent_day_cluster_lower_bound": true,
+    "require_multiplicity_adjusted_exact_p_below_alpha": true,
+    "matched_direction_reversal_and_time_shift_arms_resolved_before_promotion": true,
+    "disjoint_negative_control_cohorts_reported_separately": true,
+    "stopping_clock": "earliest common decision receipt timestamp at which both base latency arms have 1000 resolved full five-share fills across at least seven UTC days"
+  },
+  "promotion": {
+    "production_activation": false,
+    "forward_evaluator_ready": false,
+    "next_required_work": "bind the dedicated raw Binance spot-BBO and Deribit-index adapters to a checksum-bound chronological daily evaluator without changing the shared post-cutoff strict converter",
+    "live_fak_calibration_requires_separate_authorization": true,
+    "paper_pass_is_not_live_profitability_proof": true
+  },
+  "dependencies_sha256": {
+    "basis_wedge.py": "f71db7c29fd0659c07f3186abfc17e8692129141549d88a2a1966e71126c70d5",
+    "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
+    "common_mode_residual.py": "67de322e82a3ba31c75907a1a65c753a06642c03ff7791feec19aaf756ef0994",
+    "common_mode_run.py": "38231586b83aeef9eebc845c22b40a78004b3e95354c3c4ce070e8b1d594df57",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
+    "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
+    "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
+    "poly_clob_rec.py": "a90f9d639185465df35bd0aaa8d54d9634954093de734a8010c05ab4c91677c1",
+    "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4"
+  }
+}

@@ -278,6 +278,46 @@
       "priority": 10,
       "passes": false,
       "notes": "A proposed ValueFill implementation was rejected before launch and removed. It generated 20 ms CrossVenue candidates instead of frozen H candidates, learned a new direction/fair/limit, selected 3-12 cent edge thresholds around a 400 ms primary point, and labelled fills from one stale public snapshot. Its controls were not matched and its per-fill edge comparison rewarded deleting losing fills without counting foregone profitable opportunities. Public archives also lack the futures-BBO arm and exact receipt-ordered direct-L2 lifecycle needed to recreate timestamped-first H. US-016 is therefore an execution enhancement, not a seventeenth independent economic mechanism and not a historical pass. A paper-only veto seam now wraps canonical H without changing its source: allow-all is behavior-identical, the policy receives only immutable decision-time side/fair/ask/limit/edge fields, and veto consumes no order/rate/pending state for that signal while canonical clocks and older evaluations still advance. Each latency is forced into an independent single-horizon machine so branch-specific rate and no-send accounting cannot be swallowed; policy failures permanently latch the replay. Formal work still requires binding the parent H freeze/hash, fitting a preregistered gate on earlier direct-L2 data, charging inference time, and running matched fresh-forward ablations."
+    },
+    {
+      "id": "US-017",
+      "title": "Test a Binance-common-mode versus BTCUSD-benchmark residual fade",
+      "description": "As the account owner, I want Polymarket overreaction to a Binance-local common-mode move tested separately from stale-quote momentum and the perpetual-basis wedge, using direct executable books.",
+      "acceptanceCriteria": [
+        "Define a trigger in which Binance spot and perpetual each move at least 1.5 basis points in the same direction over 500 receipt-clock milliseconds while the change in their basis is at most 0.5 basis points",
+        "Require strictly post-crossing Deribit BTC-PERPETUAL quote and BTCUSD index frames to remain within 0.5 basis points of their pre-impact values, while Polymarket has followed the Binance direction by at least two cents",
+        "Make the trigger set disjoint from US-015 by construction, freeze the first qualifying common-mode crossing, and use only local receipt order with fail-closed disconnect, stale-frame and receipt-regression handling",
+        "Buy only the directly quoted opposite token when its five-share VWAP plus exact taker fee is at least three cents below the complementary pre-impact fair value; never use a mirrored ask",
+        "Replay the unchanged fixed limit at 400 and 500 milliseconds; report direction-reversal and five-second time-shift as parent-linked matched arms, and report BTCUSD-confirmation and no-Polymarket-follow only as disjoint negative-control cohorts",
+        "Use only observations after the protocol freeze and a named future holdout boundary; promote only after 1000 full fills over seven UTC days, positive net EV at both latencies, a positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted exact p below 0.01",
+        "Treat direct displayed depth as a paper fill upper bound and require separately authorised live FAK calibration after any paper pass",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "This is economic family 18. US-017 trades a same-sign Binance spot-plus-perpetual common move with a quiet basis and quiet Deribit BTC-PERPETUAL/BTCUSD benchmark path, then fades a Polymarket overreaction; H instead buys a stale quote in the confirmed underlying direction. Cold review proved that source-window basis coordinates alone do not make US-017 disjoint from PM-book-anchored US-015 when anchors are asynchronous. The detector now runs exact frozen US-015 semantics independently per market and permanently excludes the market when that wedge captures its immutable candidate, before delayed confirmation or emission; both receipt-order counterexamples are covered. Protocol 7e0b6ed2a63282e92a1770422ce7aad1d43c029b33699dbf52a98adef85a98de freezes the first-attempt rule, the full quiet benchmark path rather than a replaceable first frame, raw spot-BBO lifecycle, receipt-ordered CLOB application, conservative equal-clock handling, direct five-share economics, two parent-linked matched arms, two explicitly disjoint negative-control cohorts and a 2026-10-11 holdout. Lifecycle-scoped raw Binance spot-BBO and Deribit-index adapters plus a deterministic normalized replay now exist, but the shared strict artifact intentionally drops both required streams; a checksum-bound daily binder is still required before the frozen protocol is evaluator-ready. No holdout result exists and passes remains false."
+    },
+    {
+      "id": "US-018",
+      "title": "Test post-sweep displayed-liquidity absorption",
+      "description": "As the account owner, I want rapid same-price ask replenishment after an aggressive token sweep tested as latent supply and short-horizon reversal, rather than treating every taker burst as momentum.",
+      "acceptanceCriteria": [
+        "Use raw direct-CLOB receipt order to identify the first same-token BUY-print burst with at most 50 milliseconds between prints and at least five total shares during 240 to 20 seconds remaining",
+        "Require ask depth at or below the highest burst price to fall by at least half within 50 milliseconds and then replenish by at least the burst quantity within 250 milliseconds while the best ask remains no worse than that price",
+        "Buy only the directly quoted complementary token, freeze its five-share limit at the 250 millisecond decision, and replay FAK matching at 400 milliseconds with 500 milliseconds as a preregistered sensitivity",
+        "Charge exact fees on every executed leg, keep partial fills in risk and PnL, and hold any position not exited by the frozen five-second unwind rule to settlement",
+        "Fail closed across disconnects, missing full snapshots, crossed books, stale state and equal-receipt ambiguity; venue timestamps are audit-only",
+        "Report matched no-refill sweeps, same-side direction reversal, five-second delayed entry and quote-addition-without-trade controls using identical execution semantics",
+        "Promote only after at least seven untouched UTC days and 1000 full entries with positive net EV, positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted exact p below 0.01",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "This is economic family 19: dynamic absorption by replenished supply after executed demand. It is not partial-cancel (liquidity disappears without a contemporaneous taker), static imbalance, stale-quote H, plain taker-flow continuation or reward farming. Existing raw direct-CLOB tapes contain book, price_change and last_trade_price messages, but the shared strict converter drops last_trade_price; the candidate therefore requires a separate raw-tape adapter and cannot be validated from simplified strict artifacts. No data-selected threshold, replay result or production authority exists yet."
     }
   ]
 }
