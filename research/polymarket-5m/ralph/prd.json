@@ -358,6 +358,24 @@
       "priority": 13,
       "passes": true,
       "notes": "This is economic family 21. Binance's force-order feed is a lossy latest-per-symbol one-second snapshot, so the implementation preserves integer receipt time, keeps E/T audit-only, uses only the latest observation per symbol and labels z*ap as sampled cumulative filled notional. A 15-hour closed development replay, consumed before any Family 21 freeze, produced 45 first-market SELL-breadth intents. At 400 milliseconds, 34/45 fully filled and lost $3.39623, or -1.9978 cents per share; at 500 milliseconds the same 34 fills lost $3.34500, or -1.9676 cents per share. The five-second Down arm lost 7.8198 cents per share. The forced-BUY Up cohort was approximately flat at -0.1200/-0.0546 cents per share. Buying Up at the original SELL decision earned 3.0793/3.0452 cents per share across 31 fills, but exact fair-price p values were 0.4147/0.4166 on one UTC day, so this adaptive exhaustion interpretation is not evidence and was not promoted. Base source-event age was 103.53 milliseconds median while trade age was 1109.28 milliseconds median, confirming this stream is a delayed regime indicator rather than a speed feed. The original contagion treatment is rejected without a formal holdout or production authority."
+    },
+    {
+      "id": "US-021",
+      "title": "Reject direct high-frequency DVOL vega repricing below one tick",
+      "description": "As the account owner, I want live Deribit DVOL shocks tested through the exact binary-option volatility comparative static so that a slow volatility regime factor is not mistaken for an executable five-minute price edge.",
+      "acceptanceCriteria": [
+        "Parse only Deribit BTC DVOL subscription frames, order every observation by local receipt time and retain exchange timestamps as non-decision metadata",
+        "For a volatility-only shock transform every possible prior binary probability by Phi(Phi^-1(p) times old volatility divided by new volatility), and compute the exact maximum absolute probability change over all p",
+        "Audit fixed 1, 5, 10, 30, 60, 120 and 300 second horizons over the complete closed 2026-10-07 through 2026-10-09 development recording",
+        "Reject before CLOB replay when the maximum theoretical probability displacement is below the one-cent Polymarket tick at every horizon; do not search thresholds or reinterpret DVOL as a direction forecast",
+        "Keep any future realised-volatility or spot-direction use of DVOL as a separate economic family with its own causal test",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "This is economic family 22. The exact digital-option transform holds settlement distance fixed and isolates only the direct vega channel under a one-for-one proportional mapping from 30-day DVOL to the binary's remaining volatility; the analytic supremum prevents a favourable starting-price choice from hiding a larger move. All 72 hourly gzip inputs passed integrity checks, and the receipt-causal audit read 258,899 DVOL points spanning the closed 2026-10-07 through 2026-10-09 interval. Maximum possible binary-probability displacement was 0.00677 cents at 1 second, 0.02003 cents at 5 seconds, 0.02671 cents at 10 seconds, 0.07340 cents at 30 seconds, 0.11340 cents at 60 seconds, 0.16658 cents at 120 seconds and 0.34862 cents at 300 seconds. Even the five-minute maximum is only 0.349 of a one-cent quote tick before spread or taker fee, so this direct proportional DVOL-shock repricing order cannot be expressed on the market. The family is rejected structurally without consuming CLOB holdout capacity or receiving production authority; an amplified short-dated-volatility transmission would be a separate hypothesis, while hourly DVOL-minus-realised-volatility remains only an already-tested regime feature."
     }
   ]
 }
