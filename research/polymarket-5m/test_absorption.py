@@ -151,6 +151,67 @@ def test_first_qualifying_burst_is_immutable_even_if_later_burst_would_refill():
     assert detector.locked_markets == {MARKET}
 
 
+def test_quote_add_control_uses_cumulative_delta_not_absolute_ask_size():
+    detector = _ready_detector()
+
+    assert detector.on_event(_change(UP, BASE_MS + 250, "SELL", 0.5, 14)) == []
+    signals = detector.on_event(_change(UP, BASE_MS + 260, "SELL", 0.5, 15))
+
+    assert len(signals) == 1
+    signal = signals[0]
+    assert signal["variant"] == "quote_add_no_trade"
+    assert signal["parent_signal_id"] is None
+    assert signal["swept_asset_id"] == UP
+    assert signal["buy_asset_id"] == DOWN
+    assert signal["quote_add_price"] == 0.5
+    assert signal["quote_add_shares"] == 5.0
+    assert signal["decision_recv_ms"] == BASE_MS + 260
+    assert signal["fixed_limit"] == 0.48
+
+
+def test_quote_add_control_requires_a_fully_observed_silence_window():
+    detector = _ready_detector()
+
+    assert detector.on_event(_change(UP, BASE_MS, "SELL", 0.5, 15)) == []
+    assert detector.quote_control_locked_markets == set()
+    assert detector.on_event(_change(UP, BASE_MS + 251, "SELL", 0.5, 10)) == []
+    signals = detector.on_event(_change(UP, BASE_MS + 252, "SELL", 0.5, 15))
+
+    assert len(signals) == 1
+    assert signals[0]["variant"] == "quote_add_no_trade"
+
+
+def test_quote_add_control_uses_only_past_trade_silence_and_can_qualify_later():
+    detector = _ready_detector()
+    assert detector.on_event(_trade(BASE_MS, 1)) == []
+
+    assert detector.on_event(_change(UP, BASE_MS + 200, "SELL", 0.5, 15)) == []
+    assert detector.on_event(_change(UP, BASE_MS + 451, "SELL", 0.5, 10)) == []
+    signals = detector.on_event(_change(UP, BASE_MS + 452, "SELL", 0.5, 15))
+
+    assert len(signals) == 1
+    assert signals[0]["variant"] == "quote_add_no_trade"
+    assert signals[0]["decision_recv_ms"] == BASE_MS + 452
+
+
+def test_dual_token_quote_addition_in_one_receipt_is_ambiguous_and_tainted():
+    detector = _ready_detector()
+    event = {
+        "kind": "price_change",
+        "recv_ms": BASE_MS + 260,
+        "source_ts_ms": BASE_MS + 258,
+        "market_id": MARKET,
+        "changes": [
+            {"asset_id": UP, "side": "SELL", "price": "0.50", "size": "15"},
+            {"asset_id": DOWN, "side": "SELL", "price": "0.48", "size": "11"},
+        ],
+        "ambiguous_receipt": False,
+    }
+
+    assert detector.on_event(event) == []
+    assert MARKET in detector.tainted_markets
+
+
 def test_disconnect_ambiguous_receipt_and_stale_books_fail_closed():
     disconnected = _ready_detector()
     disconnected.on_event({"kind": "disconnect", "recv_ms": BASE_MS - 1, "epoch": 1})

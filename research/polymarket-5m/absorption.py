@@ -342,9 +342,12 @@ class AbsorptionDetector:
         self.bursts: dict[str, Burst] = {}
         self.watches: dict[str, Watch] = {}
         self.locked_markets: set[str] = set()
+        self.quote_control_locked_markets: set[str] = set()
         self.tainted_markets: set[str] = set()
+        self.last_trade_ms: dict[str, float] = {}
         self.outcomes: list[dict[str, Any]] = []
         self.connected = False
+        self.connected_since_ms = -math.inf
         self.epoch = 0
 
     def on_event(self, event: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -356,11 +359,13 @@ class AbsorptionDetector:
             return signals
         if kind == "connection":
             self.connected = True
+            self.connected_since_ms = recv_ms
             self.epoch = int(event.get("epoch") or self.epoch + 1)
             self.books.clear()
             self.ask_history.clear()
             self.bursts.clear()
             self.watches.clear()
+            self.last_trade_ms.clear()
             return signals
         if kind == "disconnect":
             self._disconnect(recv_ms)
@@ -377,7 +382,7 @@ class AbsorptionDetector:
             self._snapshot(event)
             signals.extend(self._observe_watch(str(event["market_id"]), recv_ms))
         elif kind == "price_change":
-            self._price_change(event)
+            signals.extend(self._price_change(event))
             signals.extend(self._observe_watch(str(event["market_id"]), recv_ms))
         elif kind == "trade":
             signals.extend(self._trade(event))
@@ -414,14 +419,17 @@ class AbsorptionDetector:
         }:
             self._taint(market_id, recv_ms, "disconnect")
         self.connected = False
+        self.connected_since_ms = -math.inf
         self.books.clear()
         self.ask_history.clear()
         self.bursts.clear()
         self.watches.clear()
+        self.last_trade_ms.clear()
 
     def _taint(self, market_id: str, recv_ms: float, reason: str) -> None:
         self.tainted_markets.add(market_id)
         self.locked_markets.add(market_id)
+        self.quote_control_locked_markets.add(market_id)
         self.watches.pop(market_id, None)
         for asset_id in [key for key, burst in self.bursts.items() if burst.market_id == market_id]:
             self.bursts.pop(asset_id, None)
@@ -436,12 +444,23 @@ class AbsorptionDetector:
             book.ready = False
         self._record_asks(token, float(event["recv_ms"]))
 
-    def _price_change(self, event: Mapping[str, Any]) -> None:
+    def _price_change(self, event: Mapping[str, Any]) -> list[dict[str, Any]]:
         recv_ms = float(event["recv_ms"])
         touched: set[str] = set()
+        additions: dict[str, list[tuple[float, float]]] = {}
         for change in event.get("changes") or ():
             token = str(change.get("asset_id") or "")
             book = self.books.setdefault(token, TokenBook())
+            if str(change.get("side") or "").upper() == "SELL" and book.ready:
+                try:
+                    price = float(change.get("price"))
+                    new_size = float(change.get("size"))
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    added = new_size - book.asks.get(price, 0.0)
+                    if added > 1e-12:
+                        additions.setdefault(token, []).append((price, added))
             book.change(
                 str(change.get("side") or ""),
                 change.get("price"),
@@ -451,6 +470,7 @@ class AbsorptionDetector:
             touched.add(token)
         for token in touched:
             self._record_asks(token, recv_ms)
+        return self._quote_add_controls(str(event["market_id"]), recv_ms, additions)
 
     def _record_asks(self, token: str, recv_ms: float) -> None:
         book = self.books.get(token)
@@ -462,14 +482,113 @@ class AbsorptionDetector:
         while history and history[0][0] < cutoff:
             history.popleft()
 
-    def _trade(self, event: Mapping[str, Any]) -> list[dict[str, Any]]:
-        if str(event.get("side") or "").upper() != "BUY":
+    def _quote_add_controls(
+        self,
+        market_id: str,
+        recv_ms: float,
+        additions: Mapping[str, list[tuple[float, float]]],
+    ) -> list[dict[str, Any]]:
+        if (
+            not additions
+            or market_id in self.quote_control_locked_markets
+            or market_id in self.tainted_markets
+        ):
             return []
+        market = self.markets.get(market_id)
+        if market is None:
+            return []
+        remaining_s = (market["slot"] + 300) - recv_ms / 1_000.0
+        if not (
+            self.config.minimum_remaining_s
+            <= remaining_s
+            <= self.config.maximum_remaining_s
+        ):
+            return []
+        candidates: list[tuple[str, float, float, float]] = []
+        window_ms = self.config.refill_deadline_ms
+        if recv_ms - self.connected_since_ms + 1e-12 < window_ms:
+            return []
+        for token, changed_levels in additions.items():
+            if self.token_market.get(token) != market_id:
+                continue
+            if recv_ms - self.last_trade_ms.get(token, -math.inf) <= window_ms + 1e-12:
+                continue
+            book = self.books.get(token)
+            if book is None or not book.valid_at(recv_ms, self.config.book_fresh_ms):
+                continue
+            highest_added_price = max(price for price, _added in changed_levels)
+            if min(book.asks, default=math.inf) > highest_added_price + 1e-12:
+                continue
+            history = self.ask_history.get(token, ())
+            window_start = recv_ms - window_ms
+            anchor = next(
+                (
+                    asks
+                    for timestamp, asks in reversed(history)
+                    if timestamp <= window_start + 1e-12
+                ),
+                None,
+            )
+            if anchor is None:
+                continue
+            prior_books = [anchor]
+            prior_books.extend(
+                asks
+                for timestamp, asks in history
+                if window_start + 1e-12 < timestamp < recv_ms - 1e-12
+            )
+            prior_depths = [
+                sum(
+                    size
+                    for price, size in asks.items()
+                    if price <= highest_added_price + 1e-12
+                )
+                for asks in prior_books
+            ]
+            if not prior_depths:
+                continue
+            low_depth = min(prior_depths)
+            added_shares = book.ask_depth(highest_added_price) - low_depth
+            if added_shares + 1e-12 < self.config.minimum_burst_shares:
+                continue
+            candidates.append(
+                (token, highest_added_price, added_shares, low_depth)
+            )
+        if len(candidates) > 1:
+            self._taint(market_id, recv_ms, "quote_add_dual_token_ambiguity")
+            return []
+        if not candidates:
+            return []
+        token, price, shares, low_depth = candidates[0]
+        self.quote_control_locked_markets.add(market_id)
+        signal = self._build_quote_add_signal(
+            market_id,
+            token,
+            recv_ms,
+            price,
+            shares,
+            low_depth,
+        )
+        self.outcomes.append({
+            "market_id": market_id,
+            "recv_ms": recv_ms,
+            "reason": "quote_add_no_trade",
+            "signal_id": signal["signal_id"],
+        })
+        return [signal]
+
+    def _trade(self, event: Mapping[str, Any]) -> list[dict[str, Any]]:
         asset_id = str(event.get("asset_id") or "")
         market_id = self.token_market.get(asset_id)
-        if market_id is None or market_id in self.locked_markets:
+        if market_id is None:
             return []
         recv_ms = float(event["recv_ms"])
+        self.last_trade_ms[asset_id] = recv_ms
+        if (
+            str(event.get("side") or "").upper() != "BUY"
+            or market_id in self.locked_markets
+        ):
+            return []
         price = float(event["price"])
         size = float(event["size"])
         burst = self.bursts.get(asset_id)
@@ -631,21 +750,20 @@ class AbsorptionDetector:
         book = self.books.get(watch.asset_id)
         return book.ask_depth(watch.highest_price) if book is not None and book.ready else 0.0
 
-    def _build_signal(
+    def _direct_buy_levels(
         self,
-        watch: Watch,
+        source_asset_id: str,
+        buy_asset_id: str,
         decision_ms: float,
-        variant: str,
-        refill_shares: float,
-    ) -> dict[str, Any]:
-        swept = self.books.get(watch.asset_id)
-        buy = self.books.get(watch.buy_asset_id)
+    ) -> tuple[list[dict[str, float]], float, float | None, bool]:
+        source = self.books.get(source_asset_id)
+        buy = self.books.get(buy_asset_id)
         levels: list[dict[str, float]] = []
         remaining = self.config.target_shares
         if (
-            swept is not None
+            source is not None
             and buy is not None
-            and swept.valid_at(decision_ms, self.config.book_fresh_ms)
+            and source.valid_at(decision_ms, self.config.book_fresh_ms)
             and buy.valid_at(decision_ms, self.config.book_fresh_ms)
         ):
             for price in sorted(buy.asks):
@@ -661,7 +779,68 @@ class AbsorptionDetector:
             if filled > 0
             else None
         )
-        full = remaining <= 1e-12
+        return levels, filled, vwap, remaining <= 1e-12
+
+    def _build_quote_add_signal(
+        self,
+        market_id: str,
+        source_asset_id: str,
+        decision_ms: float,
+        quote_add_price: float,
+        quote_add_shares: float,
+        low_depth: float,
+    ) -> dict[str, Any]:
+        market = self.markets[market_id]
+        buy_asset_id = (
+            market["down_token_id"]
+            if source_asset_id == market["up_token_id"]
+            else market["up_token_id"]
+        )
+        levels, filled, vwap, full = self._direct_buy_levels(
+            source_asset_id,
+            buy_asset_id,
+            decision_ms,
+        )
+        signal_id = (
+            f"quote-add:{market_id}:{round(decision_ms * 1_000)}:{source_asset_id}"
+        )
+        return {
+            "schema": "post-sweep-absorption-signal-v1",
+            "signal_id": signal_id,
+            "parent_signal_id": None,
+            "variant": "quote_add_no_trade",
+            "market_id": market_id,
+            "swept_asset_id": source_asset_id,
+            "buy_asset_id": buy_asset_id,
+            "swept_side": self.token_side[source_asset_id],
+            "buy_side": self.token_side[buy_asset_id],
+            "decision_recv_ms": decision_ms,
+            "quote_add_price": quote_add_price,
+            "quote_add_shares": quote_add_shares,
+            "quote_window_low_depth": low_depth,
+            "target_shares": self.config.target_shares,
+            "available_shares": filled,
+            "decision_vwap": vwap,
+            "fixed_limit": levels[-1]["price"] if full else None,
+            "fill_levels": levels,
+            "sent": full,
+            "reason": "eligible" if full else "insufficient_direct_depth",
+            "ordering_clock": "local_receipt_ms",
+            "venue_timestamp_role": "audit_only",
+        }
+
+    def _build_signal(
+        self,
+        watch: Watch,
+        decision_ms: float,
+        variant: str,
+        refill_shares: float,
+    ) -> dict[str, Any]:
+        levels, filled, vwap, full = self._direct_buy_levels(
+            watch.asset_id,
+            watch.buy_asset_id,
+            decision_ms,
+        )
         return {
             "schema": "post-sweep-absorption-signal-v1",
             "signal_id": watch.signal_id,
