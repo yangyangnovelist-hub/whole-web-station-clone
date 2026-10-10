@@ -90,3 +90,27 @@ are not validated by this single-leg taker engine.
 Keep private tapes, order ledgers, research results, download links and artifact
 identifiers out of this public repository. Persist them separately with source
 commit and content hashes so the research can be resumed.
+
+## Fixed-ledger missed-fill sensitivity
+
+`mine500_fragility.py --inputs /private/size5/replay.json
+/private/size10/replay.json /private/size20/replay.json --out /private/fragility`
+analyzes existing development ledgers without changing the signal, execution,
+or future-confirmation code. It records input hashes and configuration before
+computing results. This is post-development analysis, not a blind experiment.
+
+The fixed stress grid removes up to floor(10/25/50 percent of filled orders),
+starting with the largest positive contributions, and keeps losing fills.
+The extra-cost grid is zero or one cent per retained share. Removed orders lose
+both their acquisition cost and their settlement payout; partial fills retain
+their recorded sizes. No replacement order or cash-redeployment is assumed.
+This hindsight-based adverse-selection envelope is not a measured failure
+probability, a feasible trading selector, or a dynamic portfolio simulation.
+
+Report the integer number actually deleted: fractional budgets can delete zero
+orders from short ledgers. The worst-single-market result and the minimum count
+of lost winners needed to erase profit expose that small-sample weakness.
+Identical fill signatures reveal exact duplicates; distinct signatures do not
+establish distinct economic mechanisms. Missing/no-fill rows remain explicitly
+ineligible, and every registered candidate stays in the reported denominator.
+Keep the existing frozen confirmation commit pinned when adding this module.
