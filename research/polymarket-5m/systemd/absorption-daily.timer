@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the formal Polymarket post-sweep absorption replay after other daily lanes
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+Unit=absorption-daily.service
+
+[Install]
+WantedBy=timers.target

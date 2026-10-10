@@ -357,22 +357,57 @@ def _validate_complete(
     return list(evidence)
 
 
+def _client_error_matches(error: ClientError, *, codes: set[str], status: int) -> bool:
+    response = error.response if isinstance(error.response, Mapping) else {}
+    details = response.get("Error") if isinstance(response.get("Error"), Mapping) else {}
+    metadata = (
+        response.get("ResponseMetadata")
+        if isinstance(response.get("ResponseMetadata"), Mapping)
+        else {}
+    )
+    return str(details.get("Code") or "") in codes or metadata.get(
+        "HTTPStatusCode"
+    ) == status
+
+
+def _verified_remote_evidence(
+    head: Mapping[str, Any], key: str, size: int, digest: str
+) -> None:
+    if (
+        head.get("ContentLength") != size
+        or not isinstance(head.get("Metadata"), Mapping)
+        or head["Metadata"].get("sha256") != digest
+    ):
+        raise ValueError(f"immutable S3 evidence collision for {key}")
+
+
 def _upload_file(s3: Any, bucket: str, key: str, path: Path) -> dict[str, Any]:
     digest = _sha256(path)
     size = path.stat().st_size
     try:
         head = s3.head_object(Bucket=bucket, Key=key)
-    except (ClientError, KeyError):
-        s3.upload_file(
-            str(path), bucket, key,
-            ExtraArgs={"Metadata": {"sha256": digest}},
-        )
+    except ClientError as error:
+        if not _client_error_matches(
+            error, codes={"404", "NoSuchKey"}, status=404
+        ):
+            raise
+        try:
+            with path.open("rb") as stream:
+                s3.put_object(
+                    Bucket=bucket,
+                    Key=key,
+                    Body=stream,
+                    ContentLength=size,
+                    Metadata={"sha256": digest},
+                    IfNoneMatch="*",
+                )
+        except ClientError as put_error:
+            if not _client_error_matches(
+                put_error, codes={"412", "PreconditionFailed"}, status=412
+            ):
+                raise
         head = s3.head_object(Bucket=bucket, Key=key)
-    else:
-        if head["ContentLength"] != size or head.get("Metadata", {}).get("sha256") != digest:
-            raise ValueError(f"immutable S3 evidence collision for {key}")
-    if head["ContentLength"] != size or head.get("Metadata", {}).get("sha256") != digest:
-        raise ValueError(f"S3 verification failed for {key}")
+    _verified_remote_evidence(head, key, size, digest)
     return {"file": path.name, "bytes": size, "sha256": digest, "s3_key": key}
 
 

@@ -24,6 +24,7 @@ CONTROL_VARIANTS = (
 )
 VARIANTS = (BASE_VARIANT, *CONTROL_VARIANTS)
 MATCHED_CONTROLS = ("direction_reversal", "time_shift")
+SOURCE_VARIANTS = (BASE_VARIANT, "no_refill", "quote_add_no_trade")
 
 DAY_SCHEMA = "post-sweep-absorption-day-v1"
 INDEX_SCHEMA = "post-sweep-absorption-forward-index-v1"
@@ -340,6 +341,12 @@ def _group_rows(
 
 def _validate_groups(rows: list[dict[str, Any]], frozen: Mapping[str, Any]) -> None:
     expected = {float(value) for value in frozen["execution"]["evaluation_ms"]}
+    latency_rows: set[tuple[str, float]] = set()
+    for row in rows:
+        key = (str(row["signal_id"]), float(row["evaluation_ms"]))
+        if key in latency_rows:
+            raise ValueError("duplicate signal latency row")
+        latency_rows.add(key)
     grouped = _group_rows(rows)
     base = {
         signal_id: group[0]
@@ -372,6 +379,8 @@ def _validate_groups(rows: list[dict[str, Any]], frozen: Mapping[str, Any]) -> N
             parent = canonical.get("parent_signal_id")
             if not isinstance(parent, str) or parent not in base:
                 raise ValueError("matched control has an orphan parent")
+            if canonical.get("signal_id") != f"{parent}:{variant}":
+                raise ValueError("matched control signal ID differs from its parent")
             children.setdefault((variant, parent), []).append(canonical)
     for signal_id, parent in base.items():
         if parent.get("parent_signal_id") is not None:
@@ -403,6 +412,63 @@ def _validate_groups(rows: list[dict[str, Any]], frozen: Mapping[str, Any]) -> N
                 )
             ):
                 raise ValueError("time-shift semantics drift")
+
+
+def _validate_counters(
+    rows: list[dict[str, Any]], payload: Mapping[str, Any]
+) -> None:
+    counters = payload.get("counters")
+    if not isinstance(counters, Mapping):
+        raise TypeError("absorption day counters are missing")
+    reported_ids = counters.get("signal_ids")
+    if not isinstance(reported_ids, Mapping):
+        raise TypeError("absorption signal IDs are missing")
+
+    actual_ids = {
+        variant: sorted(
+            {
+                str(row["signal_id"])
+                for row in rows
+                if row["variant"] == variant
+            }
+        )
+        for variant in SOURCE_VARIANTS
+    }
+    actual_ids = {variant: ids for variant, ids in actual_ids.items() if ids}
+    normalized_ids: dict[str, list[str]] = {}
+    for variant, values in reported_ids.items():
+        if variant not in SOURCE_VARIANTS or not isinstance(values, list):
+            raise ValueError("reported absorption signal IDs differ from execution groups")
+        ids = [str(value) for value in values]
+        if any(not value for value in ids) or len(ids) != len(set(ids)):
+            raise ValueError("reported absorption signal IDs differ from execution groups")
+        normalized_ids[str(variant)] = sorted(ids)
+    if normalized_ids != actual_ids:
+        raise ValueError("reported absorption signal IDs differ from execution groups")
+
+    reported_counts = counters.get("signals")
+    if not isinstance(reported_counts, Mapping):
+        raise TypeError("absorption signal counters are missing")
+    actual_counts = {variant: len(ids) for variant, ids in actual_ids.items()}
+    normalized_counts: dict[str, int] = {}
+    for variant, value in reported_counts.items():
+        if (
+            variant not in SOURCE_VARIANTS
+            or isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+        ):
+            raise ValueError("reported absorption signal counters differ from signal IDs")
+        normalized_counts[str(variant)] = value
+    if normalized_counts != actual_counts:
+        raise ValueError("reported absorption signal counters differ from signal IDs")
+    execution_rows = counters.get("execution_rows")
+    if (
+        isinstance(execution_rows, bool)
+        or not isinstance(execution_rows, int)
+        or execution_rows != len(rows)
+    ):
+        raise ValueError("reported absorption execution-row counter differs from rows")
 
 
 def validate_day_result(
@@ -438,6 +504,7 @@ def validate_day_result(
         if not isinstance(row, dict):
             raise TypeError(f"row {index} is not an object")
         _validate_row(row, day=day, frozen=frozen, index=index)
+    _validate_counters(rows, payload)
     _validate_groups(rows, frozen)
     return day
 

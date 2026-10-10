@@ -176,6 +176,28 @@ def _rows(day: str, *, full_base: bool = True) -> list[dict[str, object]]:
     return rows
 
 
+def _counters(rows: list[dict[str, object]]) -> dict[str, object]:
+    source_variants = {"base", "no_refill", "quote_add_no_trade"}
+    signal_ids = {
+        variant: sorted(
+            {
+                str(row["signal_id"])
+                for row in rows
+                if row["variant"] == variant
+            }
+        )
+        for variant in source_variants
+    }
+    signal_ids = {variant: ids for variant, ids in signal_ids.items() if ids}
+    return {
+        "events": {},
+        "signals": {variant: len(ids) for variant, ids in signal_ids.items()},
+        "signal_ids": signal_ids,
+        "detector_outcomes": {},
+        "execution_rows": len(rows),
+    }
+
+
 def _day(path: Path, day: str, rows: list[dict[str, object]]) -> Path:
     payload = {
         "schema": "post-sweep-absorption-day-v1",
@@ -185,6 +207,7 @@ def _day(path: Path, day: str, rows: list[dict[str, object]]) -> Path:
         "protocol_sha256": PROTOCOL_SHA,
         "evaluator_sha256": EVALUATOR_SHA,
         "artifact_sha256": hashlib.sha256(day.encode()).hexdigest(),
+        "counters": _counters(rows),
         "rows": rows,
     }
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
@@ -300,6 +323,64 @@ def test_unresolved_fill_future_book_bad_fee_and_incomplete_pair_fail_closed(
         _update(
             _day(tmp_path / "unresolved.json", "2026-10-11", unresolved),
             tmp_path / "unresolved-state",
+        )
+
+
+def test_duplicate_signal_latency_row_fails_closed(tmp_path: Path) -> None:
+    rows = _rows("2026-10-11")
+    rows.append(dict(rows[0]))
+
+    with pytest.raises(ValueError, match="duplicate signal latency"):
+        _update(
+            _day(tmp_path / "duplicate.json", "2026-10-11", rows),
+            tmp_path / "duplicate-state",
+        )
+
+
+def test_reported_signal_ids_must_equal_execution_groups(tmp_path: Path) -> None:
+    rows = _rows("2026-10-11")
+    path = _day(tmp_path / "signal-ids.json", "2026-10-11", rows)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["counters"]["signal_ids"]["base"] = ["invented-base"]
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="signal IDs differ"):
+        _update(path, tmp_path / "signal-id-state")
+
+
+def test_reported_signal_counts_must_equal_signal_ids(tmp_path: Path) -> None:
+    rows = _rows("2026-10-11")
+    path = _day(tmp_path / "signal-counts.json", "2026-10-11", rows)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["counters"]["signals"]["base"] += 1
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="signal counters differ"):
+        _update(path, tmp_path / "signal-counter-state")
+
+
+def test_reported_execution_row_count_must_equal_rows(tmp_path: Path) -> None:
+    rows = _rows("2026-10-11")
+    path = _day(tmp_path / "execution-count.json", "2026-10-11", rows)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["counters"]["execution_rows"] -= 1
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="execution-row counter differs"):
+        _update(path, tmp_path / "execution-counter-state")
+
+
+def test_matched_control_signal_id_must_be_derived_from_parent(tmp_path: Path) -> None:
+    rows = _rows("2026-10-11")
+    for row in rows:
+        if row["variant"] == "direction_reversal":
+            row["signal_id"] = "unrelated-control"
+            row["signal"]["signal_id"] = "unrelated-control"
+
+    with pytest.raises(ValueError, match="control signal ID"):
+        _update(
+            _day(tmp_path / "control-id.json", "2026-10-11", rows),
+            tmp_path / "control-id-state",
         )
 
 

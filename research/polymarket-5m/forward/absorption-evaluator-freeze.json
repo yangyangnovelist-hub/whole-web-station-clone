@@ -1,9 +1,9 @@
 {
   "schema": "post-sweep-absorption-evaluator-freeze-v1",
   "strategy_id": "BTC-5M-POST-SWEEP-ASK-ABSORPTION-V1",
-  "created_at": "2026-10-10T12:17:12Z",
+  "created_at": "2026-10-10T12:41:11Z",
   "holdout_start": "2026-10-11T00:00:00Z",
-  "protocol_sha256": "4d51fdd1d40dae2c08a29a9340f8351ed37e49c958466228bcc9f500c68b899d",
+  "protocol_sha256": "f36529ecff54ea1c61f26676a48dd563df07f33a445fdf666700f49c673f4eaf",
   "collector_region": "eu-west-1",
   "paper_only": true,
   "variants": [
@@ -16,12 +16,14 @@
   "admission": {
     "utc_days": "closed, chronological and contiguous from the holdout start",
     "immutable_inputs": "each admitted day, index, status and terminal verdict is SHA-256 pinned",
-    "crash_recovery": "a hashed write-ahead journal deterministically recovers every day and index commit boundary",
+    "crash_recovery": "hashed staged state is promoted only after the complete evidence object uploads successfully",
     "runtime_binding": "the evaluator loads this file and the protocol by checksum and rejects dependency or caller-supplied identity drift",
     "causal_execution": "entry and unwind books cannot be newer than their frozen receipt-clock evaluation times",
     "economics": "five-share targets, fixed limits, direct fill levels, VWAP, fee rounding, settlement payout and PnL are independently recomputed",
-    "paired_latencies": "400 and 500 millisecond rows share one immutable signal and decision",
-    "matched_controls": "every base signal has exactly one same-decision direction reversal and one five-second time shift"
+    "paired_latencies": "each globally unique signal and latency row completes the exact 400 and 500 millisecond pair",
+    "matched_controls": "every base signal has exactly one same-decision direction reversal and one five-second time shift; source signal IDs, counts and execution-row totals are checked bidirectionally",
+    "raw_inputs": "all 24 raw direct-CLOB hours and the previous-day boundary carry-in must match verified S3 manifests; active metadata is preserved across UTC midnight",
+    "evidence_order": "day results are validated before persistence or upload; staged state and complete evidence upload successfully before formal forward admission"
   },
   "stopping": {
     "primary": "resolved full five-share base entries only",
@@ -31,12 +33,30 @@
     "statistics": "positive net EV, positive one-sided 99 percent day-cluster lower bound and Bonferroni-adjusted exact sign p-value at both latencies"
   },
   "dependencies_sha256": {
-    "absorption.py": "80dfc7b40c753144e78fa7daf46f30e78ea41029297f2d51a4b94805e2cfbf61",
+    "absorption.py": "637d601af61eae14d6ecb775a8325067ea881db8808ce866a221156b7ad07e29",
+    "absorption_daily.py": "e3357a19ba9650d706a88520318b23c93c9a7840330dac3b7f6a5f48de1eed7f",
+    "absorption_forward.py": "aff2c7d0ee59b0cbc132e39c683676ff5cc6cd987d0ad8c490980d2808c10994",
     "absorption_run.py": "4fb28266dfe94db75188fccaf86755c1ab0039ab3e81939cbc126b7a33da5d31",
-    "absorption_forward.py": "a4f31f35598ce70d1325c177f5d342028b29dc1bccbe9925312d3c88ab0ead13",
+    "basis_wedge.py": "f71db7c29fd0659c07f3186abfc17e8692129141549d88a2a1966e71126c70d5",
     "basis_wedge_forward.py": "c300e7201bbc329d49369003a2a675c43400597f5cf505e15e3b5ef50409f933",
     "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
+    "binary.py": "54068fdc9f707fb9f2722e7ac2f54126fdd192d9fe6575c016b3f27c9fdb9246",
     "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
-    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba"
+    "factors.py": "96e0cdeef63179206c7aefaa1a423b07b05da372c7b50ee4230971c31a554578",
+    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
+    "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
+    "h_source_race.py": "66aa6077c0242e0ac7a468837d35dc3e014896c698e971073f2a662e7fd9d306",
+    "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
+    "poly_clob_rec.py": "db88ec4933a0f111d9ee6c0b0929f5fe483b893411fa7699d694aed8adac9adc",
+    "regime.py": "6ede7f821090cd67a38db46a0c5cea0623961980261bfe64b59282fb47275a95",
+    "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
+    "scalein.py": "6cbfe43cb827fcd44730ef8fc6c2112fbc9881fa1ab3c7d211a9af023f4192e9",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
+    "source_race_forward.py": "11fe2bf5ccb730ede77accbe6885f271ed286c8e92a3b118f06c8b8cbe1d7aac",
+    "strict_prebuild.py": "4b7f847bc67319604652955b06eea6644ebd9c545cb555fe0ece14cdc5a13e08",
+    "systemd/absorption-daily.service": "e880dcc05d2f35eeb57e8ac54e70da3167898371d43e49aedd03e73fa47c7fa9",
+    "systemd/absorption-daily.timer": "3c2fea5c5987f3f750fcdb3607b9821273922ef133b82056f98c3d738b6cf87d"
   }
 }

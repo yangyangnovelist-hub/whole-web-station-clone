@@ -161,3 +161,12 @@ def test_gc_waits_for_all_lanes_and_removes_only_admitted_artifacts(tmp_path):
     assert not (root / "20261010" / "artifact.tmp").exists()
     assert (root / "20261011" / "artifact").is_dir()
     assert (root / "20261012" / "artifact").is_dir()
+
+
+def test_default_lanes_wait_for_absorption_admission() -> None:
+    absorption = prebuild.DEFAULT_LANES["absorption"]
+
+    assert absorption.state == Path(
+        "/home/ubuntu/rec/formal/absorption-state"
+    )
+    assert absorption.terminal_files == ("verdict.json",)

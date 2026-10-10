@@ -3,8 +3,15 @@ Every WS message is written verbatim with our receive time (ns) to hourly gzip f
   <out>/poly_clob.<YYYYMMDD>T<HH>.jsonl.gz   lines: {"rn": <recv_ns>, "c": <conn>, "m": <raw message>}
 Four redundant connections per market set (same subscription as the live H feed: level 2, initial dump).
 Markets are rolled every 5 s: current and next 5m windows."""
-import asyncio, gzip, json, os, signal, sys, time
-import urllib.request, urllib.parse
+import asyncio
+import gzip
+import json
+import os
+import signal
+import sys
+import time
+import urllib.parse
+import urllib.request
 import websockets
 
 GAMMA = "https://gamma-api.polymarket.com"
@@ -16,17 +23,52 @@ if OUT:
 
 class Sink:
     def __init__(self):
-        self.h = None; self.f = None
+        self.h = None
+        self.f = None
+        self.metadata = {}
+        self.active_slugs = set()
+        self.last_rn = -1
+
+    def remember_metadata(self, metadata):
+        slug = str(metadata.get("meta") or "")
+        if slug:
+            self.metadata[slug] = dict(metadata)
+
+    def set_active_slugs(self, slugs):
+        self.active_slugs = {str(slug) for slug in slugs}
+
+    def _rewrite_active_metadata(self):
+        for slug in sorted(self.active_slugs):
+            metadata = self.metadata.get(slug)
+            if metadata is None:
+                continue
+            self.last_rn = max(self.last_rn + 1, time.time_ns())
+            row = {"rn": self.last_rn, "c": -1, "k": "meta", "m": metadata}
+            self.f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
     def write(self, line: str):
         h = time.strftime("%Y%m%dT%H", time.gmtime())
+        rotated = self.h is not None and h != self.h
         if h != self.h:
-            if self.f: self.f.close()
-            self.f = gzip.open(os.path.join(OUT, f"poly_clob.{h}.jsonl.gz"), "at", compresslevel=3); self.h = h
+            if self.f:
+                self.f.close()
+            self.f = gzip.open(
+                os.path.join(OUT, f"poly_clob.{h}.jsonl.gz"),
+                "at",
+                compresslevel=3,
+            )
+            self.h = h
         self.f.write(line + "\n")
+        try:
+            self.last_rn = max(self.last_rn, int(json.loads(line).get("rn", -1)))
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        if rotated:
+            self._rewrite_active_metadata()
 
     def flush(self):
-        if self.f: self.f.flush()
+        if self.f:
+            self.f.flush()
 
     def close(self):
         if self.f:
@@ -95,10 +137,12 @@ async def tokens(http, slug):
         req = urllib.request.Request(url, headers={"User-Agent": "research-recorder (read-only)"})
         ev = await asyncio.get_running_loop().run_in_executor(None, lambda: json.load(urllib.request.urlopen(req, timeout=8)))
         m = ev[0]["markets"][0]
-        sink.write(json.dumps({"rn": time.time_ns(), "c": -1, "k": "meta", "m": {
+        metadata = {
             "meta": slug, "cid": m["conditionId"], "tokens": m["clobTokenIds"],
             "outcomes": m["outcomes"],
-        }}))
+        }
+        sink.remember_metadata(metadata)
+        sink.write(json.dumps({"rn": time.time_ns(), "c": -1, "k": "meta", "m": metadata}))
         return json.loads(m["clobTokenIds"])
     except Exception:
         return []
@@ -120,7 +164,8 @@ async def conn(assets, idx, stop):
 
                 async def hb():
                     while True:
-                        await asyncio.sleep(10); await ws.send("PING")
+                        await asyncio.sleep(10)
+                        await ws.send("PING")
                 t = asyncio.create_task(hb())
                 try:
                     while not stop.is_set():
@@ -131,7 +176,8 @@ async def conn(assets, idx, stop):
                             continue
                         rn = time.time_ns()
                         msg = single_line_frame(msg)
-                        if msg in ("PONG", ""): continue
+                        if msg in ("PONG", ""):
+                            continue
                         if not recent_frames.first(msg, rn):
                             continue
                         sequence += 1
@@ -166,11 +212,13 @@ async def main():
 
     async def flusher():
         while True:
-            await asyncio.sleep(2); sink.flush()
+            await asyncio.sleep(2)
+            sink.flush()
     asyncio.create_task(flusher())
     while True:
         now = int(time.time())
         slugs = market_slugs(now)
+        sink.set_active_slugs(slugs)
         assets = []
         for s in slugs:
             if s not in cache or not cache[s]:
@@ -179,13 +227,17 @@ async def main():
         a = frozenset(assets)
         if a and a != cur:
             new = asyncio.Event()
-            for i in range(4): asyncio.create_task(conn(a, i, new))
-            old = stop; cur, stop = a, new
+            for i in range(4):
+                asyncio.create_task(conn(a, i, new))
+            old = stop
+            cur, stop = a, new
             if old is not None:
                 async def retire(e=old):
-                    await asyncio.sleep(10); e.set()
+                    await asyncio.sleep(10)
+                    e.set()
                 asyncio.create_task(retire())
-        for k in [k for k in cache if int(k.split("-")[-1]) < now - 1800]: del cache[k]
+        for k in [k for k in cache if int(k.split("-")[-1]) < now - 1800]:
+            del cache[k]
         await asyncio.sleep(5)
 
 

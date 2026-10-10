@@ -39,6 +39,9 @@ DEFAULT_LANES = {
         Path("/home/ubuntu/rec/formal/mix-state"),
         ("mix-control-verdict.json", "mix-r1-17f-verdict.json"),
     ),
+    "absorption": Lane(
+        Path("/home/ubuntu/rec/formal/absorption-state"), ("verdict.json",),
+    ),
 }
 
 

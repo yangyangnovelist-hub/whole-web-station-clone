@@ -230,7 +230,10 @@ def _normalized_messages(
 
 
 def iter_raw_clob_events(
-    paths: Iterable[Path], segment_end_ms: float,
+    paths: Iterable[Path],
+    segment_end_ms: float,
+    *,
+    preserve_input_order: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Yield direct-CLOB lifecycle, L2 and trade events in strict local receipt order."""
     markets: dict[str, dict[str, Any]] = {}
@@ -239,7 +242,10 @@ def iter_raw_clob_events(
     physical_sequence: dict[tuple[int, int], int] = {}
     logical_epoch = 0
     last_receive_ns = -1
-    for path in sorted(Path(item) for item in paths):
+    ordered_paths = tuple(Path(item) for item in paths)
+    if not preserve_input_order:
+        ordered_paths = tuple(sorted(ordered_paths))
+    for path in ordered_paths:
         for line_number, row in eu_strict._iter_json_records(path):
             if not isinstance(row, Mapping) or row.get("rn") is None:
                 raise ValueError(f"{path.name}:{line_number}: invalid CLOB envelope")

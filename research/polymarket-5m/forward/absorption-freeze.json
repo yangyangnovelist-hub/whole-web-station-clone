@@ -82,7 +82,7 @@
     "paper_pass_is_not_live_profitability_proof": true
   },
   "dependencies_sha256": {
-    "absorption.py": "80dfc7b40c753144e78fa7daf46f30e78ea41029297f2d51a4b94805e2cfbf61",
+    "absorption.py": "637d601af61eae14d6ecb775a8325067ea881db8808ce866a221156b7ad07e29",
     "absorption_run.py": "4fb28266dfe94db75188fccaf86755c1ab0039ab3e81939cbc126b7a33da5d31",
     "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
     "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe"

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 
 import eu_strict
 import source_race_daily as daily
@@ -54,11 +55,32 @@ class FakeS3:
     def get_object(self, *, Bucket, Key):
         return {"Body": FakeBody(self.objects[Key])}
 
-    def upload_file(self, path, bucket, key, ExtraArgs):
-        self.objects[key] = Path(path).read_bytes()
-        self.metadata[key] = ExtraArgs["Metadata"]
+    def put_object(
+        self, *, Bucket, Key, Body, ContentLength, Metadata, IfNoneMatch
+    ):
+        assert IfNoneMatch == "*"
+        if Key in self.objects:
+            raise ClientError(
+                {
+                    "Error": {"Code": "PreconditionFailed"},
+                    "ResponseMetadata": {"HTTPStatusCode": 412},
+                },
+                "PutObject",
+            )
+        value = Body.read()
+        assert len(value) == ContentLength
+        self.objects[Key] = value
+        self.metadata[Key] = dict(Metadata)
 
     def head_object(self, *, Bucket, Key):
+        if Key not in self.objects:
+            raise ClientError(
+                {
+                    "Error": {"Code": "NoSuchKey"},
+                    "ResponseMetadata": {"HTTPStatusCode": 404},
+                },
+                "HeadObject",
+            )
         value = self.objects[Key]
         return {
             "ContentLength": len(value),
@@ -248,7 +270,7 @@ def test_failed_evidence_upload_does_not_admit_staged_state(tmp_path, monkeypatc
         return {"status": "collecting"}
 
     class FailingS3(FakeS3):
-        def upload_file(self, path, bucket, key, ExtraArgs):
+        def put_object(self, **_kwargs):
             raise RuntimeError("upload failed")
 
     monkeypatch.setattr(daily.eu_strict, "build", fake_build)
