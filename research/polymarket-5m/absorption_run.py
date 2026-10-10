@@ -247,6 +247,8 @@ def replay_execution(
         elif winner is None:
             row["settlement_payout"] = None
             row["pnl"] = None
+            row["pnl_per_share"] = None
+            row["profitable"] = None
             return
         else:
             payout = residual if winner.lower() == str(row["buy_side"]).lower() else 0.0
@@ -255,6 +257,8 @@ def replay_execution(
             row["exit_notional"] - row["exit_fee"] + payout
             - row["entry_notional"] - row["entry_fee"]
         )
+        row["pnl_per_share"] = row["pnl"] / row["entry_shares"]
+        row["profitable"] = row["pnl"] > 0
 
     def evaluate_entry(item: _Order) -> None:
         signal = item.signal
@@ -293,6 +297,7 @@ def replay_execution(
             "variant": signal.get("variant", "base"),
             "paper_only": True,
             "ordering_clock": "local_receipt_ms",
+            "signal": dict(signal),
             "market_id": str(signal.get("market_id") or ""),
             "buy_asset_id": signal.get("buy_asset_id"),
             "buy_side": signal.get("buy_side"),
@@ -302,8 +307,12 @@ def replay_execution(
             "entry_book_recv_ms": book.recv_ms if book is not None else None,
             "target_shares": TARGET_SHARES,
             "fixed_limit": signal.get("fixed_limit"),
+            "fee_rate": fee_rate,
+            "sent": bool(signal.get("sent")),
             "entry_reason": reason,
             "entry_shares": shares if filled else 0.0,
+            "filled": filled,
+            "full_fill": filled and shares + _EPS >= TARGET_SHARES,
             "entry_vwap": vwap if filled else None,
             "entry_levels": _levels_json(fill_levels),
             "entry_fee": fee if filled and fee is not None else 0.0,
@@ -321,6 +330,8 @@ def replay_execution(
             "settlement_payout": 0.0,
             "winner": outcomes.get(str(signal.get("market_id") or "")),
             "pnl": 0.0 if not filled else None,
+            "pnl_per_share": None,
+            "profitable": None,
         }
         if "scheduled_decision_recv_ms" in signal:
             row["scheduled_decision_recv_ms"] = float(
@@ -533,6 +544,7 @@ def replay_execution(
             "variant": row_signal.get("variant", "base"),
             "paper_only": True,
             "ordering_clock": "local_receipt_ms",
+            "signal": dict(row_signal),
             "market_id": str(row_signal.get("market_id") or ""),
             "buy_asset_id": row_signal.get("buy_asset_id"),
             "buy_side": row_signal.get("buy_side"),
@@ -542,6 +554,8 @@ def replay_execution(
             "entry_book_recv_ms": None,
             "target_shares": TARGET_SHARES,
             "fixed_limit": row_signal.get("fixed_limit"),
+            "fee_rate": fee_rate,
+            "sent": bool(row_signal.get("sent")),
             "entry_reason": (
                 str(row_signal.get("reason") or "not_sent")
                 if (
@@ -551,6 +565,8 @@ def replay_execution(
                 else "recording_end_censored"
             ),
             "entry_shares": 0.0,
+            "filled": False,
+            "full_fill": False,
             "entry_vwap": None,
             "entry_levels": [],
             "entry_fee": 0.0,
@@ -568,6 +584,8 @@ def replay_execution(
             "settlement_payout": 0.0,
             "winner": outcomes.get(str(row_signal.get("market_id") or "")),
             "pnl": 0.0,
+            "pnl_per_share": None,
+            "profitable": None,
         }
         if "scheduled_decision_recv_ms" in row_signal:
             row["scheduled_decision_recv_ms"] = float(

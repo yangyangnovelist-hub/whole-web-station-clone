@@ -1,0 +1,42 @@
+{
+  "schema": "post-sweep-absorption-evaluator-freeze-v1",
+  "strategy_id": "BTC-5M-POST-SWEEP-ASK-ABSORPTION-V1",
+  "created_at": "2026-10-10T12:17:12Z",
+  "holdout_start": "2026-10-11T00:00:00Z",
+  "protocol_sha256": "4d51fdd1d40dae2c08a29a9340f8351ed37e49c958466228bcc9f500c68b899d",
+  "collector_region": "eu-west-1",
+  "paper_only": true,
+  "variants": [
+    "base",
+    "no_refill",
+    "direction_reversal",
+    "time_shift",
+    "quote_add_no_trade"
+  ],
+  "admission": {
+    "utc_days": "closed, chronological and contiguous from the holdout start",
+    "immutable_inputs": "each admitted day, index, status and terminal verdict is SHA-256 pinned",
+    "crash_recovery": "a hashed write-ahead journal deterministically recovers every day and index commit boundary",
+    "runtime_binding": "the evaluator loads this file and the protocol by checksum and rejects dependency or caller-supplied identity drift",
+    "causal_execution": "entry and unwind books cannot be newer than their frozen receipt-clock evaluation times",
+    "economics": "five-share targets, fixed limits, direct fill levels, VWAP, fee rounding, settlement payout and PnL are independently recomputed",
+    "paired_latencies": "400 and 500 millisecond rows share one immutable signal and decision",
+    "matched_controls": "every base signal has exactly one same-decision direction reversal and one five-second time shift"
+  },
+  "stopping": {
+    "primary": "resolved full five-share base entries only",
+    "common_cutoff": "the earliest decision receipt timestamp satisfying 1000 full base entries at both latencies across at least seven UTC days",
+    "partials": "reported in risk, PnL and EV but never advance stopping",
+    "controls": "each control needs at least 100 resolved full entries per latency and base net EV must exceed every control",
+    "statistics": "positive net EV, positive one-sided 99 percent day-cluster lower bound and Bonferroni-adjusted exact sign p-value at both latencies"
+  },
+  "dependencies_sha256": {
+    "absorption.py": "80dfc7b40c753144e78fa7daf46f30e78ea41029297f2d51a4b94805e2cfbf61",
+    "absorption_run.py": "4fb28266dfe94db75188fccaf86755c1ab0039ab3e81939cbc126b7a33da5d31",
+    "absorption_forward.py": "a4f31f35598ce70d1325c177f5d342028b29dc1bccbe9925312d3c88ab0ead13",
+    "basis_wedge_forward.py": "c300e7201bbc329d49369003a2a675c43400597f5cf505e15e3b5ef50409f933",
+    "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
+    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba"
+  }
+}

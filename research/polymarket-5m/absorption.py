@@ -844,7 +844,7 @@ class AbsorptionDetector:
         return {
             "schema": "post-sweep-absorption-signal-v1",
             "signal_id": watch.signal_id,
-            "parent_signal_id": watch.signal_id,
+            "parent_signal_id": None if variant == "base" else watch.signal_id,
             "variant": variant,
             "market_id": watch.market_id,
             "swept_asset_id": watch.asset_id,

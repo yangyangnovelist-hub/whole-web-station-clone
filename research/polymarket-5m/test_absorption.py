@@ -96,6 +96,7 @@ def test_first_buy_burst_depletion_and_same_price_refill_freezes_direct_opposite
     assert len(signals) == 1
     signal = signals[0]
     assert signal["variant"] == "base"
+    assert signal["parent_signal_id"] is None
     assert signal["swept_side"] == "Up"
     assert signal["buy_side"] == "Down"
     assert signal["burst_shares"] == 5.0

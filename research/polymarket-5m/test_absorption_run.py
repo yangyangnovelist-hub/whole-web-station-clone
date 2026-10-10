@@ -62,7 +62,7 @@ def _signal(**updates: object) -> dict[str, object]:
     signal: dict[str, object] = {
         "schema": "post-sweep-absorption-signal-v1",
         "signal_id": "s",
-        "parent_signal_id": "s",
+        "parent_signal_id": None,
         "variant": "base",
         "market_id": "m",
         "swept_asset_id": "up",
@@ -154,6 +154,13 @@ def test_full_unwind_has_realized_pnl_without_a_market_outcome() -> None:
     assert row["pnl"] == pytest.approx(
         2.50 - _fee(((0.50, 5.0),)) - 2.00 - _fee(((0.40, 5.0),))
     )
+    assert row["sent"] is True
+    assert row["filled"] is True
+    assert row["full_fill"] is True
+    assert row["fee_rate"] == pytest.approx(0.07)
+    assert row["pnl_per_share"] == pytest.approx(row["pnl"] / 5.0)
+    assert row["profitable"] is True
+    assert row["signal"]["signal_id"] == "s"
 
 
 @pytest.mark.parametrize(
@@ -178,6 +185,11 @@ def test_entry_fails_closed_on_disconnect_or_stale_book(
     assert rows[0]["entry_reason"] == expected
     assert rows[0]["entry_shares"] == 0.0
     assert rows[0]["pnl"] == 0.0
+    assert rows[0]["sent"] is True
+    assert rows[0]["filled"] is False
+    assert rows[0]["full_fill"] is False
+    assert rows[0]["pnl_per_share"] is None
+    assert rows[0]["profitable"] is None
 
 
 def test_residual_position_without_an_outcome_is_explicitly_unresolved() -> None:
