@@ -317,7 +317,7 @@
       ],
       "priority": 11,
       "passes": false,
-      "notes": "This is economic family 19: dynamic absorption by replenished supply after executed demand. It is not partial-cancel (liquidity disappears without a contemporaneous taker), static imbalance, stale-quote H, plain taker-flow continuation or reward farming. Existing raw direct-CLOB tapes contain book, price_change and last_trade_price messages, but the shared strict converter drops last_trade_price; the candidate therefore requires a separate raw-tape adapter and cannot be validated from simplified strict artifacts. No data-selected threshold, replay result or production authority exists yet."
+      "notes": "This is economic family 19: dynamic absorption by replenished supply after executed demand. It is not partial-cancel (liquidity disappears without a contemporaneous taker), static imbalance, stale-quote H, plain taker-flow continuation or reward farming. A receipt-causal raw direct-CLOB adapter and first-burst detector now preserve connection epochs, full snapshots, price changes and last-trade prints; they fail closed on sequence/lifecycle faults, crossed or stale books and ambiguous same-market receipt batches. The detector reconstructs the pre-sweep ask from prior receipt-clock states so a price change delivered before its trade print cannot erase the depletion. One closed real hour contained 12 markets, 961,463 price changes and 11,258 trade prints; it produced no base refill signal and three matched no-refill controls, so this is contract evidence rather than an edge result. Fixed-delay execution, remaining controls, fees/unwind and untouched forward admission are still unfinished. No data-selected threshold, replay pass or production authority exists."
     }
   ]
 }
