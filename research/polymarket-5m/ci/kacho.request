@@ -8,6 +8,6 @@
 #       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
 #       | momentum5s (frozen zoo100 #27 on every retained post-freeze BTC recording)
 #       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
-requested: 2026-10-10T23:15:38Z audit Family 29 same-expiry 5m-15m boxes on the pinned 67-archive manifest with source-bound non-atomic legs, exact latency snapshots, orphan unwinds and corrected inference
+requested: 2026-10-10T23:25:33Z audit Family 29 same-expiry 5m-15m boxes on the pinned 67-archive manifest with source-bound non-atomic legs, exact latency snapshots, orphan unwinds and corrected inference
 mode: cross
 cross: boxbatch

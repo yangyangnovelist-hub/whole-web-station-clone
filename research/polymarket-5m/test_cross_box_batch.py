@@ -339,6 +339,17 @@ def test_documented_gamma_regime_verifies_same_60s_source_from_august_14():
     assert row.source_basis == "documented_gamma_regime"
 
 
+def test_documented_gamma_regime_verifies_point_source_before_august_7():
+    row = box.replay_same_expiry_boxes(
+        _books(),
+        _documented_markets("2026-08-06 00:15:00"),
+        config=box.BoxBatchConfig(latencies_ms=(200,)),
+    ).iloc[0]
+
+    assert row.status == "paired"
+    assert row.resolution_source == "chainlink_btc_usd_point"
+
+
 def test_documented_gamma_regime_rejects_august_7_to_13_window_mismatch():
     rows = box.replay_same_expiry_boxes(
         _books(),
@@ -372,6 +383,34 @@ def test_market_table_preserves_last_source_annotations():
     assert row.resolution_source == SOURCE
 
 
+def test_market_table_preserves_snapshot_settlement_safety_fields():
+    raw = _raw_markets().iloc[[0]].copy()
+    raw["close_boundary_fallback_used"] = True
+    raw["usable_for_backtest"] = False
+    raw["resolution_consistency"] = "mismatch"
+
+    row = cross.market_table(raw, pd.DataFrame()).iloc[0]
+
+    assert bool(row.close_boundary_fallback_used)
+    assert row.usable_for_backtest is False or not bool(row.usable_for_backtest)
+    assert row.resolution_consistency == "mismatch"
+
+
+def test_generic_snapshot_source_does_not_conflict_with_exact_authority():
+    raw = _raw_markets().iloc[[0]].copy()
+    raw["resolution_price_source"] = None
+    raw["oracle_source"] = "chainlink"
+    resolutions = pd.DataFrame([{
+        "market_id": "m5", "outcome_direction": "Up", "revision": 1,
+        "resolution_price_source": SOURCE,
+    }])
+
+    row = cross.market_table(raw, resolutions).iloc[0]
+
+    assert not row.resolution_source_conflict
+    assert row.resolution_source == SOURCE
+
+
 def test_latest_resolution_record_is_authoritative_and_conflicts_are_preserved():
     raw = _raw_markets().iloc[[0]].copy()
     resolutions = pd.DataFrame([
@@ -395,6 +434,24 @@ def test_latest_resolution_record_is_authoritative_and_conflicts_are_preserved()
 def test_settlement_conflict_pair_is_diagnostic_only():
     markets = _markets()
     markets["settlement_conflict"] = [True, False]
+
+    row = box.replay_same_expiry_boxes(
+        _books(),
+        markets,
+        config=box.BoxBatchConfig(latencies_ms=(200,)),
+    ).iloc[0]
+
+    assert row.status == "settlement_authority_conflict"
+    assert row.signal_count == 0 and not row.execution_valid
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("usable_for_backtest", False), ("resolution_consistency", "mismatch")],
+)
+def test_explicitly_unsafe_settlement_metadata_is_diagnostic_only(column, value):
+    markets = _markets()
+    markets[column] = [value, True if column == "usable_for_backtest" else "pass"]
 
     row = box.replay_same_expiry_boxes(
         _books(),

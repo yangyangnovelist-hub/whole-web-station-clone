@@ -946,6 +946,21 @@ def _scalar(s):
                          errors="coerce")
 
 
+def _resolution_semantics(value):
+    """Comparable exact source meaning; generic annotations remain unknown."""
+    import pandas as pd
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip().lower().rstrip("/")
+    if "twap-30" in text:
+        return "twap30"
+    if "twap-60" in text:
+        return "twap60"
+    if "chainlink" in text and "btc" in text and "usd" in text:
+        return "point"
+    return None
+
+
 def market_table(mk, rs):
     """One row per market: horizon, window, reference price and (if known) whether Up won."""
     import numpy as np
@@ -962,6 +977,15 @@ def market_table(mk, rs):
         if c in mk:
             out[c] = g[c].agg(
                 lambda x: str(x.dropna().iloc[-1]).strip() if x.notna().any() else None
+            )
+    for c in (
+        "open_boundary_source", "close_boundary_source",
+        "open_boundary_fallback_used", "close_boundary_fallback_used",
+        "usable_for_backtest", "resolution_consistency",
+    ):
+        if c in mk:
+            out[c] = g[c].agg(
+                lambda x: x.dropna().iloc[-1] if x.notna().any() else None
             )
     source_columns = [c for c in ("resolution_price_source", "oracle_source") if c in out]
     out["resolution_source"] = (
@@ -1016,10 +1040,11 @@ def market_table(mk, rs):
             if rs_source_columns:
                 rs_source = latest[rs_source_columns].bfill(axis=1).iloc[:, 0].reindex(out.index)
                 old_source = out["resolution_source"].copy()
+                old_semantics = old_source.map(_resolution_semantics)
+                new_semantics = rs_source.map(_resolution_semantics)
                 out["resolution_source_conflict"] = (
-                    rs_source.notna() & old_source.notna()
-                    & (rs_source.astype(str).str.rstrip("/").str.lower()
-                       != old_source.astype(str).str.rstrip("/").str.lower())
+                    old_semantics.notna() & new_semantics.notna()
+                    & (old_semantics != new_semantics)
                 )
                 out["resolution_source"] = rs_source.combine_first(old_source)
                 out["resolution_source_basis"] = np.where(

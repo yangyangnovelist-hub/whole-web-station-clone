@@ -111,6 +111,17 @@ def _source(market: pd.Series) -> tuple[str | None, str | None, bool]:
     return None, None, False
 
 
+def _explicitly_unusable(value: Any, *, consistency: bool = False) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return not bool(value)
+    text = str(value).strip().lower()
+    if consistency:
+        return text in {"false", "fail", "failed", "invalid", "inconsistent", "mismatch"}
+    return text in {"false", "0", "no", "fail", "failed", "invalid", "unusable"}
+
+
 def _base_row(
     lower: pd.Series,
     upper: pd.Series,
@@ -334,7 +345,20 @@ def replay_same_expiry_boxes(
                     )
                     if not pd.isna(market.get(column, False))
                 )
-                if authority_conflict or fallback_used:
+                unusable = any(
+                    _explicitly_unusable(market.get(column))
+                    for market in (lower, upper)
+                    for column in ("usable_for_backtest", "resolution_usable_for_backtest")
+                )
+                inconsistent = any(
+                    _explicitly_unusable(market.get(column), consistency=True)
+                    for market in (lower, upper)
+                    for column in (
+                        "resolution_consistency", "consistency_check",
+                        "resolution_consistency_check",
+                    )
+                )
+                if authority_conflict or fallback_used or unusable or inconsistent:
                     rows.append(_diagnostic(
                         lower, upper, "settlement_authority_conflict", config
                     ))
