@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 import eu_strict
 
@@ -115,6 +116,8 @@ class Watch:
     baseline_depth: float
     trough_depth: float
     depleted: bool
+    refilled: bool
+    refill_shares: float
     drop_deadline_ms: float
     refill_deadline_ms: float
 
@@ -545,7 +548,7 @@ class AbsorptionDetector:
         current_depth = swept_book.ask_depth(burst.highest_price)
         trough_depth = min([current_depth, *observed_depths])
         depleted = trough_depth <= baseline_depth * (1.0 - self.config.depletion_fraction) + 1e-12
-        signal_id = f"absorption:{burst.market_id}:{int(round(recv_ms * 1_000))}:{burst.asset_id}"
+        signal_id = f"absorption:{burst.market_id}:{round(recv_ms * 1_000)}:{burst.asset_id}"
         self.watches[burst.market_id] = Watch(
             signal_id=signal_id,
             market_id=burst.market_id,
@@ -560,6 +563,8 @@ class AbsorptionDetector:
             baseline_depth=baseline_depth,
             trough_depth=trough_depth,
             depleted=depleted,
+            refilled=False,
+            refill_shares=0.0,
             drop_deadline_ms=recv_ms + self.config.depletion_deadline_ms,
             refill_deadline_ms=recv_ms + self.config.refill_deadline_ms,
         )
@@ -584,15 +589,9 @@ class AbsorptionDetector:
         best_ask = min(swept.asks, default=math.inf)
         if refill + 1e-12 < watch.burst_shares or best_ask > watch.highest_price + 1e-12:
             return []
-        signal = self._build_signal(watch, recv_ms, "base", refill)
-        self.watches.pop(market_id, None)
-        self.outcomes.append({
-            "market_id": market_id,
-            "recv_ms": recv_ms,
-            "reason": "absorption",
-            "signal_id": watch.signal_id,
-        })
-        return [signal]
+        watch.refilled = True
+        watch.refill_shares = max(watch.refill_shares, refill)
+        return []
 
     def _advance(self, recv_ms: float) -> list[dict[str, Any]]:
         signals: list[dict[str, Any]] = []
@@ -607,18 +606,23 @@ class AbsorptionDetector:
                 })
             elif watch.depleted and watch.refill_deadline_ms < recv_ms:
                 self.watches.pop(market_id, None)
+                variant = "base" if watch.refilled else "no_refill"
                 signals.append(
                     self._build_signal(
                         watch,
                         watch.refill_deadline_ms,
-                        "no_refill",
-                        max(0.0, self._depth(watch) - watch.trough_depth),
+                        variant,
+                        (
+                            watch.refill_shares
+                            if watch.refilled
+                            else max(0.0, self._depth(watch) - watch.trough_depth)
+                        ),
                     )
                 )
                 self.outcomes.append({
                     "market_id": market_id,
                     "recv_ms": watch.refill_deadline_ms,
-                    "reason": "no_refill",
+                    "reason": "absorption" if watch.refilled else "no_refill",
                     "signal_id": watch.signal_id,
                 })
         return signals

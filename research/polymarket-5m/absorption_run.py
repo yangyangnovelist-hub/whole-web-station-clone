@@ -14,6 +14,8 @@ from basis_wedge_run import _fill_direct, _rounded_fee
 
 EVALUATION_MS = (400.0, 500.0)
 EXIT_WAIT_MS = 5_000.0
+TIME_SHIFT_MS = 5_000.0
+TARGET_SHARES = 5.0
 DEFAULT_FEE_RATE = 0.07
 _EPS = 1e-9
 
@@ -47,6 +49,14 @@ class _Position:
     evaluation_ms: float
     epoch: int
     row: dict[str, Any]
+
+
+@dataclass
+class _DelayedDecision:
+    due_ms: float
+    sequence: int
+    epoch: int
+    signal: Mapping[str, Any]
 
 
 def _sell_direct(
@@ -94,6 +104,7 @@ def replay_execution(
     evaluation_ms: Iterable[float] = EVALUATION_MS,
     book_fresh_ms: float = 2_000.0,
     fee_rate: float = DEFAULT_FEE_RATE,
+    include_controls: bool = False,
     recording_end_ms: float | None = None,
 ) -> list[dict[str, Any]]:
     """Replay fixed-limit FAK entry, delayed unwind and residual settlement.
@@ -111,6 +122,7 @@ def replay_execution(
     token_market: dict[str, str] = {}
     entries: list[tuple[float, int, _Order]] = []
     exits: list[tuple[float, int, _Position]] = []
+    delayed: list[tuple[float, int, _DelayedDecision]] = []
     rows: list[dict[str, Any]] = []
     sequence = 0
     epoch = 0
@@ -123,6 +135,106 @@ def replay_execution(
 
     def market_for(signal: Mapping[str, Any]) -> _Market | None:
         return markets.get(str(signal.get("market_id") or ""))
+
+    def schedule(signal: Mapping[str, Any]) -> None:
+        nonlocal sequence
+        decision_ms = float(signal["decision_recv_ms"])
+        for latency in latencies:
+            order = _Order(
+                decision_ms + latency,
+                sequence,
+                latency,
+                epoch,
+                signal,
+            )
+            heapq.heappush(entries, (order.due_ms, order.sequence, order))
+            sequence += 1
+
+    def decision_fill(
+        signal: Mapping[str, Any],
+        asset_id: str,
+        decision_ms: float,
+        expected_epoch: int,
+        fixed_limit: float,
+    ) -> tuple[
+        str | None,
+        float | None,
+        tuple[tuple[float, float], ...],
+    ]:
+        market = market_for(signal)
+        if market is None:
+            return "unknown_market", None, ()
+        if expected_epoch != epoch or not connected:
+            return "disconnect", None, ()
+        if market.tainted:
+            return "equal_receipt_ambiguity", None, ()
+        book = market.books.get(asset_id)
+        if book is None or not book.valid_at(decision_ms, book_fresh_ms):
+            return "stale_book", None, ()
+        if book.recv_ms > decision_ms + _EPS:
+            return "future_book_guard", None, ()
+        reason, shares, vwap, _fee, _notional, levels = _fill_direct(
+            book, fixed_limit, TARGET_SHARES, fee_rate,
+        )
+        if reason == "filled" and shares + _EPS >= TARGET_SHARES:
+            return None, vwap, levels
+        suffix = {
+            "book_unavailable": "book_unavailable",
+            "no_direct_ask": "no_direct_ask",
+            "ask_above_frozen_limit": "ask_above_limit",
+            "partial_fill": "insufficient_direct_depth",
+            "insufficient_direct_depth": "insufficient_direct_depth",
+        }.get(reason, reason)
+        return suffix, vwap, levels
+
+    def direction_reversal(signal: Mapping[str, Any]) -> dict[str, Any]:
+        asset_id = str(signal.get("swept_asset_id") or "")
+        side = signal.get("swept_side")
+        reason, vwap, levels = decision_fill(
+            signal,
+            asset_id,
+            float(signal["decision_recv_ms"]),
+            epoch,
+            1.0,
+        )
+        if not asset_id or side is None:
+            reason = "missing_swept_token"
+            levels = ()
+            vwap = None
+        parent_id = str(signal.get("signal_id") or "")
+        control = dict(signal)
+        control.update({
+            "signal_id": f"{parent_id}:direction_reversal",
+            "parent_signal_id": parent_id,
+            "variant": "direction_reversal",
+            "buy_asset_id": asset_id,
+            "buy_side": side,
+            "decision_vwap": vwap,
+            "fixed_limit": levels[-1][0] if reason is None else None,
+            "fill_levels": _levels_json(levels),
+            "sent": reason is None,
+            "reason": (
+                "eligible"
+                if reason is None
+                else f"direction_reversal_decision_{reason}"
+            ),
+        })
+        return control
+
+    def schedule_signal(signal: Mapping[str, Any]) -> None:
+        nonlocal sequence
+        schedule(signal)
+        if not include_controls or signal.get("variant") != "base":
+            return
+        schedule(direction_reversal(signal))
+        decision = _DelayedDecision(
+            float(signal["decision_recv_ms"]) + TIME_SHIFT_MS,
+            sequence,
+            epoch,
+            signal,
+        )
+        heapq.heappush(delayed, (decision.due_ms, decision.sequence, decision))
+        sequence += 1
 
     def settle(row: dict[str, Any], reason: str) -> None:
         residual = max(0.0, row["entry_shares"] - row["exit_shares"])
@@ -171,7 +283,7 @@ def replay_execution(
             reason, shares, vwap, fee, notional, fill_levels = _fill_direct(
                 book,
                 float(signal["fixed_limit"]),
-                float(signal.get("target_shares") or 5.0),
+                TARGET_SHARES,
                 fee_rate,
             )
         filled = reason in {"filled", "partial_fill"}
@@ -188,7 +300,7 @@ def replay_execution(
             "evaluation_ms": item.evaluation_ms,
             "entry_match_ms": item.due_ms,
             "entry_book_recv_ms": book.recv_ms if book is not None else None,
-            "target_shares": float(signal.get("target_shares") or 5.0),
+            "target_shares": TARGET_SHARES,
             "fixed_limit": signal.get("fixed_limit"),
             "entry_reason": reason,
             "entry_shares": shares if filled else 0.0,
@@ -210,6 +322,10 @@ def replay_execution(
             "winner": outcomes.get(str(signal.get("market_id") or "")),
             "pnl": 0.0 if not filled else None,
         }
+        if "scheduled_decision_recv_ms" in signal:
+            row["scheduled_decision_recv_ms"] = float(
+                signal["scheduled_decision_recv_ms"]
+            )
         if not filled:
             rows.append(row)
             return
@@ -252,6 +368,40 @@ def replay_execution(
         settle(row, reason)
         rows.append(row)
 
+    def decide_time_shift(item: _DelayedDecision) -> None:
+        signal = item.signal
+        fixed_limit = signal.get("fixed_limit")
+        levels: tuple[tuple[float, float], ...] = ()
+        vwap = None
+        if not bool(signal.get("sent")) or fixed_limit is None:
+            reason = "parent_not_sent"
+        else:
+            reason, vwap, levels = decision_fill(
+                signal,
+                str(signal.get("buy_asset_id") or ""),
+                item.due_ms,
+                item.epoch,
+                float(fixed_limit),
+            )
+        parent_id = str(signal.get("signal_id") or "")
+        control = dict(signal)
+        control.update({
+            "signal_id": f"{parent_id}:time_shift",
+            "parent_signal_id": parent_id,
+            "variant": "time_shift",
+            "decision_recv_ms": item.due_ms,
+            "scheduled_decision_recv_ms": item.due_ms,
+            "decision_vwap": vwap,
+            "fill_levels": _levels_json(levels),
+            "sent": reason is None,
+            "reason": (
+                "eligible"
+                if reason is None
+                else f"shifted_decision_{reason}"
+            ),
+        })
+        schedule(control)
+
     def drain(before_ms: float, *, inclusive: bool) -> None:
         compare = (lambda due: due <= before_ms + _EPS) if inclusive else (
             lambda due: due < before_ms - _EPS
@@ -259,10 +409,13 @@ def replay_execution(
         while True:
             entry_due = entries[0][0] if entries else math.inf
             exit_due = exits[0][0] if exits else math.inf
-            due = min(entry_due, exit_due)
+            delayed_due = delayed[0][0] if delayed else math.inf
+            due = min(entry_due, exit_due, delayed_due)
             if not compare(due):
                 return
-            if entry_due <= exit_due:
+            if delayed_due <= entry_due and delayed_due <= exit_due:
+                decide_time_shift(heapq.heappop(delayed)[2])
+            elif entry_due <= exit_due:
                 evaluate_entry(heapq.heappop(entries)[2])
             else:
                 evaluate_exit(heapq.heappop(exits)[2])
@@ -344,16 +497,7 @@ def replay_execution(
         for _clock, kind, signal in grouped:
             if kind != 1:
                 continue
-            for latency in latencies:
-                order = _Order(
-                    recv_ms + latency,
-                    sequence,
-                    latency,
-                    epoch,
-                    signal,
-                )
-                heapq.heappush(entries, (order.due_ms, order.sequence, order))
-                sequence += 1
+            schedule_signal(signal)
         drain(recv_ms, inclusive=True)
 
     end_ms = (
@@ -362,6 +506,20 @@ def replay_execution(
         else last_event_ms
     )
     drain(end_ms, inclusive=True)
+    while delayed:
+        item = heapq.heappop(delayed)[2]
+        parent_id = str(item.signal.get("signal_id") or "")
+        control = dict(item.signal)
+        control.update({
+            "signal_id": f"{parent_id}:time_shift",
+            "parent_signal_id": parent_id,
+            "variant": "time_shift",
+            "decision_recv_ms": item.due_ms,
+            "scheduled_decision_recv_ms": item.due_ms,
+            "sent": False,
+            "reason": "recording_end_censored_before_shifted_decision",
+        })
+        schedule(control)
     while exits:
         position = heapq.heappop(exits)[2]
         settle(position.row, "recording_end_hold")
@@ -369,7 +527,7 @@ def replay_execution(
     while entries:
         item = heapq.heappop(entries)[2]
         row_signal = item.signal
-        rows.append({
+        row = {
             "signal_id": row_signal.get("signal_id"),
             "parent_signal_id": row_signal.get("parent_signal_id"),
             "variant": row_signal.get("variant", "base"),
@@ -382,9 +540,16 @@ def replay_execution(
             "evaluation_ms": item.evaluation_ms,
             "entry_match_ms": item.due_ms,
             "entry_book_recv_ms": None,
-            "target_shares": float(row_signal.get("target_shares") or 5.0),
+            "target_shares": TARGET_SHARES,
             "fixed_limit": row_signal.get("fixed_limit"),
-            "entry_reason": "recording_end_censored",
+            "entry_reason": (
+                str(row_signal.get("reason") or "not_sent")
+                if (
+                    row_signal.get("variant") in {"direction_reversal", "time_shift"}
+                    and not bool(row_signal.get("sent"))
+                )
+                else "recording_end_censored"
+            ),
             "entry_shares": 0.0,
             "entry_vwap": None,
             "entry_levels": [],
@@ -403,7 +568,12 @@ def replay_execution(
             "settlement_payout": 0.0,
             "winner": outcomes.get(str(row_signal.get("market_id") or "")),
             "pnl": 0.0,
-        })
+        }
+        if "scheduled_decision_recv_ms" in row_signal:
+            row["scheduled_decision_recv_ms"] = float(
+                row_signal["scheduled_decision_recv_ms"]
+            )
+        rows.append(row)
     return sorted(
         rows,
         key=lambda row: (

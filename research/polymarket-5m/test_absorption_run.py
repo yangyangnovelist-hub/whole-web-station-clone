@@ -65,6 +65,8 @@ def _signal(**updates: object) -> dict[str, object]:
         "parent_signal_id": "s",
         "variant": "base",
         "market_id": "m",
+        "swept_asset_id": "up",
+        "swept_side": "Up",
         "buy_asset_id": "down",
         "buy_side": "Down",
         "decision_recv_ms": DECISION_MS,
@@ -105,6 +107,7 @@ def test_entry_uses_the_complete_exact_due_receipt_group_without_future_books() 
     assert by_delay[500.0]["entry_book_recv_ms"] == 1_500.0
     assert {row["exit_reason"] for row in rows} == {"recording_end_hold"}
     assert all(row["pnl"] is not None for row in rows)
+    assert all("scheduled_decision_recv_ms" not in row for row in rows)
 
 
 def test_partial_entry_and_partial_exit_keep_residual_shares_in_settlement_pnl() -> None:
@@ -190,3 +193,115 @@ def test_residual_position_without_an_outcome_is_explicitly_unresolved() -> None
     assert rows[0]["settled_shares"] == pytest.approx(2.0)
     assert rows[0]["winner"] is None
     assert rows[0]["pnl"] is None
+
+
+def test_direction_reversal_control_uses_the_direct_swept_token_ask() -> None:
+    rows = run.replay_execution(
+        _events(),
+        [_signal()],
+        {"m": "Up"},
+        evaluation_ms=(400.0,),
+        include_controls=True,
+        recording_end_ms=2_000.0,
+    )
+    control = next(row for row in rows if row["variant"] == "direction_reversal")
+
+    assert control["parent_signal_id"] == "s"
+    assert control["signal_id"] == "s:direction_reversal"
+    assert control["buy_asset_id"] == "up"
+    assert control["buy_side"] == "Up"
+    assert control["fixed_limit"] == pytest.approx(0.60)
+    assert control["entry_vwap"] == pytest.approx(0.60)
+
+
+def test_five_second_control_keeps_the_parent_limit_and_excludes_future_books() -> None:
+    rows = run.replay_execution(
+        _events(
+            *_pair(
+                6_000.0,
+                down_bid=((0.35, 10.0),),
+                down_ask=((0.38, 5.0),),
+            ),
+            *_pair(
+                6_400.0,
+                down_bid=((0.35, 10.0),),
+                down_ask=((0.36, 5.0),),
+            ),
+            *_pair(
+                6_400.1,
+                down_bid=((0.34, 10.0),),
+                down_ask=((0.35, 5.0),),
+            ),
+        ),
+        [_signal()],
+        {"m": "Down"},
+        evaluation_ms=(400.0,),
+        include_controls=True,
+        recording_end_ms=7_000.0,
+    )
+    control = next(row for row in rows if row["variant"] == "time_shift")
+
+    assert control["parent_signal_id"] == "s"
+    assert control["decision_recv_ms"] == 6_000.0
+    assert control["scheduled_decision_recv_ms"] == 6_000.0
+    assert control["fixed_limit"] == pytest.approx(0.40)
+    assert control["entry_match_ms"] == 6_400.0
+    assert control["entry_book_recv_ms"] == 6_400.0
+    assert control["entry_vwap"] == pytest.approx(0.36)
+
+
+def test_five_second_control_does_not_use_depth_arriving_after_its_decision() -> None:
+    rows = run.replay_execution(
+        _events(
+            *_pair(
+                6_000.0,
+                down_bid=((0.35, 10.0),),
+                down_ask=((0.39, 4.0), (0.41, 10.0)),
+            ),
+            *_pair(
+                6_400.0,
+                down_bid=((0.35, 10.0),),
+                down_ask=((0.38, 5.0),),
+            ),
+        ),
+        [_signal()],
+        {"m": "Down"},
+        evaluation_ms=(400.0,),
+        include_controls=True,
+        recording_end_ms=7_000.0,
+    )
+    control = next(row for row in rows if row["variant"] == "time_shift")
+
+    assert control["decision_recv_ms"] == 6_000.0
+    assert control["entry_reason"] == "shifted_decision_insufficient_direct_depth"
+    assert control["entry_shares"] == 0.0
+
+
+def test_controls_and_base_execution_ignore_non_five_share_signal_size() -> None:
+    rows = run.replay_execution(
+        _events(),
+        [_signal(target_shares=2.0)],
+        {"m": "Down"},
+        evaluation_ms=(400.0,),
+        include_controls=True,
+        recording_end_ms=2_000.0,
+    )
+
+    assert {row["target_shares"] for row in rows} == {5.0}
+    assert {
+        row["entry_shares"]
+        for row in rows
+        if row["variant"] in {"base", "direction_reversal"}
+    } == {5.0}
+
+
+def test_default_censored_base_keeps_the_original_terminal_reason() -> None:
+    rows = run.replay_execution(
+        _events(),
+        [_signal(sent=False, reason="insufficient_direct_depth")],
+        {"m": "Down"},
+        evaluation_ms=(400.0,),
+        recording_end_ms=1_100.0,
+    )
+
+    assert rows[0]["entry_reason"] == "recording_end_censored"

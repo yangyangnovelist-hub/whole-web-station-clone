@@ -4,10 +4,8 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
-
 import absorption
-
+import pytest
 
 SLOT = 1_800_000_000
 BASE_MS = (SLOT + 60) * 1_000.0
@@ -92,7 +90,8 @@ def test_first_buy_burst_depletion_and_same_price_refill_freezes_direct_opposite
     assert detector.on_event(_trade(BASE_MS, 3)) == []
     assert detector.on_event(_trade(BASE_MS + 30, 2)) == []
     assert detector.on_event(_change(UP, BASE_MS + 45, "SELL", 0.5, 4)) == []
-    signals = detector.on_event(_change(UP, BASE_MS + 120, "SELL", 0.5, 9))
+    assert detector.on_event(_change(UP, BASE_MS + 120, "SELL", 0.5, 9)) == []
+    signals = detector.on_event(_change(DOWN, BASE_MS + 300, "SELL", 0.48, 0))
 
     assert len(signals) == 1
     signal = signals[0]
@@ -104,7 +103,7 @@ def test_first_buy_burst_depletion_and_same_price_refill_freezes_direct_opposite
     assert signal["baseline_depth"] == 10.0
     assert signal["trough_depth"] == 4.0
     assert signal["refill_shares"] == 5.0
-    assert signal["decision_recv_ms"] == BASE_MS + 120
+    assert signal["decision_recv_ms"] == BASE_MS + 280
     assert signal["decision_vwap"] == pytest.approx(0.48)
     assert signal["fixed_limit"] == 0.48
     assert signal["fill_levels"] == [{"price": 0.48, "shares": 5.0}]
@@ -129,12 +128,14 @@ def test_quote_depletion_received_before_trade_print_uses_only_prior_book_histor
     detector.on_event(_change(UP, BASE_MS - 5, "SELL", 0.5, 4))
     detector.on_event(_trade(BASE_MS, 5))
 
-    signals = detector.on_event(_change(UP, BASE_MS + 80, "SELL", 0.5, 9))
+    assert detector.on_event(_change(UP, BASE_MS + 80, "SELL", 0.5, 9)) == []
+    signals = detector.flush(BASE_MS + 250.001)
 
     assert len(signals) == 1
     assert signals[0]["baseline_depth"] == 10.0
     assert signals[0]["trough_depth"] == 4.0
     assert signals[0]["refill_shares"] == 5.0
+    assert signals[0]["decision_recv_ms"] == BASE_MS + 250
 
 
 def test_first_qualifying_burst_is_immutable_even_if_later_burst_would_refill():
