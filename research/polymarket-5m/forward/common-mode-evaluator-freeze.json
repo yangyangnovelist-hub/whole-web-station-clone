@@ -3,7 +3,7 @@
   "strategy_id": "BTC-BINANCE-COMMON-MODE-RESIDUAL-FADE-V1",
   "created_at": "2026-10-10T03:24:35Z",
   "holdout_start": "2026-10-11T00:00:00Z",
-  "protocol_sha256": "88e099504af50650c58834748658fa219e2a5fea2fece0c61e6bf686824474d6",
+  "protocol_sha256": "462d54a77a8e9f666d8a198fb63f3f9acb856d3db2ce8e54a23bdab81aaa67b4",
   "collector_region": "eu-west-1",
   "paper_only": true,
   "variants": [
@@ -56,10 +56,10 @@
     "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
     "h_source_race.py": "66aa6077c0242e0ac7a468837d35dc3e014896c698e971073f2a662e7fd9d306",
     "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
-    "poly_clob_rec.py": "a90f9d639185465df35bd0aaa8d54d9634954093de734a8010c05ab4c91677c1",
+    "poly_clob_rec.py": "db88ec4933a0f111d9ee6c0b0929f5fe483b893411fa7699d694aed8adac9adc",
     "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",
     "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
-    "source_race_daily.py": "9b24b22ec80edd36f4d4ac3f654ed1d8c3cf9b9344516618c41810e7cf333859",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
     "source_race_forward.py": "11fe2bf5ccb730ede77accbe6885f271ed286c8e92a3b118f06c8b8cbe1d7aac",
     "systemd/common-mode-daily.service": "59210b87e7a9de21aadbd3774e08f7b897e9adc090c3cbdf7e62266581204b99",
     "systemd/common-mode-daily.timer": "57f151659594804fda50ff172942c21f50c787f17aee218399b5d2c54b68d0ac"
