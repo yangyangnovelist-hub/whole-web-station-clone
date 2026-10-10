@@ -1,0 +1,84 @@
+{
+  "schema": "current-h-source-race-freeze-v1",
+  "created_at": "2026-10-09T16:56:20Z",
+  "cutoff": "2026-10-10T00:00:00Z",
+  "cutoff_ms": 1791590400000,
+  "collector_region": "eu-west-1",
+  "strategy_id": "CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3",
+  "arms": {
+    "baseline": [
+      "futures_book_ticker",
+      "spot_trade"
+    ],
+    "candidate": [
+      "deribit_quote",
+      "futures_book_ticker",
+      "futures_trade",
+      "spot_trade"
+    ]
+  },
+  "diagnostic_only_sources": [],
+  "execution": {
+    "evaluation_ms": [
+      300.0,
+      350.0,
+      400.0,
+      500.0
+    ],
+    "primary_evaluation_ms": 400.0,
+    "evaluation_clock": "local_receipt_timestamp",
+    "source_timestamp_role": "signal_features_and_audit_only",
+    "source_reconnect_state": "retain_history_with_reference_age_fail_close",
+    "spot_regressed_source_time": "clamp_history_and_match_deployed_sigma_grid",
+    "source_z0": {
+      "deribit_quote": 3.0
+    },
+    "venue_hold_ms": 150.0,
+    "minimum_direct_depth_shares": 5.0,
+    "real_taker_fee": true,
+    "full_utc_day_only": true,
+    "maximum_leading_carryover_ms": 60000
+  },
+  "statistics": {
+    "minimum_fills": 1000,
+    "minimum_utc_days": 7,
+    "one_sided_alpha": 0.01,
+    "family_tests": 200,
+    "family_tests_basis": "conservative round-up after five pre-cutoff Deribit threshold diagnostics",
+    "require_positive_net_ev": true,
+    "require_positive_day_cluster_lower_99": true,
+    "require_corrected_exact_p_below_alpha": true,
+    "require_incremental_fill_or_ev_improvement": true,
+    "require_loss_rate_not_worse": true
+  },
+  "stopping": {
+    "clock": "signal_receive_ms_local_receipt_utc",
+    "common_cutoff": "earliest_signal_receive_ms_where_both_arms_reach_minimum_fills_and_minimum_utc_days",
+    "sample": "all_resolved_primary_latency_fills_of_at_least_minimum_direct_depth_shares_in_each_arm_at_or_before_common_cutoff",
+    "day": "UTC_date_of_signal_receive_ms",
+    "daily_admission": "closed_UTC_days_in_strict_chronological_order_without_gaps",
+    "state_commit": "only_after_complete_daily_evidence_is_hash_verified_in_S3",
+    "deduplication": "first_observation_run_per_market_and_latency",
+    "terminal_behavior": "pin_once_and_reject_all_later_ledger_mutation"
+  },
+  "dependencies_sha256": {
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
+    "forward/current-h-freeze.json": "fdad7b7d919a9018c4a75df9561d27fe8c13cfe23d42aec7d79fdb450eb0df8d",
+    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
+    "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
+    "h_source_race.py": "66aa6077c0242e0ac7a468837d35dc3e014896c698e971073f2a662e7fd9d306",
+    "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
+    "poly_clob_rec.py": "db88ec4933a0f111d9ee6c0b0929f5fe483b893411fa7699d694aed8adac9adc",
+    "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",
+    "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
+    "source_race_forward.py": "11fe2bf5ccb730ede77accbe6885f271ed286c8e92a3b118f06c8b8cbe1d7aac",
+    "strict_prebuild.py": "4b7f847bc67319604652955b06eea6644ebd9c545cb555fe0ece14cdc5a13e08",
+    "systemd/source-race-daily.service": "37e693c1f3fb98d70880df66197a77b440566c73e118863579ec13d81e1f47b6",
+    "systemd/source-race-daily.timer": "2dcfce0d0ee30e5ba3a9bbcc104bb8b3ad2e10a1e4c5fbfce4ff857c4255a362",
+    "systemd/strict-artifact-daily.service": "e95b41e45a171287f1004fabcbc56b921632faa68f05ed7f385cfa262eaa1cc4",
+    "systemd/strict-artifact-daily.timer": "453abc98f24a32a88620e2b21a942f3f3df08d9a8aefd3a0838f2be124fca2cb"
+  }
+}

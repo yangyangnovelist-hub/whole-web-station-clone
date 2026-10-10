@@ -1,0 +1,91 @@
+{
+  "schema": "post-sweep-absorption-protocol-v1",
+  "strategy_id": "BTC-5M-POST-SWEEP-ASK-ABSORPTION-V1",
+  "created_at": "2026-10-10T14:40:00Z",
+  "holdout_start": "2026-10-11T00:00:00Z",
+  "holdout_start_ms": 1791676800000,
+  "collector_region": "eu-west-1",
+  "paper_only": true,
+  "hypothesis": "After aggressive demand removes at least half of the displayed ask depth, rapid same-price replenishment by at least the swept quantity identifies latent supply and predicts a short-horizon reversal in the directly quoted complementary token.",
+  "signal": {
+    "market": "BTC five-minute Up/Down",
+    "remaining_seconds": [
+      20.0,
+      240.0
+    ],
+    "aggressor_side": "a print at or above the already-received direct ask; published last_trade_price.side is audit-only and an in-spread or otherwise unknown direction fails closed",
+    "maximum_interprint_ms": 50.0,
+    "minimum_burst_shares": 5.0,
+    "depletion_deadline_ms": 50.0,
+    "minimum_depletion_fraction": 0.5,
+    "refill_deadline_ms": 250.0,
+    "minimum_refill_shares": "the immutable qualifying burst quantity",
+    "refill_price_cap": "the highest qualifying burst price",
+    "decision_time": "the immutable qualify receipt plus exactly 250 milliseconds, whether refill evidence arrives earlier or not",
+    "buy_side": "the directly quoted complementary token",
+    "one_treatment_signal_per_market": true
+  },
+  "causality": {
+    "primary_clock": "local receipt time",
+    "exchange_timestamps": "audit only",
+    "trade_direction": "infer from the print price against the already-received direct bid and ask; never trust the undocumented last_trade_price.side field",
+    "equal_receipt_batches": "apply atomically before a decision due at the same receipt time",
+    "book_fresh_ms": 2000.0,
+    "direct_dual_token_l2_only": true,
+    "mirrored_or_synthetic_books": false,
+    "disconnect": "clear all books, burst state, watches, trade-silence state and connection coverage; require fresh full snapshots",
+    "sequence_gap_crossed_book_or_stale_state": "fail closed and permanently taint the market",
+    "first_qualifying_burst_is_immutable": true
+  },
+  "execution": {
+    "evaluation_ms": [
+      400.0,
+      500.0
+    ],
+    "minimum_full_fill_shares": 5.0,
+    "limit": "the highest direct complementary ask required to fill five shares at the frozen decision, unchanged afterward",
+    "entry_order_type": "paper FAK",
+    "partial_fills": "retain every positive fill in risk and PnL; only full five-share entries advance stopping",
+    "taker_fee_rate": 0.07,
+    "fee_rounding": "each leg fee is rounded to five decimals using half-up",
+    "unwind_wait_ms": 5000.0,
+    "unwind": "sell the acquired direct token across direct bids after the same evaluation latency; hold any unsold residual to settlement",
+    "paper_depth_is_fill_upper_bound": true
+  },
+  "controls": {
+    "no_refill": "same qualifying burst and depletion, but no full refill by the immutable 250 millisecond decision",
+    "direction_reversal": "for every base decision, buy the directly quoted swept token using its own five-share frozen limit",
+    "time_shift": "for every base decision, preserve the original complementary side and limit but make the decision exactly 5000 milliseconds later only if five shares remain executable",
+    "quote_add_no_trade": "a separate cohort with at least five cumulative same-token ask shares added inside a fully observed 250 millisecond window, no same-token trade in that window and no same-receipt dual-token ambiguity",
+    "shared_execution": "all treatment and control rows use the same receipt clock, direct books, five-share target, fixed-limit FAK replay, exact fees, five-second unwind and residual settlement"
+  },
+  "statistics": {
+    "chronological_development_and_validation_before_holdout_only": true,
+    "first_frozen_sample_only": true,
+    "minimum_full_base_entries_per_latency": 1000,
+    "minimum_resolved_full_control_entries_per_latency": 100,
+    "minimum_utc_days": 7,
+    "family_tests": 256,
+    "multiple_testing": "Bonferroni",
+    "one_sided_alpha": 0.01,
+    "require_positive_net_ev_at_400_and_500_ms": true,
+    "require_positive_one_sided_99_percent_day_cluster_lower_bound": true,
+    "exact_test": "one-sided exact binomial sign test on positive versus non-positive resolved full-entry PnL",
+    "require_multiplicity_adjusted_exact_p_below_alpha": true,
+    "require_base_net_ev_above_every_observed_control_at_both_latencies": true,
+    "all_filled_treatment_and_control_rows_resolved_before_admission": true,
+    "stopping_clock": "the earliest common base decision receipt timestamp at which both 400 and 500 millisecond arms independently have 1000 resolved full five-share entries across at least seven UTC days",
+    "partial_fills": "included in variant risk, PnL and EV reporting but excluded from primary stopping counts"
+  },
+  "promotion": {
+    "production_activation": false,
+    "live_fak_calibration_requires_separate_authorization": true,
+    "paper_pass_is_not_live_profitability_proof": true
+  },
+  "dependencies_sha256": {
+    "absorption.py": "e76338213a9c145a9d93b2b79af7b6c543ea4466301dd0bad76521246fe924e5",
+    "absorption_run.py": "4fb28266dfe94db75188fccaf86755c1ab0039ab3e81939cbc126b7a33da5d31",
+    "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe"
+  }
+}

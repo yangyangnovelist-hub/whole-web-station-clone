@@ -1,0 +1,57 @@
+name: polymarket-cross3
+
+# A third Hugging Face lane beside polymarket-cross and polymarket-cross2 for standalone scripts
+# (not cross.py subcommands). Changing research/polymarket-5m/ci/cross3.request runs its "cmd:" line
+# as "python <cmd> --workdir $RUNNER_TEMP/x" and commits real/* changes. Only scripts listed in
+# ALLOWED may run. Market data only: nothing here trades or uses a key.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/cross3.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: polymarket-cross3
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run the requested script
+        run: |
+          cmd=$(sed -n 's/^cmd: *//p' ci/cross3.request | head -1)
+          script=${cmd%% *}
+          case "$script" in
+            roundtrip_hf.py|mix_hf.py|regime_hf.py) ;;
+            *) echo "script not allowed: $script"; exit 1 ;;
+          esac
+          python $cmd --workdir "$RUNNER_TEMP/x"
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add real 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: $(sed -n 's/^cmd: *//p' ci/cross3.request | head -1 | cut -d' ' -f1) results" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1

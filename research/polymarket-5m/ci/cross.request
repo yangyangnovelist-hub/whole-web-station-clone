@@ -1,0 +1,5 @@
+# Changing this file runs .github/workflows/polymarket-cross.yml on this branch: "cmd:" is the
+# cross.py command (probe | analyze [N days] | stale [N days] | makers [N days] | gated [N days] [--horizon 15],
+# optionally --dataset <another whodisidk dataset> --out real/cross-....md).
+requested: 2026-10-05 04:40 UTC MIX approved complete-A bundle fit; exact reviewed proposal only, never read B/C
+cmd: mix --bundle-only --out real/cross-mix-hf.md

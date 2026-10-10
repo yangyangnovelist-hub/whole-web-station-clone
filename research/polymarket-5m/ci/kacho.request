@@ -1,0 +1,13 @@
+# Changing this file re-runs .github/workflows/polymarket-kacho.yml on this branch.
+# mode: btc (default) | stage2 | stage3 | stage4 (#103/#104 on kacho) | diag101 | survey (list HF datasets; "inspect:" lines look inside some)
+#       | onchain (onchain.py: #101's stale-quote test on September on-chain fills; "later:" fetches days after 09-26 too;
+#         "calibrate: outcometick" also measures the settlement delay from the 09-08 trade prints)
+#       | makers (makers.py: resting orders vs aggressors by price and time left, select 09-01..13, test 09-14..25)
+#       | rules (rules.py: 116 executable rules on the on-chain tape, split-half holdout, candidates for --final)
+#       | replay (every archived forward recording through strategy_zoo with #101 and #103-#108 -> real/forward-replay.md)
+#       | latency (latency.py on the forward recordings' bundle-btc/latency files -> real/latency-github.md)
+#       | momentum5s (frozen zoo100 #27 on every retained post-freeze BTC recording)
+#       | cross (cross.py on BTC 5m/15m/1h books from Hugging Face; "cross: probe" lists the tables first)
+requested: 2026-10-10T23:25:33Z audit Family 29 same-expiry 5m-15m boxes on the pinned 67-archive manifest with source-bound non-atomic legs, exact latency snapshots, orphan unwinds and corrected inference
+mode: cross
+cross: boxbatch

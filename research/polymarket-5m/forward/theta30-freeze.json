@@ -1,0 +1,53 @@
+{
+  "alpha": 0.01,
+  "code": {
+    "asian180.py_sha256": "a94ff5300cb7864aa2169a0595b2b8a1ed58da6834c3e8b971086f977a9d132c",
+    "binary.py_sha256": "54068fdc9f707fb9f2722e7ac2f54126fdd192d9fe6575c016b3f27c9fdb9246",
+    "base_commit": "97f6a7f7e9999a527b77ab5f5da0e01b06cc9e11",
+    "theta30.py_sha256": "71ac4963feda60191eb45891765cf6831db2720da12803dcc64adf875e3865c0"
+  },
+  "frozen_at": "2026-10-03T13:44:25Z",
+  "historical_evidence": {
+    "delayed_depth_replays": {
+      "days": 7,
+      "exact_fair_price_p": 0.065493,
+      "fills": 68,
+      "mean_pnl_per_share": 0.047727158058823514,
+      "one_sided_day_cluster_99pct_lower": 0.005838290303342555,
+      "wins": 67
+    },
+    "independent_2026_09_08_snapshot": {
+      "fills": 25,
+      "mean_pnl_per_share": 0.0796,
+      "note": "Direction and price band were specified here, but this older check did not replay the 150 ms hold."
+    }
+  },
+  "minimum_days": 7,
+  "multiplicity_note": "The 30-second 0.80-0.97 favourite rule predates the later two depth datasets, but the one-cent executable limit and persistence overlay were finalized after historical inspection. Only post-freeze observations can pass the gate.",
+  "real_fill_gate": {
+    "minimum_fills": 30,
+    "must_have_positive_net_pnl": true,
+    "one_order_at_a_time": true
+  },
+  "stopping_rule": {
+    "first_fills": 100,
+    "no_parameter_changes": true,
+    "order": "decision_ms_then_market_id"
+  },
+  "strategy": {
+    "fee_rate": 0.07,
+    "insurance": "profitable_lock_after_confirmed_fill_only",
+    "limit_slack": 0.01,
+    "match_start_ms": 150,
+    "max_ask": 0.97,
+    "max_book_age_ms": 250,
+    "max_limit": 0.99,
+    "min_ask": 0.8,
+    "persistence_ms": 200,
+    "remaining_s": 30,
+    "shares": 5.0,
+    "strategy_id": "THETA30-FAVOURITE-V1",
+    "tick": 0.001
+  },
+  "strategy_fingerprint": "d63dea81dd8b5e43dc833cc754632d28a19fe9dd675bbedbcf66c55a27ef198e"
+}

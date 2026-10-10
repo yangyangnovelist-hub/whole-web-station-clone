@@ -1,0 +1,67 @@
+{
+  "schema": "common-mode-evaluator-freeze-v1",
+  "strategy_id": "BTC-BINANCE-COMMON-MODE-RESIDUAL-FADE-V1",
+  "created_at": "2026-10-10T03:24:35Z",
+  "holdout_start": "2026-10-11T00:00:00Z",
+  "protocol_sha256": "462d54a77a8e9f666d8a198fb63f3f9acb856d3db2ce8e54a23bdab81aaa67b4",
+  "collector_region": "eu-west-1",
+  "paper_only": true,
+  "variants": [
+    "base",
+    "direction_reversal",
+    "time_shift",
+    "benchmark_confirmation",
+    "no_pm_follow"
+  ],
+  "admission": {
+    "raw_sidecars": "all 24 checksum-verified UTC hours of raw Binance spot bookTicker and Deribit index data are mandatory",
+    "strict_artifact": "the same UTC day's checksum-bound direct dual-token L2 artifact supplies futures BBO, Deribit quote, market registry and outcomes",
+    "chronology": "closed UTC days are admitted contiguously from the holdout start; empty days are retained",
+    "crash_recovery": "a write-ahead journal deterministically repairs day, index, status and terminal verdict after every commit boundary",
+    "runtime_binding": "protocol, evaluator and every executable dependency are SHA-256 pinned",
+    "causality": "local receipt order only; equal cross-transport clocks, disconnects, receipt regressions and stale state fail closed"
+  },
+  "execution": {
+    "evaluation_ms": [400.0, 500.0],
+    "minimum_full_fill_shares": 5.0,
+    "taker_fee_rate": 0.07,
+    "direct_dual_token_l2": true,
+    "fixed_limit": true,
+    "paper_fill_is_upper_bound": true
+  },
+  "statistics": {
+    "minimum_full_fills_per_latency": 1000,
+    "minimum_utc_days": 7,
+    "family_tests": 256,
+    "one_sided_alpha": 0.01,
+    "common_cutoff": true,
+    "positive_ev_at_both_latencies": true,
+    "positive_one_sided_day_cluster_lower_bound": true,
+    "bonferroni_exact_p_below_alpha": true,
+    "matched_arms_must_be_complete": true
+  },
+  "dependencies_sha256": {
+    "basis_wedge.py": "f71db7c29fd0659c07f3186abfc17e8692129141549d88a2a1966e71126c70d5",
+    "basis_wedge_forward.py": "c300e7201bbc329d49369003a2a675c43400597f5cf505e15e3b5ef50409f933",
+    "basis_wedge_run.py": "fd41c1d293d1ea389e29518a5e3ed6914c49514f0012ad0998f0d78496f3f484",
+    "common_mode_daily.py": "0f1258e76adf6e1efd2e48ee3994b587fd40e7c33b891dc52e5b0067133456d4",
+    "common_mode_forward.py": "c62485582008a010e496b826fb8a10086771d1a71ddc30f4feadac6e67b2a1be",
+    "common_mode_residual.py": "67de322e82a3ba31c75907a1a65c753a06642c03ff7791feec19aaf756ef0994",
+    "common_mode_run.py": "38231586b83aeef9eebc845c22b40a78004b3e95354c3c4ce070e8b1d594df57",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
+    "forward/current-h-freeze.json": "fdad7b7d919a9018c4a75df9561d27fe8c13cfe23d42aec7d79fdb450eb0df8d",
+    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
+    "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
+    "h_source_race.py": "66aa6077c0242e0ac7a468837d35dc3e014896c698e971073f2a662e7fd9d306",
+    "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
+    "poly_clob_rec.py": "db88ec4933a0f111d9ee6c0b0929f5fe483b893411fa7699d694aed8adac9adc",
+    "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",
+    "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
+    "source_race_forward.py": "11fe2bf5ccb730ede77accbe6885f271ed286c8e92a3b118f06c8b8cbe1d7aac",
+    "systemd/common-mode-daily.service": "59210b87e7a9de21aadbd3774e08f7b897e9adc090c3cbdf7e62266581204b99",
+    "systemd/common-mode-daily.timer": "57f151659594804fda50ff172942c21f50c787f17aee218399b5d2c54b68d0ac"
+  }
+}

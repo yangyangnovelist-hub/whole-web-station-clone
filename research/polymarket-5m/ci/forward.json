@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "hours": 4.5,
+  "until": "2026-10-27",
+  "note": "Changing this file starts a recording run (.github/workflows/polymarket-forward.yml); each run dispatches the next until `until`. Set enabled to false to stop. `coins` are recorded and tested; paper orders are BTC only.",
+  "coins": [
+    "btc",
+    "eth",
+    "sol",
+    "xrp",
+    "doge"
+  ],
+  "kick": "2026-10-05 01:20 restart: run 37230483105 recorded and uploaded, but the strict replay check failed (incomplete manifest) and skipped 'Start the next run'"
+}

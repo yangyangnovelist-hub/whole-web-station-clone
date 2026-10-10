@@ -1,0 +1,417 @@
+{
+ "format": "polymarket-mix-model-proposal-v2",
+ "frozen_file": "cross-mix-frozen.json",
+ "frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
+ "a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "frozen_a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "frozen_a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "canonical_a_fingerprint": "b8d735ecc4c9d630b6bcda355af9bd4a9ce3c005a3da08b039f5693c882a7be2",
+ "canonical_a_fingerprint_version": "mix-a-v2-exact-model-rows",
+ "a_identity_match": "legacy_v1_rounded",
+ "training_rows": 162591,
+ "training_matrix_sha256": "06d0abf5844cdd66504903db0882a7dd78531a436d9d58384f88034fbe474598",
+ "provenance": {
+  "a_end": "2026-07-16",
+  "a_start": "2026-05-25",
+  "archive_coverage": {
+   "read": 46,
+   "required": 46
+  },
+  "archives": [
+   {
+    "name": "market_parquet_2026-05-25.tar.gz",
+    "sha256": "8e036aa453b12822bd6604ba27e6aa5a1be6a13887653c14c9af6071ab979194",
+    "size": 610636358
+   },
+   {
+    "name": "market_parquet_2026-05-26.tar.gz",
+    "sha256": "e6cad5704741718497a37ac1801d6768e6f7d2664c3a3c06a4bb18a90e090215",
+    "size": 678523513
+   },
+   {
+    "name": "market_parquet_2026-05-27.tar.gz",
+    "sha256": "f111bff2cafd7358718e29f40a97b540d4bff4f6a7abcb9256697d7ad7fecda3",
+    "size": 698390168
+   },
+   {
+    "name": "market_parquet_2026-05-28.tar.gz",
+    "sha256": "e69534f0646b3e679f9ea690ecf56107c87c6c409041caa666dd9f0d5987c2f0",
+    "size": 731489316
+   },
+   {
+    "name": "market_parquet_2026-05-29.tar.gz",
+    "sha256": "1dcdf8bf1e1443885fd9ce306d6bc973e0eb15174eb4ff3efb23a3bcde0cfcc9",
+    "size": 566961063
+   },
+   {
+    "name": "market_parquet_2026-05-30.tar.gz",
+    "sha256": "8c6c63378c4bab1dd89ff99565ba536c10b94663d5688a327965bcefcbdd3eca",
+    "size": 577027246
+   },
+   {
+    "name": "market_parquet_2026-05-31.tar.gz",
+    "sha256": "3b4bf6f498b92a544b142bc2bd23c972176761098f71579a4d158d0402da30c7",
+    "size": 652821314
+   },
+   {
+    "name": "market_parquet_2026-06-01.tar.gz",
+    "sha256": "996e214df6685228a7863475d5e289ffe3976bd8cd580470e1957081e1491555",
+    "size": 754286993
+   },
+   {
+    "name": "market_parquet_2026-06-02.tar.gz",
+    "sha256": "a3028633a0267cd8138e840202614e18ff97100d248520e0bdc32c7ed00bbf3b",
+    "size": 827625788
+   },
+   {
+    "name": "market_parquet_2026-06-03.tar.gz",
+    "sha256": "3f3fbabe3fdef2f23b3381d3bd1eac334450ab94d5d1d5e6ce397663f40ef673",
+    "size": 819792908
+   },
+   {
+    "name": "market_parquet_2026-06-04.tar.gz",
+    "sha256": "9dec48b7feaa9c040dd47ed2d9363077f102e8f0f2f2c9df031928461b016dba",
+    "size": 913262789
+   },
+   {
+    "name": "market_parquet_2026-06-05.tar.gz",
+    "sha256": "c00f520013526682bb984c0ac0e54a4868528437dbfeead6877fad6553ab9ac0",
+    "size": 854341063
+   },
+   {
+    "name": "market_parquet_2026-06-06.tar.gz",
+    "sha256": "c61839d7b40ab7014c46d8eb2008b04c17d943be07536f904ae6838e23d1bca8",
+    "size": 726994420
+   },
+   {
+    "name": "market_parquet_2026-06-07.tar.gz",
+    "sha256": "e38538e120fd8161a469d7c995802aa897075273f636c58825625444c6dc7f89",
+    "size": 734493377
+   },
+   {
+    "name": "market_parquet_2026-06-08.tar.gz",
+    "sha256": "45d5cc23836a143b4458040a77b3b8c7056383db3af97ec29ce0a8ca82ecec72",
+    "size": 781066318
+   },
+   {
+    "name": "market_parquet_2026-06-09.tar.gz",
+    "sha256": "c7cf62dc7f328429373a43c9b1d326b3cda76b50cc1c4f352f385f19a16291f6",
+    "size": 729949599
+   },
+   {
+    "name": "market_parquet_2026-06-10.tar.gz",
+    "sha256": "782bbf9f721664766d877119819195faa6dce68de2dd1f576fdd9af75e1f3fb7",
+    "size": 654600850
+   },
+   {
+    "name": "market_parquet_2026-06-11.tar.gz",
+    "sha256": "87815e59b4fec92bf954ce000fe4270a2ed802227b59aa34d595d89cab9c4b26",
+    "size": 765752686
+   },
+   {
+    "name": "market_parquet_2026-06-12.tar.gz",
+    "sha256": "75ec9d5b84bcd6360741694d62be856054d4b9a2b85e504d7227782a7eff2cc4",
+    "size": 769641917
+   },
+   {
+    "name": "market_parquet_2026-06-13.tar.gz",
+    "sha256": "73a410cff39caa1e2a251e660260f553bbc472ae86d41ed626d708632e22a46c",
+    "size": 718150780
+   },
+   {
+    "name": "market_parquet_2026-06-14.tar.gz",
+    "sha256": "345f7659edd14985e1b0db4fa83c6c49cccdce1de07a72564f9bcfa61312118d",
+    "size": 727065492
+   },
+   {
+    "name": "market_parquet_2026-06-15.tar.gz",
+    "sha256": "623e217739114c5a54bbd4fdfec946664326f70ef1dbf84a3693124eda51f6a3",
+    "size": 792295280
+   },
+   {
+    "name": "market_parquet_2026-06-16.tar.gz",
+    "sha256": "feafc5714ad92a9913fefd53321743f44efb659fd691e8fb8edcf93a97529590",
+    "size": 776515959
+   },
+   {
+    "name": "market_parquet_2026-06-17.tar.gz",
+    "sha256": "07794f5a497345f72531bf422bef19ff954c7e6fc7b90cc7ed9c83e95292eea5",
+    "size": 736241770
+   },
+   {
+    "name": "market_parquet_2026-06-18.tar.gz",
+    "sha256": "3047c77edb13ba2e246c4b70f321da71fe87f90bac0bfb80d309419857878a7a",
+    "size": 769738517
+   },
+   {
+    "name": "market_parquet_2026-06-19.tar.gz",
+    "sha256": "a94f642457da7352db34d06ec1d507418ef723c357a324bcd2787def2353eaf6",
+    "size": 726598816
+   },
+   {
+    "name": "market_parquet_2026-06-20.tar.gz",
+    "sha256": "2e62ac26c0d5f1a3110af21b28578a8091f6b22e87070e74156dabfb70a0ab78",
+    "size": 743939148
+   },
+   {
+    "name": "market_parquet_2026-06-21.tar.gz",
+    "sha256": "c745976d363170b327ba25e88b8e87f6b451a27bad93bede05a63be91cdc4b89",
+    "size": 681058447
+   },
+   {
+    "name": "market_parquet_2026-06-23.tar.gz",
+    "sha256": "0d4d5c5d3d57df7209087583831282bd4a6eebfca8a3e47f2d5e2da5e2011d74",
+    "size": 671443073
+   },
+   {
+    "name": "market_parquet_2026-06-24.tar.gz",
+    "sha256": "5b700c1ac77262b3c143271ada84295a7867f503fc3126981285f632196252ba",
+    "size": 672109706
+   },
+   {
+    "name": "market_parquet_2026-06-25.tar.gz",
+    "sha256": "f2269a336c212cd466358d0c5d08a7fa7f500247c4b385eafc797042a1c89f58",
+    "size": 681823554
+   },
+   {
+    "name": "market_parquet_2026-06-26.tar.gz",
+    "sha256": "b236d2804c6fa8566fbf49ea40f9b68d020fdff314da4324a4dd8e148129f3cb",
+    "size": 694218781
+   },
+   {
+    "name": "market_parquet_2026-06-27.tar.gz",
+    "sha256": "98584810c3e310e79bbd6e0278e62daccbad39b0a7486574a782298a66520457",
+    "size": 558687649
+   },
+   {
+    "name": "market_parquet_2026-06-28.tar.gz",
+    "sha256": "5a446295ddc6dae1d2bca1b9f5230d10a6c43266c944adf619180b501f960643",
+    "size": 584539105
+   },
+   {
+    "name": "market_parquet_2026-06-29.tar.gz",
+    "sha256": "b544aeb1b488d412c97b59b14fad90d51e740af8d71cd33afd271366bb40c253",
+    "size": 659610566
+   },
+   {
+    "name": "market_parquet_2026-06-30.tar.gz",
+    "sha256": "63e44902530a2582f1a4733928d0561e277d5318c0b0f6e71416e10d4fefd470",
+    "size": 641279373
+   },
+   {
+    "name": "market_parquet_2026-07-01.tar.gz",
+    "sha256": "0e8280ca5731a91f0e8d7a1543501e6759f2769d57d32f389b72eaa8e86a85a0",
+    "size": 626722970
+   },
+   {
+    "name": "market_parquet_2026-07-02.tar.gz",
+    "sha256": "69e2129de4d29f9afe2dd436aa38a259b53e2422dc2a2f0368cacbc8b748967f",
+    "size": 599243068
+   },
+   {
+    "name": "market_parquet_2026-07-03.tar.gz",
+    "sha256": "6c91ef39aea1fefb3dc104cf5ae030c3ddbe53d89b0a764d07d75cb2e214ab3b",
+    "size": 356909189
+   },
+   {
+    "name": "market_parquet_2026-07-04.tar.gz",
+    "sha256": "032c6d48320b9c4494679cf78d4201d3de3c1f6b56245cb6090c9d82d56a789e",
+    "size": 444883675
+   },
+   {
+    "name": "market_parquet_2026-07-05.tar.gz",
+    "sha256": "2a6c3b93f6054480cbd357a96e7acf294abe8b1f89a81e52a31cd1e63b597bbb",
+    "size": 530975172
+   },
+   {
+    "name": "market_parquet_2026-07-06.tar.gz",
+    "sha256": "4a935ecc3bbaa3910d3937bd7929c1aa654360f59832afc63cac51a51b0e85a7",
+    "size": 358579482
+   },
+   {
+    "name": "market_parquet_2026-07-11.tar.gz",
+    "sha256": "487c0682b4b114c1741527a2229139c5dde65d4d72367b89bd313ca193651520",
+    "size": 577030291
+   },
+   {
+    "name": "market_parquet_2026-07-13.tar.gz",
+    "sha256": "171c7a4d262b7474c25a76b42bb01b0d4c77c8d8791c544c90e3032a5df1435c",
+    "size": 640922796
+   },
+   {
+    "name": "market_parquet_2026-07-14.tar.gz",
+    "sha256": "7908dbbba010975a8aa76fd4d73dc83cd467cb31cfbbfacb1461a3020ea43aa7",
+    "size": 531851704
+   },
+   {
+    "name": "market_parquet_2026-07-15.tar.gz",
+    "sha256": "91d227a998b82ddf9ed2958e6e9de4e0157d3033d23f47b0268ab88df7c28c2e",
+    "size": 520666858
+   }
+  ],
+  "archives_sha256": "3f826319fee5959f8ea92f43b38f868449032fa69eb389280e6817f8e9d9c717",
+  "format": "polymarket-mix-migration-provenance-v1",
+  "inputs": {
+   "dvol": {
+    "bound_end": 1784160000,
+    "bound_start": 1779663600,
+    "columns": [
+     "dvol"
+    ],
+    "file": {
+     "name": "dvol_1h_A.csv.gz",
+     "sha256": "2eb0d3594546c62944c62f655548062fba84fd7e56d401dd733dd313655fcbab"
+    },
+    "first": 1779663600,
+    "last": 1784156400,
+    "rows": 1249,
+    "sha256": "f0e9e8e552e19a7df735832bde8e833658ce08718077bca93b0ffeeaa0b84dee",
+    "source": "dvol_1h_A.csv.gz",
+    "step_s": 3600
+   },
+   "factor": {
+    "bound_end": 1784160000,
+    "bound_start": 1779667200,
+    "columns": [
+     "ridge_5m",
+     "hgb_5m",
+     "ridge_15m",
+     "hgb_15m"
+    ],
+    "file": {
+     "name": "factor_preds_5m_A.csv.gz",
+     "sha256": "9da3423a7ec68921eded27c8b7e6284c572f1f479c1e7bbb6d63af233606518b"
+    },
+    "first": 1779667200,
+    "last": 1784159700,
+    "rows": 14976,
+    "sha256": "df05838cc2a4e79681f491378dd608c539b39bb8869d7772c505d4938fd8f72c",
+    "source": "factor_preds_5m_A.csv.gz",
+    "step_s": 300
+   },
+   "klines": {
+    "bound_end": 1784160000,
+    "bound_start": 1779652680,
+    "columns": [
+     "close"
+    ],
+    "files": [
+     {
+      "kind": "monthly",
+      "name": "BTCUSDT-1m-2026-05.zip",
+      "sha256": "62983d93c35e26ec6c29116c629e443b7ddfe3d301aca83331ff58112199d8d0"
+     },
+     {
+      "kind": "monthly",
+      "name": "BTCUSDT-1m-2026-06.zip",
+      "sha256": "c8e1d5e70b766dd2312fc9cd7085785bb25708e27e75c21a5a5aaba61a6d07f5"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-01.zip",
+      "sha256": "0eda691583525b9c986d0bd94645c1b72ba04571e16908529aa548f33c0eb9d7"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-02.zip",
+      "sha256": "9328fc358b1d621ef23b71d5068ad383ee765eb7e68916e516cda44661547f29"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-03.zip",
+      "sha256": "1abeee206196ce1dd216b0a78b50f4bb27dbb3646dfefb627480a1ca5a6106b4"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-04.zip",
+      "sha256": "dff1a2868496ee0ccd119f0cb73d1288ad1799754a13d865157587b3d8c363c4"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-05.zip",
+      "sha256": "a610008ee2330f6a5f481d7432c5f71443c0f96dd5af5ba1fc81d005c2a4f39c"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-06.zip",
+      "sha256": "0281570cf7b71b9a7d11d7b4ddbfef4d7fce5fd8a2246680cc03ba3e949b72b7"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-07.zip",
+      "sha256": "ff7caaf721ec4ff2f31f85e0b70a222613987b6e48b27caab4f54d408566c737"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-08.zip",
+      "sha256": "e3757bdd1d9eb43ab6e11d4ea842b83a18be253eca366fff40d7a7183a0715e2"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-09.zip",
+      "sha256": "9ada2cbad60c947f745dab30681475be73b44ae041d6577c03724abd58798f60"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-10.zip",
+      "sha256": "a513f4b275fa2d458594736478139f917aa297b1f297bd89324a17bf64acdda8"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-11.zip",
+      "sha256": "73cc308dd1bc3c7f2db9da6ac96cf15a564018222ccaee902dea48d1726b33fa"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-12.zip",
+      "sha256": "a1a5f7eda180320745822c5a7031cc523066ee56df23e3e7848cab6a29714370"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-13.zip",
+      "sha256": "d40b69512d241a314225c3587067cb4d00a8d991a3523150b7121081015a9b83"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-14.zip",
+      "sha256": "7321357798a055a33697bcd1261844d79d0ce9cd59e921e051d71dcabee1ae3d"
+     },
+     {
+      "kind": "daily",
+      "name": "BTCUSDT-1m-2026-07-15.zip",
+      "sha256": "fbf4b4194faae09d8a123be9f263838a797e434daa9214017c27efc3037cc201"
+     }
+    ],
+    "first": 1779652680,
+    "last": 1784159940,
+    "rows": 75122,
+    "sha256": "c8da9c0ecfe3e3303fa06339ffa7aefcfb40fb3a2ac49af6fa286a4b06f0c2cd",
+    "source": "BTCUSDT-1m A-only source plan",
+    "step_s": 60
+   }
+  },
+  "manifest_sha256": "dc5223a424bf59bfb45a636a8271727a7dbc798007a28617d4a58aea945e2491",
+  "runner": {
+   "files": {
+    "binary.py": "54068fdc9f707fb9f2722e7ac2f54126fdd192d9fe6575c016b3f27c9fdb9246",
+    "cross.py": "8b2e7e4f073937e51e3c0ea2919c1f17a64975dbf1413f7ce1923d3424ae7af9",
+    "jump2s.py": "4e6052accd807d190156e418a4c940d50863eb3c31a254dca38f639372e2e1d7",
+    "jump2s_hf.py": "f7f957976c12fafce0dab18aff186a5a6fbb3cc345d644b7a910f553984209cf",
+    "mix_hf.py": "be5ee28d60d463795e7a2f58f4a0abe514071ffae7dd1bac8587556f31803d40",
+    "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407"
+   },
+   "runtime": {
+    "joblib": "1.6.0",
+    "numpy": "2.5.3",
+    "pandas": "3.0.6",
+    "pyarrow": "25.0.1",
+    "python": "3.12.14",
+    "scipy": "1.18.1",
+    "sklearn": "1.9.1"
+   },
+   "sha256": "783a0cdf348dbc58507483c5bce005d3c32fbd1e761e3c5bb5892eefe091a96a"
+  }
+ },
+ "provenance_sha256": "31fdf9940f10b6f1f9bd866c09f402c9c64cb9e9277fe38f09ecc390367a4dcc"
+}

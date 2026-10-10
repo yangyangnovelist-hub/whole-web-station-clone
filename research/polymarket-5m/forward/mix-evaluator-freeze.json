@@ -1,0 +1,37 @@
+{
+  "aggregate_feed": "wss://data-stream.binance.vision/ws/btcusdt@aggTrade",
+  "aggregate_sources": [
+    "bn_spot_agg",
+    "bn_spot_agg_2",
+    "bn_spot_agg_3"
+  ],
+  "control_protocol_sha256": "28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45",
+  "dependencies_sha256": {
+    "archive_day.py": "009217f3a4ebb9953147e1e605c1b05ffcb76ff24a7560b9aa413b11db71669b",
+    "eu_strict.py": "f88d04eaa46850f438bd433a4237c8952f7e68a3b2243b4d56350c7c3245a2fe",
+    "forward/mix-control-freeze.json": "9bff030e6e703861b5e4935fa74cea51c76fe948cae84ca6dd340f7087be0c6a",
+    "forward/mix-r1-17f-freeze.json": "bf1a36537d98f7ffe8a4d1cfce7a1dd7bad040d038ffb47f3c3b2fa6a6304bfc",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "mix_agg_rec.py": "12abe8cd1a6e556170cc2e5dd164b9a9674cbd17ee15b358bd05cc6ab18c443c",
+    "mix_daily.py": "ee090709fcf1dcc1d9e24a8951788fec3eec417a5d91f01a165b2df8a9e59125",
+    "mix_forward.py": "e1bdc7774bef55bfe33d8b7c66d3916708b73fb5b4930dc1d8261ebb338e8dcc",
+    "mix_hf.py": "be5ee28d60d463795e7a2f58f4a0abe514071ffae7dd1bac8587556f31803d40",
+    "mix_projection.py": "6fc104123dc4f286c61fd3be064652ec2d3c0f6a57bf86040120cb0e2b7f0739",
+    "poly_clob_rec.py": "db88ec4933a0f111d9ee6c0b0929f5fe483b893411fa7699d694aed8adac9adc",
+    "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",
+    "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
+    "strict_prebuild.py": "4b7f847bc67319604652955b06eea6644ebd9c545cb555fe0ece14cdc5a13e08",
+    "systemd/mix-agg-recorder.service": "a58f64f3789d4603161f61d464c570fd23b6e8521fde679446f48fd769fef38c",
+    "systemd/mix-daily.service": "e095d62b69c35dd2ec7ab620a14a78af00a64317841f00662bb140fd7d48b717",
+    "systemd/mix-daily.timer": "87b651fbad05b23f49604c114bcda6842d67eaef05fe129fc561cd2dec43754b",
+    "systemd/strict-artifact-daily.service": "e95b41e45a171287f1004fabcbc56b921632faa68f05ed7f385cfa262eaa1cc4",
+    "systemd/strict-artifact-daily.timer": "453abc98f24a32a88620e2b21a942f3f3df08d9a8aefd3a0838f2be124fca2cb"
+  },
+  "holdout_start_utc": "2026-10-10T00:00:00Z",
+  "made": "2026-10-09T16:56:20Z",
+  "orders": "paper_only",
+  "pre_roll_hours": 5,
+  "projection_protocol_sha256": "26f64d5332186ef53f4e1e5e1a1ab7b50fcd45b544770d5b1268fcc42808145c",
+  "schema": "polymarket-mix-evaluator-freeze-v1"
+}

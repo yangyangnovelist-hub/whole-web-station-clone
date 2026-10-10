@@ -1,0 +1,514 @@
+{
+  "project": "Polymarket BTC 5m executable alpha search",
+  "branchName": "ralph/polymarket-executable-alpha",
+  "description": "Continuously collect independent data, reject false positives, and identify a statistically significant strategy that remains profitable at executable prices and measured latency.",
+  "formalInfrastructure": {
+    "cutoffUtc": "2026-10-10T00:00:00Z",
+    "sourceRaceEvaluatorSha256": "ddb147fa25fddd406361b2853368e6df8304285bc92af09bccf42bcb2d3d7bdf",
+    "settlementProxyEvaluatorSha256": "72b137362e4b47da6be0e0260b25649cc9ae1da31b23c1faed1e3ffc48b5b679",
+    "mixEvaluatorSha256": "ab6c4f80e339c14f0af8c6a59e12222dae41d14a969db4fcaa155c5a5b86d963",
+    "strictPrebuildSha256": "4b7f847bc67319604652955b06eea6644ebd9c545cb555fe0ece14cdc5a13e08",
+    "absorptionEvaluatorSha256": "b5fb6f3957097a6f03e4851bee748077214ad541d60755b6b5515c36ff3512b9"
+  },
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Replay frozen 5-second momentum candidate on unseen recordings",
+      "description": "As a researcher, I want the historically validated 5-second Binance momentum rule replayed on post-freeze live books so that its current-regime edge is measured without look-ahead.",
+      "acceptanceCriteria": [
+        "Freeze the rule from commit 86e2767: BTC only, 5-second return above 2.5 trailing sigma, first signal per market between 240 and 30 seconds remaining",
+        "Use only markets starting after 2026-10-01T06:20:50Z",
+        "Measure fills at 300, 350, 400, and 500 milliseconds with at least five shares at the executable ask, taker fees, feed-health checks, and disconnect rejection",
+        "Deduplicate markets across recording runs and emit exact fair-price p-values plus day-cluster lower bounds",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented with receipt-time completed-second signals, 300/350/400/500 ms executable asks, five-share depth, fee, disconnect checks, immutable first-observation deduplication, deterministic Poisson-binomial p-values, and a pinned stopping sample."
+    },
+    {
+      "id": "US-002",
+      "title": "Backfill all post-freeze GitHub recording artifacts",
+      "description": "As a researcher, I want every eligible archived recording replayed so that the candidate is judged on substantially more unseen data immediately.",
+      "acceptanceCriteria": [
+        "Download and replay every retained polymarket-forward artifact containing BTC markets after the freeze",
+        "Pin the first preregistered stopping sample and never recompute its verdict",
+        "Report fill count, days, EV per share, exact p-value, clustered lower bound, and latency sensitivity",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Replayed all five retained eligible BTC artifacts (1,860 market rows; 465 frozen signals). Five-share executable fills and net EV/share were: 300 ms 400 fills, -1.55c; 350 ms 397, -1.67c; 400 ms 396, -1.19c; 500 ms 399, -1.64c. All exact fair-price p-values were 1 across three UTC days. Candidate zoo100 #27 is rejected as robustly negative at every tested latency; the post-protocol stopping sample remains immutably separate and empty."
+    },
+    {
+      "id": "US-003",
+      "title": "Attach candidate evaluation to continuous paper recording",
+      "description": "As a researcher, I want each new recording run to append independent evidence automatically so that the test continues without manual intervention.",
+      "acceptanceCriteria": [
+        "Every completed forward recording evaluates the frozen rule without placing orders",
+        "Accumulation is idempotent by market and preserves the first observation",
+        "The workflow notifies only on rejection, paper-gate passage, or failure",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Strict current-H TWAP V3 replaces invalid V2. V2 applied the full endpoint spot move to the closing 60-second TWAP after some samples were already fixed; V3 scales the move by unknown_closing_twap_samples/60, binds every row to CURRENT-H-TIMESTAMPED-FIRST-TWAP-V3 and rejects stale strategy rows. Three spot and two futures sockets race by receipt time; effective mirrored books, partial FAK fills, fixed limits, one order/minute, 15 ms wire time and a 500 ms primary gate remain. The stopping sample requires 1,000 fills over seven UTC days, share-weighted day-cluster 99% lower bound above zero and a Poisson-binomial p-value Bonferroni-corrected across 100 strategies."
+    },
+    {
+      "id": "US-004",
+      "title": "Run the next residual-alpha strategy family",
+      "description": "As a researcher, I want a new predeclared family tested with nested walk-forward validation so that the search continues after each rejection without mistaking high nominal win rates for alpha.",
+      "acceptanceCriteria": [
+        "Condition outcomes on executable price, fees, remaining time, and latency before testing additional features",
+        "Test cross-venue spot and perpetual flow, book microprice and imbalance, TWAP path state, and maker queue adverse selection as separate families",
+        "Use chronological discovery, validation, locked holdout, family-wise error correction, and minimum five-share depth",
+        "Promote at most one frozen candidate per completed family; otherwise record a rejection",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "Partial-cancel remains rejected on the completed 67-day audit. The old strict H audit remains audit-only and V2 is now invalidated by its closing-TWAP move-sensitivity bug. The corrected full 67-archive zoo100 rerun is complete: 100 frozen rules, five discovery candidates and zero strict B/C passes, so rule 24 and all other zoo rules remain rejected. The predeclared near-certain [0.95,0.99) side passed unused 2025-09-15..2026-03-13 history at +2.44c/share before fee and +2.282c after fee (market-cluster t=6.70, 275 markets, 598651 shares, one losing market), but its historical next-60-second aggressor trades prove pricing rather than our fill capacity. Its post-cutoff forward gate requires receipt-causal inputs, a direct 500 ms ask, five shares and fees; it currently has zero eligible triggers because available data ended before the cutoff."
+    },
+    {
+      "id": "US-005",
+      "title": "Gate any future real-money trial",
+      "description": "As the account owner, I want live trading to remain impossible until independent paper evidence and explicit approval exist.",
+      "acceptanceCriteria": [
+        "Outside an explicitly authorised bounded pilot, production remains halted and carries no unresolved or resting order",
+        "No workflow contains credentials or can submit an order",
+        "A candidate requires positive net EV, one-sided 99 percent day-cluster lower bound above zero, corrected exact p below 0.01, and robustness at 400 milliseconds",
+        "Real-money activation requires a new explicit user instruction",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "The first H pilot completed 10 FAK sends, 1 fill, 9 kills and +$3.149919740025, but trial_edge was null. At the next fixed checkpoint V2 had 40 FAK sends, 5 fills and 35 kills (12.5%); all five fills lost for -$7.075843, with source-to-match 337-520 ms. These rows cannot validate alpha because V2 overstated the endpoint move's effect on a partially fixed closing TWAP. V3 uses the corrected unknown-sample fraction and a fresh pilot identity. Five-share target, $5.00 order cap, $5.35 single-position exposure cap, one order/minute, technical latches and pending/unknown/rested protection remain; realised-loss stops are disabled at the owner's explicit instruction. Promotion still requires positive V3 real FAK calibration."
+    },
+    {
+      "id": "US-006",
+      "title": "Freeze a causal jump-prediction dataset and evaluation protocol",
+      "description": "As a researcher, I want a receipt-time-causal dataset for the exact Binance 1 bp trigger so that new predictors cannot win through clock leakage, overlapping folds, recorder gaps, or reuse of the consumed test period.",
+      "acceptanceCriteria": [
+        "Preserve the 2026-10-03..04 result of 259 test alerts, one hit, 0.4 percent precision and -2.46 cents per share as a consumed immutable baseline that no later model or threshold may tune against",
+        "Build features only from frames received by each decision timestamp and label the same-direction Binance spot 1 bp detector crossing 120 to 220 milliseconds later in exchange time",
+        "Represent recorder gaps as unavailable sessions rather than no-jump negatives, purge overlapping one-second feature and label windows at every chronological fold boundary, and write a split manifest with source file hashes",
+        "Add exact detector-state precursor features including distance to the up and down 1 bp barriers, age of the trailing extrema, refractory state, trade intensity, book depletion and cross-venue residuals without using future frames",
+        "Tests prove detector parity, receive-time causality, gap exclusion, purge boundaries and deterministic manifests",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Completed and extended in place for US-007 over closed UTC hours 20261004T14..15. Nine routes, including live Deribit BTC-PERPETUAL quotes but excluding its 100 ms batched trades, produced 137,941 decision rows, 96,927 eligible rows, 217 causal features and 130 positive labels; train/validation/untouched-test contain 60/60/10 positives. Internal manifest SHA-256 is e632df8316971c907bd27441489c2f72e4bee1b9ead5a599675fe575f6304d30 and all 29 source/artifact hashes were reverified. Corrupt hour 13 was rejected. Binance target continuity uses multiplexed transport plus trade-ID continuity; non-target venue connection epochs remain conservatively inferred from raw-frame silence because recorder v2 lacks explicit epoch markers."
+    },
+    {
+      "id": "US-007",
+      "title": "Test preregistered mechanistic jump precursors",
+      "description": "As a researcher, I want transparent microstructure hazard rules tested first so that an accurate warning can be attributed to observable order-flow mechanics rather than an opaque classifier score.",
+      "acceptanceCriteria": [
+        "Freeze a small family combining distance to the 1 bp barrier, spot and perpetual sweep velocity, top-20 depth depletion, signed trade bursts, and multi-venue directional agreement",
+        "Select every threshold only inside purged chronological training and validation folds; score all quiet periods and apply the same five-second alert cooldown",
+        "Report per fold alerts, hits, precision, Wilson lower bound, lead-time distribution, assumed EV, direction placebo and source ablations",
+        "Promote at most one rule only if its validation evidence is stable across time folds; otherwise record the family as rejected",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Family rejected on the unseen 20261004T15:00..15:45 validation interval; the final 15-minute test split was not read. Seven frozen rules produced: barrier spot sweep 0/27, perpetual lead 1/28 (3.57%, -2.14c/share assumed EV), Deribit lead 1/29 (3.45%, -2.16c/share), cross-venue velocity 1/11 (9.09%, -1.59c/share), depth/flow 0/15, all-medium 0/1 and strict consensus 0 alerts. No rule met the 30-alert, 30%-precision, family-adjusted Wilson-lower-above-25% gate. Deribit disappearing under source ablation confirms it drives its named alerts, but 1/29 shows that its 10-18 ms local receipt lead is a latency proxy for an already-occurring Binance move, not a 120-220 ms-ahead predictor."
+    },
+    {
+      "id": "US-008",
+      "title": "Train precision-first two-stage tree ensembles",
+      "description": "As a researcher, I want a calibrated rare-event hazard model and a separate direction model so that the system can abstain almost always and alert only when both arrival and direction are reliable.",
+      "acceptanceCriteria": [
+        "Reuse maintained open-source estimators rather than implementing boosting from scratch and compare logistic, histogram gradient boosting and one compact gradient-boosted alternative under the same folds",
+        "Separate jump-arrival probability from direction, calibrate on validation only, and choose coverage by Wilson lower bound subject to a preregistered minimum-alert constraint",
+        "Use bounded hyperparameter grids with family-wise correction and publish precision-recall, reliability, alert-rate, regime and source-ablation tables",
+        "Promote at most one frozen ensemble only if it beats the mechanistic baseline on multiple chronological validation folds without failing direction or time-shift placebos",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Family rejected without reading split code 3. Six scikit-learn two-stage candidates (logistic, histogram gradient boosting and compact gradient boosting) used 46,651 training rows; the first 12,665 chronological validation rows calibrated scores and chose among 12 operating points per model, and the next 25,330 rows were evaluation. After correction across 72 model/threshold choices, the best diagnostic candidate was gradient boosting depth 2 at 1/35 hits (2.86%, family-adjusted Wilson lower 0.21%, -2.21c/share assumed EV); its two evaluation halves were 1/20 and 0/15. Other candidates produced 0-1 hits from 56-160 alerts. Every one-second time-shift control had zero hits, no model beat the 9.09% mechanistic diagnostic baseline, and no model was promoted."
+    },
+    {
+      "id": "US-009",
+      "title": "Evaluate an open-source event-sequence LOB model",
+      "description": "As a researcher, I want one compact sequence model adapted from a maintained LOB research framework so that nonlinear depth and event-order information is tested without building a custom neural architecture.",
+      "acceptanceCriteria": [
+        "Use a licence-compatible maintained project such as LOBFrame or TLOB after recording the exact upstream commit and licence; do not copy unlicensed notebook code",
+        "Feed causal event sequences from Binance spot and perpetual top-20 books plus selected leading venues, preserving receive order, update masks and inter-arrival times",
+        "Train only if US-006 confirms sufficient complete L2 sequences and US-007 or US-008 finds non-zero validation signal; otherwise close this story with a measured rejection reason",
+        "Compare against the frozen mechanistic and tree baselines on identical purged folds and reject the model unless precision and calibration improve after compute and multiple-testing penalties",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Closed without training: only 65 target jumps exist in the two-hour causal freeze, while both transparent rules and six maintained tree/logistic models were far below break-even on later validation (best 1/35). The preregistered prerequisite of sufficient complete L2 sequences plus non-zero validated signal is therefore absent; fitting TLOB/LOBFrame now would only add model capacity to a tiny failed sample. Reopen only after multiple fresh UTC days provide enough target events and a simpler baseline shows positive validation signal."
+    },
+    {
+      "id": "US-012",
+      "title": "Validate and integrate receipt-race execution sources",
+      "description": "As the account owner, I want Binance perpetual raw trades and Deribit live quotes evaluated as causal execution clocks so that a genuine local-receipt lead can shorten H without turning ordinary cross-venue noise into orders.",
+      "acceptanceCriteria": [
+        "Reuse the frozen current-H one-second move, trailing sigma and active-window semantics; order source candidates by local receipt, use exchange timestamps only for features and audit, and measure every arm on one receipt-to-match clock",
+        "On later closed UTC hours report at least 30 source candidates, one-to-one same-move source-clock matches, spot-candidate coverage, signed receipt-lead quantiles, equal-exposure deterministic time-shift placebos and a direction-reversal control",
+        "Treat receipt timing only as a source-quality screen; no source becomes active from confirmation or lead statistics alone",
+        "Promote a source only after a strict live-equivalent H replay compares the deployed spot-trade plus futures-BBO baseline with the independently frozen candidate race using first-trigger and rate-limit state, the frozen limit, direct dual-token L2, the 150 millisecond venue hold, at least five executable shares and real taker fees, and the candidate improves out-of-sample net EV or fills without worsening loss controls",
+        "The live engine records source and clock metadata, deduplicates duplicate transport frames and keeps Deribit 100 millisecond batched trades excluded",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "All added feeds remain paper-only pending the untouched holdout. A receipt-race-ready direct-L2 audit covered 56 markets and about 4.5 hours on a GitHub westus2/unknown-region runner, so it is pre-cutoff diagnostic evidence only. At the old exchange-clock 500 ms convention the deployed baseline sent 51, filled 11 and produced +16.159c/share / +$10.990; Deribit-first sent 66, filled 13 and produced +19.881c/share / +$21.212, while raw perpetual first produced +16.082c/share / +$10.830 and no fill gain. That audit could not measure Deribit's actual local-arrival advantage because venue timestamps have different economic offsets. A later three-hour eu-west receipt-clock source audit found 663 spot candidates: raw futures trades had 24.03% leading precision, 39.97% spot coverage and +8.20 ms median signed lead; Deribit quotes had 13.52% leading precision, 37.86% coverage and +29.35 ms median signed lead, versus maximum circular-shift placebos of 2.36% and 1.89%. A monotone pre-holdout threshold audit showed that 2-sigma Deribit noise stole cleaner futures race episodes: raising Deribit alone to 3 sigma improved whole-race leading precision from 15.78% to 24.98% while spot coverage moved only from 47.51% to 44.95%; 4 sigma added just 0.69 percentage point, so 3 sigma was frozen without selecting the sparse maximum. Deribit therefore remains a filtered race input, not standalone alpha. The candidate compares the deployed spot-trade plus futures-BBO baseline against raw futures trades plus 3-sigma Deribit quotes, ordered by local receipt with exchange clocks used only for features/audit. Match books are sampled at 300/350/400/500 ms after local receipt, with 400 ms primary because the observed live receipt-to-match path was about 376 ms. Websocket reconnects preserve each source's production price history, exact duplicate timestamp/price frames are rejected like production, and the existing reference-age gate fails closed after long gaps. A pre-cutoff cold review then removed the remaining execution-clock leak: a book received after the horizon can no longer enter through an earlier venue timestamp, equal-receipt batches are atomic, and dual-clock retention preserves historical source-mode semantics. The authoritative evaluator is `ddb147fa25fddd406361b2853368e6df8304285bc92af09bccf42bcb2d3d7bdf`; its immutable S3 admission now uses atomic create-only writes, distinguishes 404 from permission/server failures and includes the shared absorption lane in artifact retention. The five inspected Deribit thresholds are covered by increasing the source-race family correction from 100 to a conservative 200, and the evaluator rejects any source-race correction weaker than current H. Daily evidence still requires immutable eu-west raw identities, direct two-token L2, independent arm state, 1,000 five-share fills over seven UTC days, positive EV and 99 percent day-cluster lower bound, multiplicity-adjusted exact p below 0.01, improvement over baseline and no worse loss rate. No formal row, wallet access or order path is active."
+    },
+    {
+      "id": "US-013",
+      "title": "Test the early settlement-proxy lane",
+      "description": "As the account owner, I want the delayed Chainlink settlement average reconstructed from faster public spot and index feeds so that a nearly fixed final outcome can be tested against still-live Polymarket asks without confusing feed latency with executable profit.",
+      "acceptanceCriteria": [
+        "Use the exact received Chainlink history for the opening 61-second average and estimate the closing seconds only from receipt-causal Coinbase, Kraken, Bitstamp, Binance, OKX and Bybit spot values plus the Deribit BTC index",
+        "Freeze venue offsets and a conservative residual-error bound on pre-holdout data; never calibrate them on the Monday US-session holdout",
+        "Signal only in the final seconds after every settlement-window second is already observable through the faster proxies, and require the projected closing-minus-opening margin to exceed the frozen error bound",
+        "Compare the proxy signal with a delayed-Chainlink-only baseline on direct dual-token L2 at 300 and 500 milliseconds, at least five shares and real taker fees",
+        "Report signals, sends, fills, fill rate, direction accuracy, net EV per share, PnL, residual calibration and source ablations; reject if profit disappears without any one venue or under a one-second timing placebo",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "V1 and V2 were rejected before holdout because their strict source-availability rules could supply only 14 and 2 validation windows. A Kraken parser defect was then fixed: the subscription is ten levels, but the old parser retained twenty and discarded almost every later crossed/stale reconstruction. V3 fingerprint 2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee was frozen at 2026-10-09T11:18:03Z for a 2026-10-10T00:00:00Z holdout, with a 48-hour embargo, at least four of six spots per second and optional full-window Deribit. Exact pre-holdout calibration produced 158 validation windows, 0.7011 bp combined MAE, a 1.8464 bp 99th-percentile residual and a 2.3080 bp safety bound; every source ablation has 103-158 validation windows. Calibration SHA is 9d0dfde485ab94bd0a40dad21fd94d68cfadce869f544cc9bec615d6b16d492e and provenance SHA is a30ad0a14aa435e86cfa307d6357a128db7d796bc15aff39d469ad0ea8e3712d. Evaluator freeze `72b137362e4b47da6be0e0260b25649cc9ae1da31b23c1faed1e3ffc48b5b679` binds the recorder, strict dual-token L2 adapter, production-equivalent source semantics, receipt-clock execution, 300/500 ms horizons, five-share depth, fee model, delayed-Chainlink baseline, seven ablations, timing control, chronological daily state and systemd schedule. Its daily state records base/target hashes, keeps an uncommitted staging generation recoverable, and writes one admission pointer last; a forced crash after the index but before the terminal verdict recovered the same day and rejected advancement past the first terminal prefix. The eu-west data host verified the prior chain with 39 shared focused tests and a pre-holdout no-op; the current hash changes only shared recorder/admission dependencies before any formal row. First formal day is 20261010 and is admitted only after the following boundary day is closed and verified. No formal fill or profit result exists yet, and displayed depth remains an upper bound requiring separately authorised live FAK calibration after a paper pass."
+    },
+    {
+      "id": "US-010",
+      "title": "Run one untouched multi-day blind jump-prediction test",
+      "description": "As the account owner, I want the chosen predictor tested once on data recorded after every feature, model and threshold is frozen so that the reported precision is genuinely forward evidence.",
+      "acceptanceCriteria": [
+        "Freeze model artefact, feature schema, source allowlist, threshold, cooldown, target window and report code before naming the holdout files",
+        "Collect at least 30 eligible alerts and enough complete future sessions to cover multiple UTC days; stop safely before the research disk has less than 8 GB free",
+        "Read the blind holdout once and report alerts, hits, precision, 95 percent Wilson lower bound, lead times, assumed EV, regime splits and source health",
+        "Pass only with at least 30 alerts, at least 30 percent precision, a 95 percent Wilson lower bound above 25 percent, positive assumed EV and no failed direction or time-shift control",
+        "Do not treat this screen as a real fill or settlement backtest",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "The active research recorder is data-only; no credentials or order path may be introduced."
+    },
+    {
+      "id": "US-011",
+      "title": "Package a passing predictor as alert-only shadow inference",
+      "description": "As the account owner, I want any genuinely passing model replayed and then run in alert-only shadow mode so that inference latency and drift are measured before any trading decision.",
+      "acceptanceCriteria": [
+        "This story is skipped unless US-010 passes every preregistered blind gate",
+        "Export deterministic inference with bounded memory and measure receive-to-score latency on the eu-west-1 research host",
+        "Run alert-only with no wallet, signer, order factory or credential access and record predictions for later settlement-independent scoring",
+        "Any real-money integration requires a separate explicit user instruction and is outside this Ralph loop",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "No pass means no deployment."
+    },
+    {
+      "id": "US-014",
+      "title": "Forward-test the frozen MIX jump-z control",
+      "description": "As the account owner, I want the strongest simple MIX control replayed on untouched receipt-clock books so that its historical edge is either confirmed as executable or rejected without depending on unavailable model factors.",
+      "acceptanceCriteria": [
+        "Bind the A-fitted MIX estimators to the existing frozen-rule SHA, A fingerprint, feature order, rule cuts and exact runtime versions",
+        "Use the same Binance aggregate-trade receipt tape as the historical study, the frozen jump_z threshold, raw-jump spacing and no outcome before a fill",
+        "At 300, 400 and 500 milliseconds use only direct dual-token books received by the decision clock, require all five shares at the single best ask, enforce the 0.98 limit and charge the frozen real taker fee",
+        "Freeze the holdout start before observations, append each observation once, and immutably stop the primary 500 millisecond sample at the first 1000 resolved fills spanning at least seven UTC days",
+        "Pass only with positive net EV per share, a positive one-sided 99 percent day-cluster lower bound and a Poisson-binomial p value below 0.01 after correction for 100 searched strategies",
+        "Treat the missing explicit lifecycle and halt field as a paper-execution limitation and require separately authorised live FAK calibration before any production claim",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "The corrected runner validates the full source tape, causally merges only Deribit connection/DVOL/disconnect events into the frozen aggregate-trade tape, preserves CLOB receipt order with the deployed per-token stale guard, filters non-economic zero-price futures sentinels and performs the same replay with bounded memory. No formal eu-west stopping row has been admitted. The untouched cutoff remains 2026-10-10T00:00:00Z. Control protocol 28588718bd3a944595fc8a786beeb6fb1b54d3bd51a2246775995c31cdfe8b45 binds runner e1bdc7774bef55bfe33d8b7c66d3916708b73fb5b4930dc1d8261ebb338e8dcc; R1-17F mean-projection protocol 26f64d5332186ef53f4e1e5e1a1ab7b50fcd45b544770d5b1268fcc42808145c remains a separate 17-causal-feature hypothesis with four historical factor inputs fixed at A-training means, not a reconstruction of historical R1. Evaluator freeze af4b24cac10486266f1aba97a487e23d5f82954dfc9743036fb25238765d125b binds the three-route aggregate recorder, explicit daily aggregate-tape handoff into shared-artifact replay, first-copy deduplication, joint-disconnect fail-close, exact S3/local identities, chronological crash-safe daily admission and both frozen stopping lanes. Before any upload, the archiver now requires valid gzip and full 24-hour coverage for every frozen route on formal days; remote byte conflicts and changed formal manifests fail closed. Its recorder and 03:00 UTC daily timer are deployed on the eu-west research host. Both lanes remain unpassed until the untouched 1,000-fill, seven-day statistical gates complete; all pre-cutoff runs are audit-only."
+    },
+    {
+      "id": "US-015",
+      "title": "Replace parameter zoos with independent mechanisms and test the perp-basis wedge",
+      "description": "As the account owner, I want strategy breadth counted by independent economic mechanisms rather than parameter variants, and the first genuinely new relative-value mechanism tested on executable books.",
+      "acceptanceCriteria": [
+        "Maintain one deduplicated mechanism ledger; changing only time, lookback, threshold, price band, session or size never creates another mechanism",
+        "Retire the claim that either legacy 100-rule zoo represents 100 independent economic hypotheses and keep its historical rejection evidence without reusing any consumed holdout",
+        "Freeze one Binance-perpetual-specific basis-wedge reversal: the perpetual basis moves at least 1.5 basis points in 500 milliseconds while spot, Deribit and optional Chainlink do not confirm, and Polymarket follows the isolated move by at least two cents",
+        "Order all inputs by local receipt time, fail closed after disconnects or stale frames, freeze the reverse-side fair value and limit at the signal, and use only direct token asks",
+        "Replay at 400 and 500 milliseconds with at least five directly displayed shares and the real taker fee; report no-wedge, direction-reversal, time-shift and confirmation controls",
+        "Use chronological development, validation and locked holdout; promote only if both execution latencies are positive and the first frozen sample spans at least seven UTC days with a positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted exact p below 0.01",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "The independence audit found at most 30 mechanism templates in zoo100.py and 13 in strategy_zoo.py; the rest are parameter variants, and strategy_zoo's previous-outcome rule also lacks a causal result-availability timestamp. Across the repository, 16 deduplicated economic families are evidenced: seven rejected, five awaiting strict forward evidence and four structural or micro-capacity mechanisms. Existing support/resistance and volume-conditioned work remains owned by its separate active thread. US-015 tests a distinct relative-value hypothesis: an isolated Binance-perpetual basis shock that Polymarket follows even though spot and Deribit do not confirm. This is not the rejected hourly basis direction factor or the rejected 120-220 millisecond jump predictor. Protocol `bfd343bc370be48c81cc1c96b75e4fbeaeefa2ccf6a9c15c40818ba2b780765f` and evaluator `4450a34a53897a8efe89ea4b5399692b5cfb4e09b9ba56da6764dd5664802bf6` were frozen before the 2026-10-10T00:00:00Z holdout. The receipt-causal detector uses an immutable first qualifying futures crossing, strict post-shock spot/Deribit confirmation frames, source-validated BTC labels, direct dual-token books, exact five-decimal fee rounding and one signal per market; it decides immediately when the last required confirmation arrives instead of waiting for another Polymarket frame. The strict adapter records base, no-wedge, direction-reversal, five-second time-shift and confirmation arms at 400/500 ms, recomputes every direct fill, fee and PnL, reports partials without counting them toward stopping, and requires all matched controls before promotion. Chronological daily admission is checksum-bound and recovers deterministically after every ledger/status commit boundary. No post-cutoff row or holdout result has been read, passes remains false, and no production path is authorised."
+    },
+    {
+      "id": "US-016",
+      "title": "Test a canonical current-H execution veto",
+      "description": "As the account owner, I want likely stale or non-executable current-H sends vetoed without changing H's signal, direction, fair value, limit or size, so that an execution improvement can be measured separately from inventing another alpha.",
+      "acceptanceCriteria": [
+        "Start every arm from the canonical current-H event stream and freeze each attempt's market, receipt time, side, H fair, H fixed limit, order size, rate limit and retry state before applying a gate",
+        "The gate may only veto a send; it may not create a replacement direction, reprice the order, change the H edge threshold or use a terminal-outcome model",
+        "Use only decision-time receipt-causal features and train the veto threshold on an earlier segment; outcome, future book, fill, match and resolution fields are label-only",
+        "Evaluate the end-to-end gated state machine against ungated H and report paired UTC-day delta PnL with every veto, kill and non-fill represented as zero rather than comparing only profitable fills",
+        "Use strict direct dual-token L2 for formal evidence; public 100 millisecond observation-grid books may be diagnostic only and require a pre/post horizon bracket with ambiguous rows censored",
+        "Promote only after at least 1000 gated full fills over seven UTC days, positive absolute 99 percent day-cluster lower bound, positive paired delta-PnL lower bound versus H and the existing multiplicity correction",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "A proposed ValueFill implementation was rejected before launch and removed. It generated 20 ms CrossVenue candidates instead of frozen H candidates, learned a new direction/fair/limit, selected 3-12 cent edge thresholds around a 400 ms primary point, and labelled fills from one stale public snapshot. Its controls were not matched and its per-fill edge comparison rewarded deleting losing fills without counting foregone profitable opportunities. Public archives also lack the futures-BBO arm and exact receipt-ordered direct-L2 lifecycle needed to recreate timestamped-first H. US-016 is therefore an execution enhancement, not a seventeenth independent economic mechanism and not a historical pass. A paper-only veto seam now wraps canonical H without changing its source: allow-all is behavior-identical, the policy receives only immutable decision-time side/fair/ask/limit/edge fields, and veto consumes no order/rate/pending state for that signal while canonical clocks and older evaluations still advance. Each latency is forced into an independent single-horizon machine so branch-specific rate and no-send accounting cannot be swallowed; policy failures permanently latch the replay. Formal work still requires binding the parent H freeze/hash, fitting a preregistered gate on earlier direct-L2 data, charging inference time, and running matched fresh-forward ablations."
+    },
+    {
+      "id": "US-017",
+      "title": "Test a Binance-common-mode versus BTCUSD-benchmark residual fade",
+      "description": "As the account owner, I want Polymarket overreaction to a Binance-local common-mode move tested separately from stale-quote momentum and the perpetual-basis wedge, using direct executable books.",
+      "acceptanceCriteria": [
+        "Define a trigger in which Binance spot and perpetual each move at least 1.5 basis points in the same direction over 500 receipt-clock milliseconds while the change in their basis is at most 0.5 basis points",
+        "Require strictly post-crossing Deribit BTC-PERPETUAL quote and BTCUSD index frames to remain within 0.5 basis points of their pre-impact values, while Polymarket has followed the Binance direction by at least two cents",
+        "Make the trigger set disjoint from US-015 by construction, freeze the first qualifying common-mode crossing, and use only local receipt order with fail-closed disconnect, stale-frame and receipt-regression handling",
+        "Buy only the directly quoted opposite token when its five-share VWAP plus exact taker fee is at least three cents below the complementary pre-impact fair value; never use a mirrored ask",
+        "Replay the unchanged fixed limit at 400 and 500 milliseconds; report direction-reversal and five-second time-shift as parent-linked matched arms, and report BTCUSD-confirmation and no-Polymarket-follow only as disjoint negative-control cohorts",
+        "Use only observations after the protocol freeze and a named future holdout boundary; promote only after 1000 full fills over seven UTC days, positive net EV at both latencies, a positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted exact p below 0.01",
+        "Treat direct displayed depth as a paper fill upper bound and require separately authorised live FAK calibration after any paper pass",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "This is economic family 18. US-017 trades a same-sign Binance spot-plus-perpetual common move with a quiet basis and quiet Deribit BTC-PERPETUAL/BTCUSD benchmark path, then fades a Polymarket overreaction; H instead buys a stale quote in the confirmed underlying direction. Cold review proved that source-window basis coordinates alone do not make US-017 disjoint from PM-book-anchored US-015 when anchors are asynchronous. The detector runs exact frozen US-015 semantics independently per market and permanently excludes the market when that wedge captures its immutable candidate. Protocol 462d54a77a8e9f666d8a198fb63f3f9acb856d3db2ce8e54a23bdab81aaa67b4 retains the frozen signal, execution, controls and 2026-10-11 holdout while marking the evaluator ready. Evaluator 22d906fdebf2135422a8e42281dee41be2913b6ca6a1269cfda79881e83ae99c requires all 24 checksum-verified Binance spot-BBO and Deribit-index sidecar hours plus the same day's strict direct-L2 artifact, rejects equal cross-transport clocks, recomputes five-share fees/PnL, separates matched arms from disjoint cohorts, and admits only contiguous closed UTC days. Its cross-layer pending marker repairs interruption after forward admission, while input manifests, raw sidecars, strict artifacts, transitive runtime inputs, immutable signals, evaluator semantics and the paper-only systemd schedule are hash-bound and revalidated before reuse. The hash change is an infrastructure-only dependency rebind before any formal row; signals and cutoff are unchanged. The timer is deployed only on the eu-west data-only recorder and begins after the untouched cutoff; no holdout result exists, displayed depth remains only a paper fill upper bound, and passes remains false."
+    },
+    {
+      "id": "US-018",
+      "title": "Test post-sweep displayed-liquidity absorption",
+      "description": "As the account owner, I want rapid same-price ask replenishment after an aggressive token sweep tested as latent supply and short-horizon reversal, rather than treating every taker burst as momentum.",
+      "acceptanceCriteria": [
+        "Use raw direct-CLOB receipt order to identify the first same-token BUY-print burst with at most 50 milliseconds between prints and at least five total shares during 240 to 20 seconds remaining",
+        "Require ask depth at or below the highest burst price to fall by at least half within 50 milliseconds and then replenish by at least the burst quantity within 250 milliseconds while the best ask remains no worse than that price",
+        "Buy only the directly quoted complementary token, freeze its five-share limit at the 250 millisecond decision, and replay FAK matching at 400 milliseconds with 500 milliseconds as a preregistered sensitivity",
+        "Charge exact fees on every executed leg, keep partial fills in risk and PnL, and hold any position not exited by the frozen five-second unwind rule to settlement",
+        "Fail closed across disconnects, missing full snapshots, crossed books, stale state and equal-receipt ambiguity; venue timestamps are audit-only",
+        "Report matched no-refill sweeps, same-side direction reversal, five-second delayed entry and quote-addition-without-trade controls using identical execution semantics",
+        "Promote only after at least seven untouched UTC days and 1000 full entries with positive net EV, positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted exact p below 0.01",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "This is economic family 19: dynamic absorption by replenished supply after executed demand. The raw direct-CLOB adapter is receipt-causal and fails closed on lifecycle, sequence, crossed/stale-book and equal-receipt faults. Because Polymarket does not document whether last_trade_price.side identifies maker or taker, aggressor direction is now inferred only from the print price against the already-received direct bid/ask; the published side is audit-only and in-spread prints fail closed. Thresholds, decision timing, execution, controls and the 2026-10-11 cutoff are unchanged. Replaying the same closed pre-cutoff hour after this semantic correction found zero base refills and two no-refill controls; both filled five shares at 400/500 milliseconds and lost 2.9977 cents per share net. The independent quote-add control remained 11 signals, with 11/11 full fills at 400 milliseconds for -2.0536 cents per share and 10/11 at 500 milliseconds for -1.9002 cents per share. Protocol 3680ddb1acf242a9ac64d84a71f92936fe4e4d323dc306c1b9db72956eb9a130 and evaluator b5fb6f3957097a6f03e4851bee748077214ad541d60755b6b5515c36ff3512b9 bind this correction before any formal row. Promotion still requires the common first 1000 resolved full base entries at both 400/500 milliseconds over seven days, positive net EV and one-sided 99 percent day-cluster lower bounds, multiplicity-adjusted exact p below 0.01 and superiority to every sufficiently populated control. The evaluator is paper-only; no holdout day has been admitted and no production authority exists."
+    },
+    {
+      "id": "US-019",
+      "title": "Reject pinned-quote hidden-liquidity reversal",
+      "description": "As the account owner, I want a hidden-liquidity hypothesis tested independently from visible depletion and refill: aggressive buying that consumes the displayed ask while the quote and depth remain pinned may reveal replenishing supply and predict reversal.",
+      "acceptanceCriteria": [
+        "Use only receipt-ordered direct-token books and trade prints, infer aggressor direction from the already-received book, and ignore the undocumented published trade side",
+        "Within a fixed 500 millisecond window require at least five aggressive-buy shares, at least 80 percent signed buy volume and buy volume at least as large as the initially displayed best-ask size",
+        "Require the best ask to remain pinned and visible ask depth not to deplete by half, making the family disjoint from US-018 by construction",
+        "Freeze only the first qualified window per market and fail closed on disconnect, ambiguity, stale state and lifecycle faults",
+        "Buy the directly quoted complementary token with a fixed five-share limit and replay at 400 and 500 milliseconds with exact fees and the same five-second unwind",
+        "Report same-side direction reversal and five-second time-shift controls under identical execution",
+        "Use closed pre-cutoff data for development rejection; do not spend a fresh formal holdout after a clearly negative result",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "This is economic family 20 and is independent of US-018 because displayed depth must remain above half rather than deplete and refill. A causal closed-hour audit produced 10 first-window signals. At both 400 and 500 milliseconds, 9/10 entries fully filled and lost $2.35443 total, or 5.2321 cents per share. The parent-linked direction-reversal control had eight full fills and lost $0.88357, or 2.2089 cents per share; the five-second time shift had seven full fills and lost $1.78488, or 5.0997 cents per share. The treatment was worse than reversal and remained strongly negative at both latencies, so this family is rejected in development and receives no formal forward allocation or production authority."
+    },
+    {
+      "id": "US-020",
+      "title": "Reject sampled non-BTC liquidation-breadth contagion",
+      "description": "As the account owner, I want broad forced selling across non-BTC perpetuals tested as a collateral-contagion signal for BTC five-minute markets, without confusing Binance's lossy liquidation snapshots with a complete tape.",
+      "acceptanceCriteria": [
+        "Parse only the all-market Binance force-order route by local receipt time, retain source timestamps for audit only, accept USD-M product type one, exclude BTC and non-USDT symbols, and explicitly audit legacy nested product-type fields",
+        "Treat the feed as at most the latest forced order per symbol per 1000 milliseconds; count each symbol at most once per decision window and never describe sampled cumulative filled notional as exhaustive liquidation volume",
+        "Freeze the first market signal during 240 to 20 seconds remaining when a trailing one-second window contains at least four distinct forced-SELL symbols, at least $1000 sampled notional and at least two-thirds SELL sampled notional",
+        "Buy only directly quoted Down, freeze the five-share worst ask at decision time, and replay unchanged FAK limits at 400 and 500 milliseconds with direct depth, taker fees, lifecycle checks and hold-to-settlement PnL",
+        "Report parent-linked direction reversal and five-second delay controls plus a disjoint forced-BUY cohort under the same executable semantics",
+        "Use only consumed development data to reject a negative treatment; promote no opposite arm unless it is frozen first and independently clears the exact fair-price test on a future untouched sample",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "This is economic family 21. Binance's force-order feed is a lossy latest-per-symbol one-second snapshot, so the implementation preserves integer receipt time, keeps E/T audit-only, uses only the latest observation per symbol and labels z*ap as sampled cumulative filled notional. A 15-hour closed development replay, consumed before any Family 21 freeze, produced 45 first-market SELL-breadth intents. At 400 milliseconds, 34/45 fully filled and lost $3.39623, or -1.9978 cents per share; at 500 milliseconds the same 34 fills lost $3.34500, or -1.9676 cents per share. The five-second Down arm lost 7.8198 cents per share. The forced-BUY Up cohort was approximately flat at -0.1200/-0.0546 cents per share. Buying Up at the original SELL decision earned 3.0793/3.0452 cents per share across 31 fills, but exact fair-price p values were 0.4147/0.4166 on one UTC day, so this adaptive exhaustion interpretation is not evidence and was not promoted. Base source-event age was 103.53 milliseconds median while trade age was 1109.28 milliseconds median, confirming this stream is a delayed regime indicator rather than a speed feed. The original contagion treatment is rejected without a formal holdout or production authority."
+    },
+    {
+      "id": "US-021",
+      "title": "Reject direct high-frequency DVOL vega repricing below one tick",
+      "description": "As the account owner, I want live Deribit DVOL shocks tested through the exact binary-option volatility comparative static so that a slow volatility regime factor is not mistaken for an executable five-minute price edge.",
+      "acceptanceCriteria": [
+        "Parse only Deribit BTC DVOL subscription frames, order every observation by local receipt time and retain exchange timestamps as non-decision metadata",
+        "For a volatility-only shock transform every possible prior binary probability by Phi(Phi^-1(p) times old volatility divided by new volatility), and compute the exact maximum absolute probability change over all p",
+        "Audit fixed 1, 5, 10, 30, 60, 120 and 300 second horizons over the complete closed 2026-10-07 through 2026-10-09 development recording",
+        "Reject before CLOB replay when the maximum theoretical probability displacement is below the one-cent Polymarket tick at every horizon; do not search thresholds or reinterpret DVOL as a direction forecast",
+        "Keep any future realised-volatility or spot-direction use of DVOL as a separate economic family with its own causal test",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "This is economic family 22. The exact digital-option transform holds settlement distance fixed and isolates only the direct vega channel under a one-for-one proportional mapping from 30-day DVOL to the binary's remaining volatility; the analytic supremum prevents a favourable starting-price choice from hiding a larger move. All 72 hourly gzip inputs passed integrity checks, and the receipt-causal audit read 258,899 DVOL points spanning the closed 2026-10-07 through 2026-10-09 interval. Maximum possible binary-probability displacement was 0.00677 cents at 1 second, 0.02003 cents at 5 seconds, 0.02671 cents at 10 seconds, 0.07340 cents at 30 seconds, 0.11340 cents at 60 seconds, 0.16658 cents at 120 seconds and 0.34862 cents at 300 seconds. Even the five-minute maximum is only 0.349 of a one-cent quote tick before spread or taker fee, so this direct proportional DVOL-shock repricing order cannot be expressed on the market. The family is rejected structurally without consuming CLOB holdout capacity or receiving production authority; an amplified short-dated-volatility transmission would be a separate hypothesis, while hourly DVOL-minus-realised-volatility remains only an already-tested regime feature."
+    },
+    {
+      "id": "US-022",
+      "title": "Reject synchronized cross-venue BTC OI exhaustion",
+      "description": "As the account owner, I want synchronized BTC perpetual open-interest contraction tested as a deleveraging-exhaustion reversal signal on directly executable Polymarket books.",
+      "acceptanceCriteria": [
+        "Normalize only relative OI changes from Deribit BTC-PERPETUAL USD contracts, OKX BTC-USDT-SWAP coin OI and Bybit BTCUSDT OI while retaining each venue's native level unit",
+        "Order all source and CLOB events by local receipt time, require explicit source lifecycles and full direct-token book snapshots, and use venue timestamps only for audit",
+        "Freeze the first signal per market during 240 to 20 seconds remaining when at least two venues lose 5 basis points of OI over a strict trailing ten seconds and Binance index price moves at least one basis point",
+        "Buy the opposite side of the price move, freeze a direct five-share limit, and replay at 400 and 500 milliseconds with real taker fees and hold-to-settlement PnL",
+        "Report a matched same-direction control and a parent-linked five-second delayed reversal under identical execution semantics",
+        "Reject on closed development data when the treatment is sparse and negative; do not tune thresholds or spend a fresh holdout",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "This is economic family 23. The frozen rule used a strict pre-window baseline and required two of Deribit, OKX and Bybit BTC perpetual OI series to fall at least 5 basis points over ten receipt-clock seconds while Binance index price moved at least 1 basis point. Fourteen valid 2026-10-09 UTC development hours contained 168 target five-minute windows, of which 158 had uninterrupted four-source coverage throughout the 240-to-20-second decision interval; the corrupt 14:00-15:00 CLOB gzip was excluded as an unavailable gap rather than a negative interval. Four covered markets signalled. Three base reversals had five-share decision depth, two fully filled at both 400 and 500 milliseconds, both lost, and net PnL was -$0.37349 or -3.7349 cents per share. One additional base was blocked above its frozen limit and one intent lacked five-share decision depth. The same-direction control filled 3/3 for +$0.01965 or +0.1310 cents per share, while the five-second reversal filled 2/3 and lost -3.2030 cents per share; neither tiny control sample is evidence of alpha. This exact rule is rejected from further allocation for sparse capacity plus negative development fills, not as statistical proof that all OI signals lack alpha; no threshold was tuned and no fresh holdout or production authority was used."
+    },
+    {
+      "id": "US-023",
+      "title": "Test protected complementary maker pairs",
+      "description": "As the account owner, I want complementary Up and Down maker bids tested as a complete-set capture whose toxic one-leg risk is reduced by the venue's taker delay and the earlier Binance-perpetual or Deribit warning feeds.",
+      "acceptanceCriteria": [
+        "Place one five-share post-only Up/Down pair per market from the first healthy direct dual-token book during 240 to 30 seconds remaining, use the received best bids, and require their sum to be at most 0.98",
+        "Model a frozen 30 millisecond placement path with 60 milliseconds as sensitivity, strict price-time priority, displayed same-price queue ahead, no cancellation credit and fills only from receipt-ordered directly observed sell aggression",
+        "Cancel both quotes on the first frozen receipt-clock current-H source-race warning with Deribit requiring three sigma; model 30 and 60 millisecond cancel paths, exact-time ties as fills, a no-cancel control and a five-second delayed-cancel placebo",
+        "After any fill, cancel the risk-increasing remainder and retain only the opposite quantity needed to hedge current inventory; after one leg fills completely, improve that hedge only up to the price preserving at least two cents of complete-set edge",
+        "Charge zero maker fee in the base case, report the maker-rebate pool only as an upper-bound sensitivity, and compute paired locked PnL plus outcome-dependent residual inventory PnL without treating displayed depth as guaranteed execution",
+        "Fail closed on disconnect, missing full snapshots, crossed or stale books, equal-receipt ambiguity and source-health gaps; use local receipt order and keep venue timestamps audit-only",
+        "Use closed pre-cutoff hours only for development rejection; promote a positive mechanism only under a preregistered future sample with at least seven UTC days, 1000 completed pairs, positive one-sided 99 percent day-cluster lower bound and multiplicity-adjusted p below 0.01",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": "This is economic family 24. It adapts the reservation-price and complementary-quote structure of the MIT-licensed poly-maker project but replaces its fill assumptions with direct receipt-ordered CLOB lifecycle and official settlement scoring. Adversarial review corrected four outcome-relevant issues before the result was accepted: receipt timestamps are atomic, warnings during placement are honored, partial inventory cancels its risk-increasing remainder, and connection-epoch changes fail closed. A documented SELL print is now required; a print through the quote is capped by its demonstrable size instead of filling the entire order, all known fills remain settlement-scored after a later taint, missing outcomes for filled rows fail the run, and all arms share identical market keys. Five closed pre-cutoff 2026-10-09 hours supplied 4,496 frozen current-H warnings and 55 quote cycles, with 51 resolved. The strict no-cancellation-credit 30 ms arm completed 14 full pairs for +$1.40, one partial pair for +$0.0386 and three one-leg cases for -$4.2040, leaving -$2.7654 total on 153.87 filled shares, or -1.7972 cents per share. Giving queue-ahead the full benefit of displayed same-price size reductions remained negative at -$2.8193. A 20 percent crypto maker-rebate sensitivity improved the strict result only to -$2.3177. Hourly PnL was +$0.2346, -$1.60, -$2.10, +$0.30 and +$0.40. Sixty-millisecond placement lost $2.8654, five-second delayed cancellation lost $20.1986, and no cancellation lost $33.1256; fast warnings therefore improved aggregate PnL by $30.3602 but did not make hold-to-settlement residual inventory positive. All 74,144 observed trade identities were unique. A later clock audit found one warning received 89 nanoseconds before a CLOB change that float milliseconds had collapsed into a false tie. Exact integer receipt ordering removed that taint, but the retained opposite maker order still did not fill and the aggregate PnL was unchanged. The standalone mechanism is rejected in development without spending a fresh holdout or granting production authority."
+    },
+    {
+      "id": "US-024",
+      "title": "Reject immediate taker rescue after a maker first leg",
+      "description": "As the account owner, I want the residual risk of a complementary maker pair tested with an immediate executable hedge or bounded unwind after the first five-share leg fills.",
+      "acceptanceCriteria": [
+        "After the first complete five-share maker leg, cancel both live maker orders before sending any rescue order and retain fills received during cancellation transit",
+        "For hedge rescue freeze the complementary taker limit that preserves the original two-cent post-fee complete-set edge; for unwind freeze the directly quoted best bid as a loss cap",
+        "Replay both rescue modes at 300 and 400 milliseconds against receipt-causal direct depth with exact taker fees and no over-hedging",
+        "Separate successful rescue PnL from failed rescue residual settlement PnL so a lucky naked outcome cannot be attributed to the rescue mechanism",
+        "Use only the same closed pre-cutoff five-hour development tape and do not promote a negative mechanism to a fresh holdout",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": "This is economic family 25. Sixteen first-leg exposures triggered each immediate rescue arm. The 300 and 400 millisecond complementary hedges filled zero times because every observed ask was already above the frozen profitable limit. Immediate unwind filled 13/16 at 300 milliseconds and 12/16 at 400 milliseconds. Every successful unwind lost money after spread and exact taker fee: the 300 millisecond rescued subset lost $1.97990 and the 400 millisecond subset lost $1.74529. Aggregate figures of +$1.75470 and +$0.08931 are invalid as rescue edge because they came entirely from three or four failed exits left naked into settlement; failed exits contributed +$3.70 and +$1.80 respectively. Immediate rescue also cancels maker hedges that otherwise completed 14 profitable pairs. The mechanism is rejected without a fresh holdout or production authority."
+    },
+    {
+      "id": "US-025",
+      "title": "Reject deadline taker rescue after retaining the maker hedge",
+      "description": "As the account owner, I want the opposite maker hedge retained through the market and only rescued at the frozen ten-second cancellation deadline, avoiding the opportunity destruction of immediate rescue.",
+      "acceptanceCriteria": [
+        "Keep the opposite maker order live after the first leg and preserve all normal repricing and early-warning protection until the existing ten-second cancellation deadline",
+        "At that deadline attempt either a complementary hedge or bounded unwind after a frozen 300 or 400 millisecond path, using direct five-share depth and exact taker fees",
+        "Preserve receipt timestamps as integer nanoseconds through adapters, source-event merging and replay ordering; never collapse cross-transport ordering into float milliseconds",
+        "Fail closed on stale, invalid, disconnected or ambiguous books and report every rescue block reason",
+        "Use only the same closed pre-cutoff five-hour development tape and do not spend a fresh holdout unless residual risk is actually reduced with positive net PnL",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": "This is economic family 26. Retaining the maker hedge preserved the Family 24 result: 14 full pairs, three residual one-leg cases and -$2.76540 total (-1.7972 cents per filled share). Two material residuals reached the deadline. Both 300 and 400 millisecond hedge attempts were blocked by stale or invalid direct books; unwind correctly refused to submit for the same reason, so no deadline rescue filled and PnL was unchanged. The high-resolution audit corrected one false equal-cross-transport taint: a warning arrived 89 nanoseconds before the CLOB price change, not simultaneously. Removing the false taint made the order lifecycle auditable but did not create an opposite fill; that five-share Down leg still settled for -$2.30, and its deadline book was stale. There were no unknown live orders or exposures. This exact deadline-rescue mechanism is rejected without a fresh holdout or production authority."
+    },
+    {
+      "id": "US-026",
+      "title": "Test externally delta-hedged complementary maker residuals",
+      "description": "As the account owner, I want a filled Polymarket maker leg delta-hedged immediately on Binance perpetuals so that toxic one-leg settlement risk is replaced by measured cross-venue spread, fee and basis risk.",
+      "acceptanceCriteria": [
+        "Preserve every inferred maker fill with its exact integer public-CLOB receipt nanosecond, observed sequence, side, price and shares; label it public_clob_trade_queue_inference rather than private account confirmation, and never reconstruct its clock from rounded row aggregates",
+        "Adapt the MIT-licensed polybot-market-maker digital-delta structure to this market's Asian 60-second-TWAP binary using the existing binary.py model, with causal Polymarket-implied probability, received spot and trailing per-second volatility",
+        "Freeze a static inventory hedge at each maker fill, execute or resize it after 200 milliseconds with 100 and 150 millisecond sensitivities on the first valid received Binance perpetual BBO, sell at bid, buy at ask, fail closed on stale or disconnected market data, and execute the hedge first on an exact-time tie",
+        "Cancel or replace a pending hedge when a later maker fill neutralizes or changes inventory before its due time; close the remaining perpetual position at the first valid BBO after market end using the same latency and fee semantics",
+        "Charge 5 basis points per perpetual taker execution with 4 basis points as a sensitivity, and report spread PnL, fees, Polymarket settlement PnL, combined PnL, peak BTC quantity, peak USD notional and invalid-execution reasons",
+        "Compare against the unchanged unhedged Family 24 rows over the same five closed pre-cutoff development hours; do not tune on the three observed residual outcomes or spend a fresh holdout unless combined PnL is positive",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": true,
+      "notes": "Family 27 is complete and rejected. The external-hedge implementation reuses the public MIT polybot-market-maker structure but replaces its European-digital delta and fill assumptions with the project's Asian-TWAP model, exact public-CLOB queue-inferred maker-fill clocks and receipt-causal Binance perpetual BBO execution. Five closed pre-cutoff hours produced 55 quote cycles, 51 resolved cycles and 18 maker-filled cycles totalling 153.87 shares; the unchanged Polymarket legs lost $2.76540 (-1.7972 cents per filled share). Under the primary 200 millisecond and 5 basis-point perpetual-taker arm, one inferred maker fill correctly failed closed because no fresh causal spot state existed, so the strict all-cycle aggregate is invalid rather than imputed. The remaining valid 143.87 shares lost $55.27079 combined (-38.4172 cents per share) across 44 perpetual fills and $71.79216 of taker fees, while requiring peak exposure of 0.202319 BTC or $16,698.92. Reducing latency to 100 or 150 milliseconds still lost $55.49886 (-38.5757 cents per valid share); reducing fees to 4 basis points at 200 milliseconds still lost $42.42821 (-29.4907 cents per valid share). One hour was profitable, but latency did not rescue the five-hour economics. All 42 inferred fill events retain exact receipt nanoseconds, observed order and the public_clob_trade_queue_inference label. No fresh holdout or production path was used."
+    },
+    {
+      "id": "US-027",
+      "title": "Audit single-sided partial-cancel lead",
+      "description": "As the account owner, I want to know whether a fast Polymarket maker partially pulling only one side reveals the next BTC jump early enough to buy the slow remainder profitably.",
+      "acceptanceCriteria": [
+        "Treat the observation as a public 100 millisecond snapshot withdrawal rather than a private cancel acknowledgement: the best ask must be unchanged, at least five shares must disappear, no more than half the original size may remain, at least five shares must remain, and the opposite ask must not show the same withdrawal",
+        "Exclude a withdrawal explained by a received taker buy and allow only one signal per market within two seconds; Binance may label a later two-sigma jump but may not create or price the order",
+        "Freeze the FAK limit to the post-withdrawal displayed ask and replay 170, 200, 250, 300 and 400 millisecond signal-to-match horizons with displayed five-share depth and the historical crypto taker fee",
+        "Keep the 2026-05-25 through 2026-07-15 discovery period, 2026-07-16 through 2026-08-16 confirmation period and 2026-08-17 through 2026-08-29 locked period separate; admit no fresh forward test unless 200 millisecond EV is positive in both later periods",
+        "Report signal count, later-jump coverage and direction, first executable fill per market, fill rate, net EV per share and exact fair-price p value; do not interpret snapshot persistence as a guaranteed live FAK fill",
+        "No production deployment, wallet access or real order is part of this story",
+        "Tests pass"
+      ],
+      "priority": 20,
+      "passes": true,
+      "notes": "Family 28 is complete and rejected using the already-finished 67-day full-data workflow rather than rebuilding the mechanism. The immutable CSV contains 632,304 public-snapshot withdrawal signals across 15,302 markets and 66 days. Withdrawals genuinely preceded a same-direction two-sigma Binance move more often than chance when such a move appeared within 500 milliseconds: 85.8% of 14,954 labelled discovery signals, 70.0% of 619 confirmation signals and 83.3% of 4,238 locked signals, with median same-direction leads of 185, 197 and 216 milliseconds. That predictive fact did not create executable profit. At the primary 200 millisecond horizon, only the first executable signal per market was retained: 11,839 discovery fills lost 0.3715 cents per share, 919 confirmation fills lost 0.7440 cents and 2,504 locked fills lost 1.1929 cents; every exact profit p value was 1.0. Results worsened at 250-400 milliseconds and were already negative at 170 milliseconds. Therefore fast makers do reveal some upcoming jumps, but the remaining displayed quote is adversely selected or repriced before it can be captured. The negative result does not require spending direct-L2 forward data and receives no production access."
+    },
+    {
+      "id": "US-028",
+      "title": "Test same-expiry 5m-15m strike boxes with independent batch legs",
+      "description": "As the account owner, I want to buy Up on the lower Chainlink opening strike and Down on the higher strike for two BTC markets ending together, while measuring the non-atomic two-leg execution risk rather than calling a displayed box risk-free.",
+      "acceptanceCriteria": [
+        "Reuse the existing 67-day cross-horizon archive reader and preserve both market IDs, horizons, opening strikes, exact outcome sides, source annotations and aligned 100 millisecond receipt snapshots; do not create another downloader",
+        "Restrict the mechanism to same-expiry BTC 5m-15m pairs with different opening strikes and matching authoritative resolution semantics: both point-price before 2026-08-07, reject the 5m 30-second versus 15m 60-second mismatch from 2026-08-07 through 2026-08-13, and admit both 60-second TWAP from 2026-08-14; unresolved, fallback or source-conflicted pairs remain diagnostic and cannot pass",
+        "Freeze the first decision after two consecutive exact aligned snapshots show active non-halted books, fresh continuity, at least five shares at each scalar best ask, and total price plus order-rounded historical taker fees at or below 0.98; each fixed five-share buy must also meet Polymarket's one-dollar minimum and otherwise remain an explicit blocked candidate",
+        "Replay one parallel batch of independent five-share FOK legs at exact 200, 300, 400 and 500 millisecond snapshots, with 400 milliseconds primary; each leg fills only inside the common open interval when its ask is no higher than its frozen limit and direct displayed top depth remains at least five shares",
+        "Classify paired, lower-strike-only, higher-strike-only and neither outcomes separately because Polymarket documents that batch entries are processed in parallel but independently; never impute atomicity from a batch request",
+        "For a one-leg fill, attempt a receipt-causal five-share taker unwind 100 milliseconds later at the observed bid, charge both entry and exit fees, and mark the cycle invalid rather than profitable when bid depth or source continuity is unavailable",
+        "Keep discovery through 2026-07-15, confirmation through 2026-08-16 and locked history from 2026-08-17 separate; all 67 historical days were previously inspected and therefore constitute an audit screen rather than a fresh holdout",
+        "Report eligible pair and candidate counts, paired rate, lower and upper orphan risk, invalid exits, deterministic floor edge, stochastic between-strike bonus, exact rounded fees, worst orphan, net PnL, net EV per attempted share, one-sided 99% UTC-day-cluster lower bound, maximum drawdown and capital",
+        "Qualify only when confirmation and locked 400 millisecond EV and their day-cluster lower bounds are positive, the exact one-sided sign p value remains below 0.01 after Bonferroni correction across 100 families, no required execution is unresolved, and confirmation and locked 500 millisecond EV are nonnegative",
+        "Historical 100 millisecond snapshots are an upper-bound screen; even a qualifying audit may only freeze a genuinely fresh direct receipt-ordered L2 forward protocol, not authorise production or wallet access",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "Family 29's implementation and adversarial preflight are complete before the full outcome replay. Archive metadata and the existing Gamma-validated rule-window fingerprint show that both horizons used point Chainlink before 2026-08-07, differed from 2026-08-07 through 2026-08-13, and both used the 60-second TWAP from 2026-08-14; mismatched days are excluded rather than treated as a deterministic box. The legacy 60-row result had discarded identities, assumed atomic legs and used already-inspected history. The replacement preserves identities and source authority, requires exact live snapshots and scalar-best depth, enforces the five-share one-dollar minimum, replays independent FOK legs and bounded orphan exits, and treats the 67-day result only as an audit screen for a future direct-L2 holdout."
+    }
+  ]
+}

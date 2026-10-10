@@ -1,0 +1,245 @@
+name: polymarket-kacho
+
+# Runs research/polymarket-5m/kacho.py on a GitHub runner, which can reach
+# Hugging Face, Gamma and Binance, and commits the report to this branch.
+# One run per change to ci/kacho.request ("mode: latency" tests latency.py on the forward
+# recordings' bundle-btc/latency files); a line "mode: stage2" or "mode: stage3"
+# there runs that pooled test instead of the BTC check. Nothing here trades or
+# uses a key.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/kacho.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: polymarket-kacho
+  cancel-in-progress: false
+
+jobs:
+  kacho:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Mode
+        id: mode
+        run: |
+          mode=$(sed -n 's/^mode: *//p' ci/kacho.request | head -1)
+          case "$mode" in
+            stage2) echo "mode=stage2"; echo "coins=eth sol xrp doge" ;;
+            stage3) echo "mode=stage3"; echo "coins=btc eth sol xrp doge" ;;
+            stage4) echo "mode=stage4"; echo "coins=btc eth sol xrp doge" ;;
+            diag101) echo "mode=diag101"; echo "coins=btc eth sol xrp doge" ;;
+            survey) echo "mode=survey" ;;
+            replay) echo "mode=replay" ;;
+            latency) echo "mode=latency" ;;
+            momentum5s) echo "mode=momentum5s" ;;
+            cross) echo "mode=cross"; echo "cross=$(sed -n 's/^cross: *//p' ci/kacho.request | head -1)" ;;
+            onchain|makers|rules) echo "mode=$mode"; echo "later=$(sed -n 's/^later: *//p' ci/kacho.request | head -1)" ;;
+            *) echo "mode=btc" ;;
+          esac >> "$GITHUB_OUTPUT"
+
+      - name: Survey Hugging Face datasets
+        if: steps.mode.outputs.mode == 'survey'
+        run: |
+          specs=()
+          while IFS= read -r l; do specs+=(--inspect "$l"); done < <(sed -n 's/^inspect: *//p' ci/kacho.request)
+          if [ ${#specs[@]} -gt 0 ]; then
+            python hf_survey.py "${specs[@]}" --workdir "$RUNNER_TEMP" --out real/hf-inspect.md
+          else
+            python hf_survey.py --out real/hf-survey.md
+          fi
+
+      - name: "Replay: every archived forward recording through the current rules"
+        if: steps.mode.outputs.mode == 'replay'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; store="$RUNNER_TEMP/replay-store"; mkdir -p "$rec"
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-forward.yml/runs?per_page=100&status=completed" \
+                --jq '.workflow_runs[].id')
+          for id in $ids; do
+            gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null && echo "downloaded recording-$id" || true
+          done
+          for d in "$rec"/*; do
+            [ -f "$d/raw.tgz" ] || continue
+            x="$d/x"; mkdir -p "$x"
+            tar xzf "$d/raw.tgz" -C "$x" 2>/dev/null || { echo "$d: bad archive"; continue; }
+            if ! ls -d "$x"/bundle-* >/dev/null 2>&1 && [ -d "$x/raw" ]; then
+              python -c "import recording as r, sys; print('unresolved:', r.fetch_outcomes(sys.argv[1]))" "$x" || true
+              python recording.py "$x" --coin btc --out "$x/bundle-btc" || true
+            fi
+            for b in "$x"/bundle-*; do
+              [ -d "$b" ] || continue
+              t="$d/trades-$(basename "$b").csv"
+              python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
+                --out "$d/zoo-$(basename "$b").md" --trades-out "$t" || { echo "$b: zoo failed"; continue; }
+              python forward.py add "$t" --markets "$b" --store "$store" || true
+            done
+          done
+          python forward.py report --store "$store" --onchain-since 0 --out real/forward-replay.md
+
+      - name: "Latency: the stale-quote tests on the forward recordings' exchange-stamped books"
+        if: steps.mode.outputs.mode == 'latency'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"; dirs=()
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-forward.yml/runs?per_page=100&status=completed" \
+                --jq '.workflow_runs[].id')
+          for id in $ids; do
+            gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null || continue
+            mkdir -p "$rec/$id/x"
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'bundle-*/latency' 2>/dev/null || continue
+            # the CLOB disconnect log (latency.load_closes); recordings without one are just not checked
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'raw/*/errors.jsonl*' 2>/dev/null || true
+            rm -f "$rec/$id/raw.tgz"
+            [ -d "$rec/$id/x/bundle-btc/latency" ] && dirs+=("$rec/$id/x/bundle-btc/latency") && echo "recording-$id has latency files"
+          done
+          [ ${#dirs[@]} -gt 0 ] || { echo "no recording has latency files yet"; exit 0; }
+          python latency.py "${dirs[@]}" --since "2026-09-30 05:00" --out real/latency-github.md \
+            --label "（GitHub 前向录制，2026-09-30 05:00 UTC 起开始的市场）" || true
+          python latency.py "$rec" --pooled --out real/latency-test-c.md
+          python latency.py "$rec" --test-d --out real/latency-test-d.md
+          python latency.py "$rec" --test-f --out real/latency-test-f.md
+          python latency.py "$rec" --test-g --out real/latency-test-g.md
+
+      - name: "Momentum5s: replay the frozen rule on every retained forward recording"
+        if: steps.mode.outputs.mode == 'momentum5s'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"; failed=0; expected=0; extracted=0
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.expired == false and .created_at >= "2026-10-01T06:20:50Z" and (.name | startswith("recording-"))) | .workflow_run.id' \
+                | sort -u)
+          for id in $ids; do
+            expected=$((expected + 1))
+            gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null || { echo "recording-$id download failed"; failed=1; continue; }
+            mkdir -p "$rec/$id/x"
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'bundle-*/latency' 2>/dev/null \
+              || { echo "recording-$id latency extraction failed"; failed=1; continue; }
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'raw/*/errors.jsonl*' 2>/dev/null || true
+            rm -f "$rec/$id/raw.tgz"
+            extracted=$((extracted + 1))
+          done
+          echo "retained artifacts: $expected; extracted: $extracted"
+          [ "$failed" -eq 0 ] && [ "$expected" -eq "$extracted" ] || exit 1
+          python momentum5s.py --root "$rec" \
+            --manifest forward/momentum5s-freeze.json \
+            --csv-out real/momentum5s-backfill.csv \
+            --out real/momentum5s-backfill.md
+
+      - name: "Cross: 5m / 15m / 1h markets ending together (cross.py)"
+        if: steps.mode.outputs.mode == 'cross'
+        run: python cross.py ${{ steps.mode.outputs.cross || 'probe' }} --workdir "$RUNNER_TEMP/cross"
+
+      - name: Keep the filtered September fills between runs
+        if: steps.mode.outputs.mode == 'onchain' || steps.mode.outputs.mode == 'makers' || steps.mode.outputs.mode == 'rules'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/onchain/fills
+          key: onchain-fills-v2-${{ steps.mode.outputs.later }}
+          restore-keys: onchain-fills-v2-
+
+      - name: "On-chain: Gamma markets, Hugging Face fills, Binance, then the test"
+        if: steps.mode.outputs.mode == 'onchain' || steps.mode.outputs.mode == 'makers' || steps.mode.outputs.mode == 'rules'
+        run: |
+          later="${{ steps.mode.outputs.later }}"
+          python onchain.py fetch "$RUNNER_TEMP/onchain" --workdir "$RUNNER_TEMP" ${later:+--later "$later"}
+          ls -la "$RUNNER_TEMP/onchain" "$RUNNER_TEMP/onchain/fills" && du -sh "$RUNNER_TEMP/onchain" && free -g
+          if [ "${{ steps.mode.outputs.mode }}" = makers ]; then
+            python makers.py "$RUNNER_TEMP/onchain" --out real/makers-sept.md
+            exit 0
+          fi
+          if [ "${{ steps.mode.outputs.mode }}" = rules ]; then
+            python rules.py "$RUNNER_TEMP/onchain" --out real/rules-sept.md --candidates real/rules-candidates.json
+            exit 0
+          fi
+          if grep -q '^calibrate: *outcometick' ci/kacho.request; then
+            # Exchange-stamped trade prints for 2026-09-08 (outcometick sample, CC BY 4.0) against that day's fills.
+            mkdir -p "$RUNNER_TEMP/otick"
+            curl -fsSL --retry 5 https://github.com/Ligengxin96/polymarket-data-samples/releases/latest/download/polymarket-data-samples.tar.gz \
+              | tar xz -C "$RUNNER_TEMP/otick" --wildcards '*last_trade_price*'
+            python onchain.py calibrate "$RUNNER_TEMP/onchain" --prints "$RUNNER_TEMP/otick" --out real/onchain-delay.md
+          fi
+          python onchain.py run "$RUNNER_TEMP/onchain" --out real/onchain-sept.md --csv real/onchain-sept.csv \
+            --delay-json real/onchain-delay.json
+
+      - name: "Stage ${{ steps.mode.outputs.mode }}: download, resolve and test"
+        if: steps.mode.outputs.mode != 'btc' && steps.mode.outputs.mode != 'survey' && steps.mode.outputs.mode != 'onchain' && steps.mode.outputs.mode != 'makers' && steps.mode.outputs.mode != 'rules' && steps.mode.outputs.mode != 'replay' && steps.mode.outputs.mode != 'latency' && steps.mode.outputs.mode != 'momentum5s' && steps.mode.outputs.mode != 'cross'
+        run: |
+          mkdir -p "$RUNNER_TEMP/kacho"
+          for c in ${{ steps.mode.outputs.coins }}; do
+            for k in markets ticks; do
+              curl -fSL --retry 5 -o "$RUNNER_TEMP/kacho/${c}_$k.parquet" \
+                "https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/${c}_$k.parquet" || true
+            done
+            python kacho.py fetch-outcomes "$RUNNER_TEMP/kacho" --coin "$c" || true
+            python kacho.py fetch-binance "$RUNNER_TEMP/kacho" --coin "$c" || true
+          done
+          ls -la "$RUNNER_TEMP/kacho"
+          python kacho.py ${{ steps.mode.outputs.mode }} "$RUNNER_TEMP/kacho" --out real/kacho-${{ steps.mode.outputs.mode }}.md
+
+      - name: Download the kacho.io BTC files (CC0)
+        if: steps.mode.outputs.mode == 'btc'
+        run: |
+          mkdir -p "$RUNNER_TEMP/kacho"
+          for k in markets ticks; do
+            curl -fSL --retry 5 -o "$RUNNER_TEMP/kacho/btc_$k.parquet" \
+              "https://huggingface.co/datasets/kachoio/polymarket-5-minute-crypto-up-down-markets/resolve/main/btc_$k.parquet"
+          done
+          ls -la "$RUNNER_TEMP/kacho"
+          python - "$RUNNER_TEMP/kacho" <<'PY'
+          import sys, pyarrow.parquet as pq, pandas as pd
+          for name in ("btc_markets", "btc_ticks"):
+              f = pq.ParquetFile(f"{sys.argv[1]}/{name}.parquet")
+              print(name, f.metadata.num_rows, "rows", f.schema_arrow)
+          print(pd.read_parquet(f"{sys.argv[1]}/btc_markets.parquet").head(3).T)
+          PY
+
+      - name: Official outcomes from Gamma
+        if: steps.mode.outputs.mode == 'btc'
+        continue-on-error: true
+        run: python kacho.py fetch-outcomes "$RUNNER_TEMP/kacho"
+
+      - name: Binance 1s closes (price source for the momentum rules)
+        if: steps.mode.outputs.mode == 'btc'
+        continue-on-error: true
+        run: python kacho.py fetch-binance "$RUNNER_TEMP/kacho"
+
+      - name: Test the preregistered candidates
+        if: steps.mode.outputs.mode == 'btc'
+        run: python kacho.py run "$RUNNER_TEMP/kacho" --out real/kacho-btc.md
+
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add real/kacho-* real/hf-*.md real/onchain-* real/makers-* real/rules-* real/forward-replay.md real/latency-* real/cross-* real/momentum5s-* 2>/dev/null || true
+          git commit -q -m "research: kacho.io ${{ steps.mode.outputs.mode }} results" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1

@@ -1,0 +1,16 @@
+{
+ "b_looks": [
+  {
+   "at": "2026-10-04T17:37:22.310767+00:00",
+   "frozen_made": "2026-10-04T17:37:20.593040+00:00",
+   "a_fingerprint": "2f4ffaf830b73b9a2bed2f9f8be58bad10361f2218051fe4195228f05d3ba3cc",
+   "b_fingerprint": "45cd41dd0fe5df28404bbbb1db4a3ded03239cf61bd9b26f8de088848b9e9ca6",
+   "threshold": 0.0,
+   "mean": 28.709498571428572,
+   "t": 1.951045139673238,
+   "n": 7,
+   "passed": false
+  }
+ ],
+ "c": null
+}

@@ -1,0 +1,198 @@
+{
+ "made": "2026-10-04T10:17:01.118949+00:00",
+ "rule": "highest B walk-forward EV with >= 300 B trades",
+ "price": 0.51,
+ "fee": "0.07 p (1 - p)",
+ "train_start": "2026-03-24",
+ "block_days": 7,
+ "label_train": "Binance spot r_h >= 0 (FACTORS.md target)",
+ "label_money": "Polymarket official outcome (pm_outcomes; Binance proxy of the market's rule where missing)",
+ "metrics_known_at": "create_time + 8 min (factors_data.METRICS_DELAY)",
+ "refit": "walk-forward: each C block predicted by a model fit on rows T >= train_start with T + h <= block start",
+ "features": [
+  "ret_1m",
+  "ret_5m",
+  "ret_15m",
+  "ret_60m",
+  "ret_240m",
+  "ret_24h",
+  "spot_tbr_1m",
+  "spot_tbr_5m",
+  "spot_tbr_15m",
+  "spot_tbr_60m",
+  "fut_tbr_1m",
+  "fut_tbr_5m",
+  "fut_tbr_15m",
+  "fut_tbr_60m",
+  "spot_ntv_1m",
+  "spot_ntv_5m",
+  "spot_ntv_15m",
+  "spot_ntv_60m",
+  "fut_ntv_1m",
+  "fut_ntv_5m",
+  "fut_ntv_15m",
+  "fut_ntv_60m",
+  "spot_lvr_5m",
+  "spot_lvr_1h",
+  "fut_lvr_5m",
+  "fut_lvr_1h",
+  "oi_chg_5m",
+  "oi_chg_15m",
+  "oi_chg_60m",
+  "oi_chg_240m",
+  "oi_x_price_1h",
+  "oi_z7d",
+  "liq_proxy",
+  "top_acct_ls",
+  "top_acct_ls_chg1h",
+  "top_pos_ls",
+  "top_pos_ls_chg1h",
+  "taker_ls_5m",
+  "funding",
+  "premium",
+  "premium_1h_mean",
+  "premium_chg_1h",
+  "rv30",
+  "dvol",
+  "dvol_minus_rv30",
+  "vr10",
+  "dealer_gamma",
+  "cust_delta_1h",
+  "cust_delta_24h",
+  "pin_1k",
+  "pin_5k",
+  "tod_sin",
+  "tod_cos",
+  "weekend",
+  "h_to_funding"
+ ],
+ "hgb_params": {
+  "learning_rate": 0.05,
+  "max_iter": 150,
+  "max_depth": 3,
+  "max_leaf_nodes": 8,
+  "min_samples_leaf": 400,
+  "l2_regularization": 1.0,
+  "max_bins": 63,
+  "early_stopping": false,
+  "random_state": 0
+ },
+ "horizons": {
+  "5m": {
+   "model": "ridge",
+   "theta": 0.04,
+   "alpha": 30000.0,
+   "meets_rule": true,
+   "B_ev": 0.02188859156279964,
+   "B_se": 0.013419725042040333,
+   "B_n": 1043,
+   "B_candidates": 6,
+   "B_split": {
+    "B < 08-07": {
+     "ev": 0.018064341907824247,
+     "se": 0.013242490744421832,
+     "n": 933
+    },
+    "B ≥ 08-07": {
+     "ev": 0.054325181818181856,
+     "se": 0.06030453417236371,
+     "n": 110
+    },
+    "B，币安标签": {
+     "ev": 0.044894344199424764,
+     "se": 0.013540025547468791,
+     "n": 1043
+    }
+   },
+   "max_windows_C": 13248,
+   "note": ""
+  },
+  "15m": {
+   "model": "hgb",
+   "theta": 0.06,
+   "alpha": null,
+   "meets_rule": true,
+   "B_ev": 0.026744288135593236,
+   "B_se": 0.0116091686104457,
+   "B_n": 1180,
+   "B_candidates": 5,
+   "B_split": {
+    "B < 08-07": {
+     "ev": 0.024579800808897895,
+     "se": 0.012566576204341966,
+     "n": 989
+    },
+    "B ≥ 08-07": {
+     "ev": 0.03795202617801049,
+     "se": 0.030465611927520987,
+     "n": 191
+    },
+    "B，币安标签": {
+     "ev": 0.030981576271186455,
+     "se": 0.01075065527657312,
+     "n": 1180
+    }
+   },
+   "max_windows_C": 4416,
+   "note": ""
+  },
+  "1h": {
+   "model": "hgb",
+   "theta": 0.04,
+   "alpha": null,
+   "meets_rule": true,
+   "B_ev": 0.005061257095158618,
+   "B_se": 0.02365176239875249,
+   "B_n": 599,
+   "B_candidates": 3,
+   "B_split": {
+    "B < 08-07": {
+     "ev": -0.0020347515274948815,
+     "se": 0.02251164899498289,
+     "n": 491
+    },
+    "B ≥ 08-07": {
+     "ev": 0.03732181481481485,
+     "se": 0.08566938589121832,
+     "n": 108
+    },
+    "B，币安标签": {
+     "ev": 0.005061257095158618,
+     "se": 0.02365176239875249,
+     "n": 599
+    }
+   },
+   "max_windows_C": 1104,
+   "note": ""
+  },
+  "4h": {
+   "model": "ridge",
+   "theta": 0.025,
+   "alpha": 100000.0,
+   "meets_rule": false,
+   "B_ev": 0.07827623076923079,
+   "B_se": 0.03770564585422125,
+   "B_n": 104,
+   "B_candidates": 4,
+   "B_split": {
+    "B < 08-07": {
+     "ev": 0.08500700000000003,
+     "se": 0.03896129130082301,
+     "n": 80
+    },
+    "B ≥ 08-07": {
+     "ev": 0.055840333333333346,
+     "se": 0.10259226876870942,
+     "n": 24
+    },
+    "B，币安标签": {
+     "ev": 0.06866084615384618,
+     "se": 0.038620573956398604,
+     "n": 104
+    }
+   },
+   "max_windows_C": 276,
+   "note": "no candidate reached 300 B trades; highest B EV among those with >= 100; C has fewer than 300 windows, so it cannot be tested"
+  }
+ }
+}

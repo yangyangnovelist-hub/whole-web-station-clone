@@ -1,0 +1,7 @@
+# Changing this file runs .github/workflows/polymarket-late-ms.yml (late_ms.py on every forward
+# recording so far; commits real/late-ms.md).
+requested: 2026-10-04 is the kacho late-entry edge (+5.6c at 1 s) there on the millisecond books?
+requested: 2026-10-04 12:20 round trips after a >= 2/4/8 bp Binance jump at real latency (rt_ms.py; kacho family 1 check)
+requested: 2026-10-04T17:29Z ROUNDTRIP.md forward rules R1/R2 (rt_fwd.py): October 1-4 independent check + forward from 17:20
+requested: 2026-10-04T18:46Z MIX control: jump >= 4 / 5.83 sigma hold-to-settle on the October ms books (late_ms.py --z0)
+requested: 2026-10-04T20:47Z ALTS.md G/H on ETH/SOL/XRP/DOGE 5m (alts.py): independent check from 10-01 02:30, entry pin, forward from 21:30

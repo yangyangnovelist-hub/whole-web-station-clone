@@ -1,0 +1,151 @@
+# Paste into the private sgk90-shadow-archive repo as
+# .github/workflows/export-books-for-research.yml (GitHub web: Add file -> Create new file).
+#
+# On that commit (or "Run workflow" with another tag) it downloads the release bundle with the
+# repo's own token, writes an inventory of the SQLite tables and JSONL files (no secrets: columns
+# named like key/secret/private/password/signature are skipped), exports the market-data tables
+# (Polymarket top-5 books, market registry and outcomes, Chainlink TWAP and Coinbase samples; not
+# orders, fills or positions), packs them with the top-5 tape and the event log into <100 MB
+# parts, and pushes them to a separate branch `research-export`.
+# Version 2 (2026-09-29): adds the table export; optional since/until (unix seconds) cut big bundles.
+# Nothing is published outside the repo; nothing trades. Runtime is about 10 minutes of the
+# account's free Actions minutes.
+name: export-books-for-research
+
+on:
+  push:
+    paths: [.github/workflows/export-books-for-research.yml]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag to export
+        default: shadow-t1-20260914-20260916
+      since:
+        description: only rows from this unix second (empty = all)
+        default: ""
+      until:
+        description: only rows before this unix second (empty = all)
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize the bundle and pack the tapes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || 'shadow-t1-20260914-20260916' }}
+          SINCE: ${{ inputs.since }}
+          UNTIL: ${{ inputs.until }}
+        run: |
+          set -euo pipefail
+          ./tools/materialize_database.sh "$TAG" "$RUNNER_TEMP/bundle"
+          ls -la "$RUNNER_TEMP/bundle"
+          out="$RUNNER_TEMP/out/$TAG"
+          mkdir -p "$out"
+          python3 - "$RUNNER_TEMP/bundle" "$out/inventory.md" <<'PY'
+          import json, re, sqlite3, sys
+          from pathlib import Path
+          src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+          skip = re.compile(r"secret|private|passw|api_?key|signature|mnemonic|seed", re.I)
+          L = [f"# Inventory of {src.name}", ""]
+          for db in sorted(src.glob("*.sqlite")):
+              con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+              L += [f"## {db.name}", ""]
+              for (name, sql) in con.execute("select name, sql from sqlite_master where type='table' order by name"):
+                  n = con.execute(f'select count(*) from "{name}"').fetchone()[0]
+                  cols = [r[1] for r in con.execute(f'pragma table_info("{name}")')]
+                  keep = [c for c in cols if not skip.search(c)]
+                  L += [f"### {name} ({n:,} rows)", "", "```", sql or "", "```", ""]
+                  if keep and n:
+                      q = ", ".join(f'"{c}"' for c in keep)
+                      for row in con.execute(f'select {q} from "{name}" limit 3'):
+                          L.append("- " + json.dumps(dict(zip(keep, [str(v)[:160] for v in row])), ensure_ascii=False))
+                      for c in keep:
+                          if re.search(r"(^|_)(ts|time|timestamp|at|ms|sec)(_|$)", c, re.I):
+                              lo, hi = con.execute(f'select min("{c}"), max("{c}") from "{name}"').fetchone()
+                              L.append(f"- `{c}`: {lo} -> {hi}")
+                  L.append("")
+          for f in sorted(src.glob("*.jsonl")):
+              keys, n, first = {}, 0, []
+              with open(f) as fh:
+                  for line in fh:
+                      n += 1
+                      if n <= 3:
+                          first.append(line[:1500])
+                      if n <= 20000:
+                          try:
+                              obj = json.loads(line)
+                          except Exception:
+                              continue
+                          for k in (obj if isinstance(obj, dict) else {}):
+                              keys[k] = keys.get(k, 0) + 1
+              L += [f"## {f.name} ({n:,} lines)", "", "Top-level keys in the first 20,000 lines: " +
+                    ", ".join(f"{k} ({v})" for k, v in sorted(keys.items(), key=lambda x: -x[1])), "", "```"]
+              L += [re.sub(r"(0x)?[0-9a-fA-F]{64,}", "<hex>", s.rstrip()) for s in first] + ["```", ""]
+          dst.write_text("\n".join(L) + "\n")
+          print("\n".join(L)[:20000])
+          PY
+          python3 - "$RUNNER_TEMP/bundle" "$out" <<'PY'
+          import csv, os, sqlite3, sys
+          from pathlib import Path
+          src, out = Path(sys.argv[1]), Path(sys.argv[2])
+          lo, hi = float(os.environ.get("SINCE") or 0), float(os.environ.get("UNTIL") or 9e18)
+          want = {  # table: (columns, time column for since/until or None)
+              "poly_probability_observations_v1": ("market_id, up_token_id, source_ts, receive_ts, sequence, "
+                                                   "best_bid, best_ask, bids_json, asks_json", "source_ts"),
+              "market_registry": ("*", None),
+              "market_outcomes": ("*", None),
+              "chainlink_twap60_samples": ("source_ts, receive_ts, publisher_ts, exact_e18", "source_ts"),
+              "coinbase_perp_mid_samples_v1": ("event_ts, receive_ts, best_bid, best_ask", "event_ts"),
+          }
+          for db in sorted(src.glob("*.sqlite")):
+              con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+              have = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+              for table, (cols, tcol) in want.items():
+                  if table not in have:
+                      continue
+                  where = f' where "{tcol}" >= ? and "{tcol}" < ?' if tcol else ""
+                  cur = con.execute(f'select {cols} from "{table}"{where}', (lo, hi) if tcol else ())
+                  path = out / f"{db.stem}.{table}.csv"
+                  n = 0
+                  with open(path, "w", newline="") as fh:
+                      w = csv.writer(fh)
+                      w.writerow([d[0] for d in cur.description])
+                      for row in cur:
+                          w.writerow(row)
+                          n += 1
+                  print(f"{table}: {n:,} rows, {path.stat().st_size / 1e6:.0f} MB", flush=True)
+          PY
+          for f in "$out"/*.csv; do
+            zstd -19 -T0 -q --rm "$f" -o "$f.zst"
+            split -b 90m "$f.zst" "$f.zst.part-"
+            rm "$f.zst"
+          done
+          for f in "$RUNNER_TEMP"/bundle/*.jsonl; do
+            zstd -19 -T0 -q "$f" -o "$RUNNER_TEMP/$(basename "$f").zst"
+            split -b 90m "$RUNNER_TEMP/$(basename "$f").zst" "$out/$(basename "$f").zst.part-"
+          done
+          if ./tools/stream_release_asset.sh "$TAG" shadow_current.jsonl.gz > "$RUNNER_TEMP/events.jsonl.gz" 2>/dev/null; then
+            split -b 90m "$RUNNER_TEMP/events.jsonl.gz" "$out/shadow_current.jsonl.gz.part-"
+          fi
+          ls -la "$out" && du -sh "$out"
+      - name: Push to the research-export branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/out"
+          git init -q -b research-export
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" research-export 2>/dev/null \
+            && git reset -q FETCH_HEAD || true
+          git add --ignore-removal .
+          git commit -q -m "research export: $(ls | tr '\n' ' ')"
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:research-export

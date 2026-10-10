@@ -1,0 +1,10 @@
+numpy>=1.26
+orjson>=3.10
+isal==1.8.0
+boto3>=1.35
+scipy>=1.11
+pandas>=2.1
+pyarrow>=14
+websockets>=13
+pytest>=8
+scikit-learn>=1.5
