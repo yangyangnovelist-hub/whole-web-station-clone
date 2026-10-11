@@ -157,3 +157,15 @@ panel is an engineering baseline; a development-winner panel is explicitly
 post-hoc. Neither establishes multiple independent mechanisms, real queue fills,
 or a deployable portfolio. Future confirmation requires a separately frozen
 plan and untouched inputs; it must not rewrite the existing candidate protocol.
+
+## Private FAK execution calibration
+
+`mine500_execution_calibration.py` is the fail-closed bridge from displayed-depth
+paper fills to future private FAK receipts. It accepts only an explicit private
+order response, preserves decision/send/match/response clocks, treats the
+measured match timestamp as already containing the venue hold, separates partial
+fill, kill, reject and unresolved outcomes, and reports exact 99% fill-realization
+bounds plus outcome-dependent fill diagnostics. It creates no signal and cannot
+change the frozen rules. Until prospective private receipts are supplied,
+displayed depth remains only a capacity upper bound and the calibration result is
+null.
