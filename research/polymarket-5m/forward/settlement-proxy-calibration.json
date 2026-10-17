@@ -1,0 +1,42 @@
+{
+  "calibration": {
+    "ablation_residual_bounds_bp": {
+      "bitstamp": 4.343656557745343,
+      "bn_spot": 1.266824569704421,
+      "bybit_spot": 1.1375675236657676,
+      "coinbase": 4.284071548017678,
+      "deribit_index": 2.4817428643622828,
+      "kraken": 4.275266560575441,
+      "okx": 1.2712619999187678
+    },
+    "ablation_validation_windows": {
+      "bitstamp": 103,
+      "bn_spot": 103,
+      "bybit_spot": 123,
+      "coinbase": 123,
+      "deribit_index": 158,
+      "kraken": 142,
+      "okx": 115
+    },
+    "calibration_end_ms": 1791417600000.0,
+    "combined_validation_mae_bp": 0.7010548197327604,
+    "deribit_log_offset": 3.5276730834254977e-06,
+    "deribit_query_offset_ms": 100.0,
+    "deribit_validation_mae_bp": 0.4306557210556164,
+    "fit_end_ms": 1791241006000.0,
+    "residual_bound_bp": 2.3080235043909463,
+    "residual_quantile_bp": 1.846418803512757,
+    "spot_query_offset_ms": -700.0,
+    "spot_validation_mae_bp": 0.7609039682656964,
+    "validation_windows": 158,
+    "venue_log_offsets": {
+      "bitstamp": 2.8337594111249587e-05,
+      "bn_spot": 0.000202640256529385,
+      "bybit_spot": 0.00020400737263503999,
+      "coinbase": 4.430957096701604e-05,
+      "kraken": 1.2268939676651769e-05,
+      "okx": 0.00023077018522954518
+    }
+  },
+  "strategy_fingerprint": "2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee"
+}

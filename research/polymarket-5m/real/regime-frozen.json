@@ -1,0 +1,179 @@
+{
+ "made": "2026-10-04T17:37:20.593040+00:00",
+ "design": "REGIME.md",
+ "segments": [
+  [
+   "A",
+   "2026-05-25",
+   "2026-07-16"
+  ],
+  [
+   "B",
+   "2026-07-16",
+   "2026-08-16"
+  ],
+  [
+   "C",
+   "2026-08-16",
+   "2026-08-30"
+  ]
+ ],
+ "a_oos_from": "2026-06-08",
+ "strategies": [
+  "H",
+  "follow",
+  "revert",
+  "direction",
+  "late",
+  "maker"
+ ],
+ "env_features": [
+  "rv5m",
+  "rv30m",
+  "rv1h",
+  "vr60",
+  "dvol_rv",
+  "ret4h",
+  "vol_rel",
+  "funding",
+  "basis",
+  "hour",
+  "weekend",
+  "pm_spread",
+  "ask_size",
+  "book_ups",
+  "book_ups_pre"
+ ],
+ "trailing": [
+  12,
+  48
+ ],
+ "trailing_lag_slots": 1,
+ "gap_s": 300,
+ "models": {
+  "ridge": {
+   "alpha": 10.0
+  },
+  "hgb": {
+   "max_depth": 3,
+   "max_leaf_nodes": 8,
+   "min_samples_leaf": 200,
+   "learning_rate": 0.05,
+   "max_iter": 200,
+   "l2_regularization": 1.0,
+   "early_stopping": false,
+   "random_state": 0
+  }
+ },
+ "score": "mean(ridge,hgb) per-share pnl / sqrt(max(mean(ridge,hgb) squared residual, (vol_floor x sd)^2)), traded windows only",
+ "vol_floor": 0.5,
+ "thresholds": [
+  0.0,
+  0.05,
+  0.1,
+  0.2
+ ],
+ "threshold": 0.0,
+ "candidates": [
+  {
+   "threshold": 0.0,
+   "mean": 67.4407796875,
+   "se": 9.761477792515013,
+   "t": 6.908869857718961,
+   "n": 32,
+   "pos": 0.9375,
+   "pnl_total": 2158.10495,
+   "traded": 3430
+  },
+  {
+   "threshold": 0.05,
+   "mean": 66.376580625,
+   "se": 9.805738719693347,
+   "t": 6.769156564583213,
+   "n": 32,
+   "pos": 0.9375,
+   "pnl_total": 2124.05058,
+   "traded": 3091
+  },
+  {
+   "threshold": 0.1,
+   "mean": 63.985077812499995,
+   "se": 8.8285272589134,
+   "t": 7.247536982784959,
+   "n": 32,
+   "pos": 0.9375,
+   "pnl_total": 2047.52249,
+   "traded": 2803
+  },
+  {
+   "threshold": 0.2,
+   "mean": 43.1100509375,
+   "se": 6.5092496011814065,
+   "t": 6.622891051785089,
+   "n": 32,
+   "pos": 0.96875,
+   "pnl_total": 1379.52163,
+   "traded": 2009
+  }
+ ],
+ "best_on_a": "H",
+ "always_on_a": {
+  "H": {
+   "mean": 75.68429782608696,
+   "se": 9.765960933221383,
+   "t": 7.749805507477273,
+   "n": 46,
+   "pos": 0.9565217391304348
+  },
+  "follow": {
+   "mean": -58.11407326086957,
+   "se": 11.042661193971696,
+   "t": -5.262687339587548,
+   "n": 46,
+   "pos": 0.10869565217391304
+  },
+  "revert": {
+   "mean": -277.2656058695652,
+   "se": 13.478418969056316,
+   "t": -20.57107784719485,
+   "n": 46,
+   "pos": 0.0
+  },
+  "direction": {
+   "mean": -5.564574130434783,
+   "se": 1.7583472486954717,
+   "t": -3.1646616642777325,
+   "n": 46,
+   "pos": 0.3695652173913043
+  },
+  "late": {
+   "mean": -0.2650713043478257,
+   "se": 0.7732307969272029,
+   "t": -0.34281007094028265,
+   "n": 46,
+   "pos": 0.5434782608695652
+  },
+  "maker": {
+   "mean": -42.77062608695653,
+   "se": 3.3216922251893872,
+   "t": -12.876155642179627,
+   "n": 46,
+   "pos": 0.043478260869565216
+  }
+ },
+ "vol_cuts": [
+  0.20651666666666665,
+  0.33634
+ ],
+ "state_cols": [
+  "vr60",
+  "rv30m",
+  "dvol_rv"
+ ],
+ "a_rows": 11483,
+ "a_days": 46,
+ "a_oos_days": 32,
+ "a_fingerprint": "2f4ffaf830b73b9a2bed2f9f8be58bad10361f2218051fe4195228f05d3ba3cc",
+ "b_t": 2.0,
+ "c_min_windows": 1
+}

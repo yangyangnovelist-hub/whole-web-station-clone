@@ -1,0 +1,17 @@
+[Unit]
+Description=Admit one closed UTC day into the Family 36 paper-forward ledger
+After=network-online.target time-sync.target strict-artifact-daily.service
+Wants=network-online.target time-sync.target strict-artifact-daily.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rec/h-race
+Environment=PYTHONPATH=/home/ubuntu/rec/h-race
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+ExecStart=/usr/bin/timeout 7200 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/source_confirmation_daily.py
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=4G
+TimeoutStartSec=7210s

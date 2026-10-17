@@ -1,0 +1,18 @@
+[Unit]
+Description=Build one closed UTC day of formal Polymarket settlement-proxy evidence
+After=network-online.target time-sync.target archive-rec.service strict-artifact-daily.service source-race-daily.service
+Wants=network-online.target time-sync.target strict-artifact-daily.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rec/h-race
+Environment=PYTHONPATH=/home/ubuntu/rec/h-race
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=STRICT_SHARED_ROOT=/home/ubuntu/rec/formal/strict-days
+ExecStart=/usr/bin/timeout 3600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/settlement_proxy_daily.py
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=4G
+TimeoutStartSec=3610s

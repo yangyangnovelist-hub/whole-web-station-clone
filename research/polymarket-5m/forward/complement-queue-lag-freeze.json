@@ -1,0 +1,69 @@
+{
+  "artifact": {
+    "collector_region": "eu-west-1",
+    "hash_algorithm": "sha256",
+    "maximum_boundary_lag_ms": 60000.0,
+    "physical_batch_encoding": "price-change-batch-v1",
+    "receipt_race_ready": true,
+    "required_files": [
+      "manifest.json",
+      "source_events.jsonl.gz",
+      "clob_events.jsonl.gz",
+      "market_registry.csv.gz",
+      "market_outcomes.csv.gz"
+    ],
+    "schema": "polymarket-5m-strict-replay-v2"
+  },
+  "dependencies_sha256": {
+    "complement_queue_lag.py": "5183063ca76b69a0a3a4830be6ba3456b32be8f68d6340fa44206d31e09c66f4",
+    "complement_queue_lag_daily.py": "c4fe7b5114b1b2b1a9af09f1a887e41b4df21102bfa0c611cba6acf7e8fb6a46",
+    "complement_queue_lag_forward.py": "8c41fb172cc1a5426c34fdd0629d1370e0297debcdb5dfbc42eceb39254c2a7b",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "mix-runtime-requirements.txt": "e2005b0162723b93601c3a0fc3f5ab2538e186a8afc676d39e26bf66fa6f946e",
+    "mix_runtime.py": "e607ecfc56e3954b71cbec04b3e2377b9f3c3efebb0a2a225dd62c0b9bc00207",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
+    "strict_prebuild.py": "4bf41cd1179cc16792974c79ae485cfb26d36ea9a379a9a807ef66bb9d6ebbdb",
+    "systemd/complement-queue-lag-daily.service": "d3d275a28d44ebc4364e37dc20b0d1d62a1b2a1afc9afaacbb44eafe1aeb0ed8",
+    "systemd/complement-queue-lag-daily.timer": "c4013f727546388e072737dd1a9b707e0fd39626518ff4831ae0b7994a11927b"
+  },
+  "forward": {
+    "dependencies_sha256": {
+      "complement_queue_lag.py": "5183063ca76b69a0a3a4830be6ba3456b32be8f68d6340fa44206d31e09c66f4",
+      "complement_queue_lag_forward.py": "8c41fb172cc1a5426c34fdd0629d1370e0297debcdb5dfbc42eceb39254c2a7b",
+      "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
+      "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
+      "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+      "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
+      "source_race_forward.py": "11fe2bf5ccb730ede77accbe6885f271ed286c8e92a3b118f06c8b8cbe1d7aac"
+    },
+    "execution": {
+      "book_fresh_ms": 2000.0,
+      "confirmation_ms": 250.0,
+      "conservative_limit_tick": 0.01,
+      "delayed_control_ms": 5000.0,
+      "evaluation_ms": [
+        400.0,
+        500.0
+      ],
+      "maximum_remaining_s": 240.0,
+      "maximum_spread_widen": 0.0,
+      "minimum_midpoint_move": 0.01,
+      "minimum_order_usd": 1.0,
+      "minimum_queue_shares": 5.0,
+      "minimum_remaining_s": 30.0,
+      "minimum_total_edge": 0.05,
+      "target_shares": 5.0
+    },
+    "paper_only": true,
+    "prospective_cutoff_ms": 1791745200000.0,
+    "schema": "complement-queue-lag-forward-freeze-v1",
+    "statistics": {
+      "family_tests": 100,
+      "minimum_full_fills_per_latency": 1000,
+      "minimum_utc_days": 7,
+      "one_sided_alpha": 0.01
+    },
+    "strategy_id": "FAMILY34-COMPLEMENT-QUEUE-LAG-V1"
+  },
+  "schema": "complement-queue-lag-daily-freeze-v1"
+}

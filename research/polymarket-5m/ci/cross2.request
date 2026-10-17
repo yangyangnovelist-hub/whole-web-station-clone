@@ -1,0 +1,4 @@
+# Changing this file runs .github/workflows/polymarket-cross2.yml on this branch (a second lane
+# beside ci/cross.request): "cmd:" is the cross.py command, as there.
+requested: 2026-10-04 12:30 JUMP2S.md main verdict: buy 2 s after a >=1.2 bp Binance jump on the May 25 - Aug 29 books
+cmd: jump2s --out real/cross-jump2s.md

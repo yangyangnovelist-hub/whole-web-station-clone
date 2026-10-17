@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart research recorders at the UTC day boundary
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart raw-recorder.service poly-clob-recorder.service

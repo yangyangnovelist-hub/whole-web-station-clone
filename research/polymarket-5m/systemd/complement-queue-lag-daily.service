@@ -1,0 +1,18 @@
+[Unit]
+Description=Admit one closed UTC day into the frozen Polymarket complement queue-lag study
+After=network-online.target time-sync.target strict-artifact-daily.service
+Wants=network-online.target time-sync.target strict-artifact-daily.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rec/h-race
+Environment=PYTHONPATH=/home/ubuntu/rec/h-race
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=STRICT_SHARED_ROOT=/home/ubuntu/rec/formal/strict-days
+ExecStart=/usr/bin/timeout 21600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/complement_queue_lag_daily.py
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=4G
+TimeoutStartSec=21610s

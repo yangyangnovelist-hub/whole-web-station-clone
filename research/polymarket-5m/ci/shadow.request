@@ -1,0 +1,4 @@
+# Changing this file runs .github/workflows/polymarket-shadow.yml (tests C and D on every recording,
+# then a WeChat Work report if the repository secret WECOM_WEBHOOK is set).
+requested: 2026-10-04 08:10 execution policy (send threshold x limit) on the fill-rate books
+requested: 2026-10-11T04:05:48Z pooled tests C-J after the 60-minute timeout was raised (last report 10-08 00:23)
