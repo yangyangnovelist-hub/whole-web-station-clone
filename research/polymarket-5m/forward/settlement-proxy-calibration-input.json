@@ -1,0 +1,5696 @@
+{
+  "cache_sha256": {
+    "bitstamp": "8c3ae8b66fd0712beb6ab6567a68fabb8c1a962fde1de188a57075c594cdf1c5",
+    "bn_spot": "2113849900444d72ae1ad4fd404c0a5d5e0f1fef1fcdee5f86b0f50900ffff79",
+    "bybit_spot": "f73911134ef057823d61883e72c0502a979288793e4f21010114d108ac175603",
+    "coinbase": "632c441b3466f8a00faf83f27c0963514832a0c40bdfa3f2626aa3d187218f94",
+    "deribit": "c3736e6e5ab5dd469e5b538bff375d75400123903eff6ad4487f27684733d2e2",
+    "kraken": "ff874bb9997437ff09f2fe118afe2bf4f9101dc77bab8514eb40a9234db0b233",
+    "okx": "9f6b0415dc22000614d8c87737a27631620ba4415ea6558501bc9b81115a237d",
+    "rtds_cl": "ce33643d5abdcc35271da4ba67088152938fa01280e2af50bf7b170e2de06865"
+  },
+  "calibration_sha256": "9d0dfde485ab94bd0a40dad21fd94d68cfadce869f544cc9bec615d6b16d492e",
+  "input_manifest": {
+    "boundary_coverage_hour": "20261008T00",
+    "bucket": "sgk90-rec-archive-114469424813-euw1",
+    "calibration_end": "2026-10-08T00:00:00Z",
+    "files": [
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "80e3d8e846389553691aea5a189b19c47d8f3a4faad2eb4d52f050b54731981b",
+        "size": 2329271,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ec31ad666dac3bed76a087cd6b56cd4873706c8c5e7edcd6561918743302c275",
+        "size": 7165410,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4a51cd636178a5c0938331928256a5970ff45fcae7eb9a608262c2c05db64308",
+        "size": 7735316,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e55ddb0c0a76798303e8e176f65fe74f1d4564b7ad928c37bf318b47e2319df5",
+        "size": 7413714,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "87125c116bf0ee11f2faa6a79e2b282e9100cd5d0089aacf57e7687d3702d355",
+        "size": 7127329,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "75c1d745a4cb3dc31b6c74bf121c19627dfec6fd7e1c512e65f7a05612664166",
+        "size": 4652197,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "646c859c477bdb6770b2c879b54bf5445fa6b9a031f435574807c0fe93de6c04",
+        "size": 7097994,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "85bf64afd18a629382f4fdba3bf3b9269231e773ed12956c92d9ace727b64ed2",
+        "size": 7820209,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d1d087128e05c71830e10725174010abe627ca8ffb41feaa226caa8cdef774f0",
+        "size": 9116572,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "28236362a3f3fef168d488be8046af3c6f0f7fedd610062a2095a4328559f56c",
+        "size": 11071968,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bitstamp.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f3486def4c16a52034a16c3ea6053c02119e760cc442199dca43a30b543bb097",
+        "size": 9805219,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5ac700ab45b7014c8b6ae3967f1f86d987d062c2a927c8287911ead4813b7e19",
+        "size": 9963936,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b57f183a53d62500f3020761479b8cdf89842af7a49d7328999165008f25c703",
+        "size": 10220613,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4dcef882d9d0c1d27fa19c4cac3312d38ac7ff0bc049633da49b5c5ea9c511d9",
+        "size": 10024085,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6e1f60b4ff112cc9c79702615d7ef3415f912d5cdce11be7b3596b0e85e5cb83",
+        "size": 9522985,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d376875d25dd50a6936c2ebd459dedacdc539f9481f104fbba38a64d6fcfc201",
+        "size": 10543619,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "01093110bea787ed30f0f128082f2a72ce9511096ca112c6b1f4900d36a98a07",
+        "size": 9578619,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5fa8988d7c16b90393bd2de5fbc7d4c87ce186f7e25bc3b752b6e309ff85e29a",
+        "size": 10167407,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b7b07c093251398ad91ce15dd04b09348393c28f91eebdeecfeee25d8c0f7edb",
+        "size": 10310980,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ae5b1ba00807b7d49fa90dddff2ecb09e6309efa5e800853cb8450b32a5dac56",
+        "size": 10153929,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a1ac5d2c732826859771a7d66841e27ea30620730577b359c2328fc57f63b550",
+        "size": 9671526,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "dc7052b1ffeeabd464142dd57116bb2bafc29ed8918551f1788cb84beba0b19a",
+        "size": 9300772,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "32886427f82922028d60fed1e4c1ba3ec02385aabe4db6d4d286c81a17ad9352",
+        "size": 9366300,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "419c400d2fbd6de4301ce993254244eba108e7e93db1a16e891060ec006796fc",
+        "size": 9678794,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9c19708abd0e5cd1d544d88dcc1afa709c7079be7aa958951000271fa149c419",
+        "size": 11347302,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "671e4df51105ca8950ab3daceea6c5a9d1f4121587f5340464e33e6910f2e0e0",
+        "size": 12361158,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c60229d5400449c9e8251a5bcbefab51d6ac6e8b03fb911eba3ef5d848882c36",
+        "size": 11054753,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "51411d3366d70423f715a2b7d40c3e78ff1e941f5122f990fa012b4f1d83b5d4",
+        "size": 10394489,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "35a8652cfd4faa4c4091a8bd9ecba162a48d16986bbec7ba3751fcdee09382b1",
+        "size": 9022592,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f6778c8238b7022eecd914b8b30ba31b21ef9020d22a3055b432a93fc29e47a5",
+        "size": 8765452,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "243dec51eabb3001395c1e7e8cfca0a8eea0f388db892e09d951fde45c04b5cd",
+        "size": 8796795,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9503035053980b675ce75de506c22e6217c8f9e54b1d4480fa67017f42248bdc",
+        "size": 7784712,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a88f7102ea67a164e3785698bc891d8547ac4b7892903bd73d84733e6bea456e",
+        "size": 3859939,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d5ffd74874ae4faf9f6daa4a33bd230e67983021d86f818a8dff88193d76a306",
+        "size": 6755344,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bitstamp.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "580400aadcda5d275e0b0b760a40dc7d75073168b0b479a30dcf71627a3bd4e8",
+        "size": 7625071,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0436f024c0abf0e58c9fe4d66e1c43e3f4868175fbeca5615734adbb71b7b54c",
+        "size": 8258103,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c6df4450c7fd5f8be9e162c80f3f026e6880afc2e627f1ad8a837e152ff0519a",
+        "size": 9377751,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f918bffc87c8a577c3aa2bf9464669caa6e79c5d5683f1a3f4764fc38befc984",
+        "size": 8878859,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8e3c0a8db539cb733e730915d94c1cce405b0af7486af0205edef328f571a509",
+        "size": 8443522,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "514327994e203c6e699a33df14e711235ec12b4010fd731cf1ef399fda563a56",
+        "size": 7654582,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e70146f9873be757961a9608dfc3f20e8d0bf54a52f67fc08774f0f1695cfd39",
+        "size": 8196600,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "52660f1e7e6e607c215d1c24c4fb2f07017fbdf70c94642711dd7366417086df",
+        "size": 8742068,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0e61ebfc702a166638478164f37a7feada2cef984fc85d7178673da9599ecf24",
+        "size": 8836196,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "eba43cb88ace8bdf6ffe01a81032d1aa89da0b0169bc0289b3919ee73fa0958d",
+        "size": 9308176,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e7651e33baf1651a3639f3153e25df06c044a05382d2ac48afdc62ac3949e4f7",
+        "size": 9618669,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "de562ac0cb777e6d91f8d6a9b32cf6578b25ad7e2e29e6612393171754e49af7",
+        "size": 8909115,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f481a26aea31161b92f678ff144869bf2f49de74d76cc0d0d7e8bd226d8906ac",
+        "size": 9010024,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "886730c7b75bcb2014e46fe8d2acea2770ef1ff3e859f7a924f2be5519e0a1cb",
+        "size": 9106722,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e2e5d1100ba4d0378a848bae9ae8fb087f0f1296c565b49ae75e4e066581f52f",
+        "size": 10579509,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c9eca91ecd0e38d0170d7d100bc38e9c86e6d82992b3b9f309e99af9367fa322",
+        "size": 11143121,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f2a9ec72de43e08014d6e90cddd26ef3833492872f09b20032e94f13041ace4",
+        "size": 10514979,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "82b580b25a42b0531ea839950644ce6595a392488a2c1f64db65640b154f6612",
+        "size": 9651694,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f0760ec752881ea13e85f689aaa0038cbdd40336ebf2cfc8aaccdbff4c4fceca",
+        "size": 8911626,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6e6447ac2955373baa111b9e15941024d8a1b38f4cf993f33accc1a817552a11",
+        "size": 8476314,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0ca7030c409d77b597929ec959e75302ab4f19969f4e7ceb45c5d1b945260601",
+        "size": 8693808,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "75d2101966809a6fa23d1ee508c0450864d777f9abbbc2f3e74f1f1d691b51c4",
+        "size": 7545286,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cf2f6c7b2b67fb70bea0e02e0c2eb7a94ca5e209683b9e8972c175fc0bcb2a7f",
+        "size": 6399142,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "11459bf0eb8960692e6fc80dce8e67b9b4f628ce0e702c5564c732fc33f72f3b",
+        "size": 6939920,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bitstamp.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "02199c3517fec40e88382f849574470b796b1cacefcfe90db5b8cbab3f8e2825",
+        "size": 7417514,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6d57132cb62dcc624563b5adfb23d65eb47a97caa72296185e214cc8830b99ab",
+        "size": 7490283,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "45d8244541cca8a7fe3eaace0d9b8d1fe3b17f51c133b2175dd51d48f0655c50",
+        "size": 9015867,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6209385a8f00534e150c459872e9a851b90a0fe8faac4717d75f70dffaecaccc",
+        "size": 11520657,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1fbeb6bf9cb221716dcbbfd0fd63b736055b7568fe76f9f9146f8163ccf97e30",
+        "size": 9180782,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "950ca7f3ec9730dd2298631ccb0d476e563acde6bafa16888a3e0576f6d39d29",
+        "size": 8830429,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7a2cdfca594b15bbe8cce251ca291b37fd54892824d539b8cdabdc948c2726c1",
+        "size": 8305444,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a65b0d9d06fd8e5d4cd585a3c5630a557e99599361486b0742097aefee51a921",
+        "size": 8084434,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ce90af8adea40e02cc834dfa3ea2e8c46d9187ec2f2c824c237e1d550f69cb6e",
+        "size": 8631736,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b8779dbac0b80cc556417d30fb4812ac21c1254759f771cd6ebaa25ac3793f01",
+        "size": 9188446,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "85f6145b6c862a66118ac9fd6646ee9f2f43ca46239f18488f04e89200550a26",
+        "size": 9607305,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9e3a70ec7852516e6fd3141b4b815234bcca7da7924ae7386629b019c28deecf",
+        "size": 9946222,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2da0c291e6141df12a6c9df2aa3b17b3fbd7543b76aa926400995fdd5064d4ff",
+        "size": 9814577,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "310ff73a6111d3d5e1554d68aec8c74bb777afce23691f7c5650978eb2080243",
+        "size": 9711956,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b8f5993ede794d016e6ac789dbad774f982f1cd92bec667e159f13ade3b3fff5",
+        "size": 11647485,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0b7b08fa133f4f5ca702d94e308c980639cbb313b3f484b268d662ffcdc32634",
+        "size": 10642190,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4876ddf74faac45ddc37061c19eed4aed77e3ae1e18619203107e402c67b0e06",
+        "size": 10018744,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ac5fe5dfbccb561beb3ce528a5e2c88007ac383fd4ad76f774aab0ecfd1b9616",
+        "size": 9626397,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7e3836741fffd49a6f798c459665330af0435b3e7ac002879bae01e515484dd3",
+        "size": 9683737,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8cfd75f7e3b66bfbd7ad51f92b80e535cd1b30d1322ad65dd5f2895853393c36",
+        "size": 8857061,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1b0b60ff0e9268edfa75741e21ffdda9e52bf35c069cf1cbe0045f1863a9b9c3",
+        "size": 8791258,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d5fb383dbd8e6863c47420db32773265688d52ffd3f1053d109f0632ed8c3634",
+        "size": 8122070,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "36357a0ad37ce6e675815a82e83ecb851c03f82df185a00ec5a97ed6db09966e",
+        "size": 7148182,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "78d629d05e7f5e74afb3c832d82b0f73af61b6e6bd70941ec86bb508f19edc1d",
+        "size": 7310829,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bitstamp.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7f0f169038e7cecb3c18130cdd5061245f67f125a3a90fd09d984a392deff4a2",
+        "size": 7648129,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "bitstamp.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c85fc78bd0ec46a0e38df53cd4162e7252f9da2eb54cb8051226b4460ee8a0ec",
+        "size": 8406262,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d1c083f91fa6f5691b2df97240c16f9ca821249b0cd7abae54b416348049a3c2",
+        "size": 4593495,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "dfa18ddad884a8103c90e01110f4c8a223d366b6481aba5dff11d93a3fc4da6e",
+        "size": 3252372,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "855ba09900d44a09588d9ea927e1c80d007258ca9eaa5ce078010943edcbe848",
+        "size": 3907060,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d4f0e09fabac991b847190bdd9ea817785539f8f8c100cabb543779a88b45ec8",
+        "size": 3327280,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b438892eac780f4cd0e2e38b8bc4966bc223aa66c483b112951598b0b5f67d03",
+        "size": 2846293,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8fb0f3dbe5db77d299db75ff8af03eb1b0213ddd71783154aa9c6ffb36959a3a",
+        "size": 3598880,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4aaa31ad76d08b11163285956d393397f97ac971cffcaf7cd85f6c1d61069c19",
+        "size": 5322436,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f4b823e874c7cc66990c613c042befa60c550a11ecff2bc7be99e10ec64b6bfb",
+        "size": 581576,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7ac825e282815d706f506f87472c3f40634e423bec45a987fcc4e5dd4d548bd0",
+        "size": 2290419,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "57d09e8ed27660dc3cd5023e58fccd1f2783fec4848cd7a3df31bb3f00e4c9ff",
+        "size": 5992205,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8d4ec77a40d6c478e87f48d7040f4578ecb707694b72f9ba0b0a447892293463",
+        "size": 5780747,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "011781018327dcb9d72b5774ff1ef59fa4a1a01836276c5d6b308364103bd53f",
+        "size": 6562213,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "19b3ede106284ff0e2352bb4c84db3608627f5ced01b2326434cc4a1497aa476",
+        "size": 5591857,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "611743b0486ea140d8679293d7297ed272102ae4555914051c03dddfd58b13a3",
+        "size": 4871781,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0ec4c7d64d8aa9c2deb73d56e9e220549bf95d33526cb3f0c96cd0f118ebe2b4",
+        "size": 3059263,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4d45dff0a2c69ba470376ea3db89f07e0f401e1d0965fc76d67b4e7082cb4d78",
+        "size": 5130547,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e0dc9a198f19ef160f9b58ecf3a9f84f841e232524eb909c15179e2e70b1ba36",
+        "size": 7307830,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "51e4101432a5f5afda4efe480714b497027b45a94a96804017b8f424cd372f97",
+        "size": 11890430,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cd650fe3098d76c137897b1ce30996a66ed4b10d4b6317df3f4525a943843a33",
+        "size": 20174778,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bn_spot.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f6f4d9dc25a85cae151bf990d858d936d73e1add6d47e1294ff36791258a778",
+        "size": 14129618,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4f111d0bde8b11a3b72f4cccd975eb4bdc7a683c13594205f1a1e4f26d055ac7",
+        "size": 12855047,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "be140ece6fe04ff0d11ae5209b4024bef51ac0269472a52b154edce86bf4ecc3",
+        "size": 14423071,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ebde8fd382390ff03d70e2a71e3d469bf4ad29479911bc0eb14009dcb934e607",
+        "size": 11059504,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ac84e633e217058465aed173b748604015d1d69977753c11c3a352705c410a93",
+        "size": 9392017,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bdee7ae27d53df00f34d46d357ee2738f583e945c91bc29c65cc054e49abb5b2",
+        "size": 17431206,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "db7921cf5d78c20a1a7ddb0802e1c1c6460b7886a1c22e7c7e159978c2b98edf",
+        "size": 12498621,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cbc8cb2aac141466b62bc181b4b8d7393387edd5025e29521325597f9959edae",
+        "size": 13310439,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "88188bfba77688004812a08c63927035d872aff92755e2afabaeabef6d9ab187",
+        "size": 13589988,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aa12650cb348209a326b8934c0a8234ae625043b811ede5bdae2d8b55f0feb30",
+        "size": 12809291,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cec188090082f721193d278321880b2c2f8a4a2b46b09b30fc66460ca81d09a7",
+        "size": 10595996,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "19f1b9a1d0893a3b54bbf8ed7e08259ae3b2652d6e30775ce0fd25db7c6e1ba2",
+        "size": 9050167,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "21e8cd24133bb0dff7ce2c3e6fc4715884819b2a1f61ffaadb384640658ac9a7",
+        "size": 9661108,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5e69102ff069d16ce0a9c0833b4aa19d7a100b6cac7d15e81ace6beb8c52fa89",
+        "size": 10386798,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2272aa9d470863bd15ed7e648581c7ded2fbd1978f00aad38dabcb774ed04483",
+        "size": 20076519,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3182f2e48102c575574a67bae511eee46d5e0a2880921d944fff34b7b5141698",
+        "size": 28557920,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8f382efbd23525d6d3ed270106935c8623e1ea524e9c037776c54f4209d24680",
+        "size": 19595423,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "03c34d79c608718d57cbd3bf9e8712ee4ccf6c9213a598c2c76cbab4e71d8a62",
+        "size": 15186696,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "84951f77ce6f6576a2812174264fafd93747ac8cd257d9fb3b55fe67bca26a6a",
+        "size": 8338850,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b50e51a4c981fc9bc19adf476519bd43a9d7d79fb5ed61cdde990c91bcfbeaa7",
+        "size": 8532146,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "86c82735afcfcc508d04eb09eb43e520390d5dc4291b332d5f81fb1355907ba0",
+        "size": 8745652,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e857cccab9d6858ee1fba353582053a9298f380eca33f2df8094043cc2631c7c",
+        "size": 6330829,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7e4cc52d29ac3a9e6546763e7651c495c8bc1b40de793ab0c67f2a6d95f9dfa6",
+        "size": 3026162,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fb7349604ce0e541f878ef5b48656991c7ec69f6b38f2596dadced92d966411d",
+        "size": 6775196,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bn_spot.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c6c594db464b5563dbd0320d560001c2fafca5623aaf98d99fe5d3b83731fd58",
+        "size": 8409904,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "652287b70f4d05f731e3752a1bc730ff247cd0f408ef12921734aa8f18641208",
+        "size": 8506381,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6647a7217851501b3e4041b0e270580c8ef9adba8d73459c7a1dfc157eeacf31",
+        "size": 12151955,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f376968aafd107456f3f6dda6a14aa04428fcd7a835f461b7abb862eba951118",
+        "size": 10178858,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "52d4e0aec2cd7911a4eb94567318630aac2d00c4a9f37181677d9469f57de59b",
+        "size": 8388871,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "66594f6d0a74ba3071a0ca9528441964c0f31cdd53831a253d88ee0e452aaa31",
+        "size": 5907341,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "905fcd67a717c24ccf6b59e7aa2d575e200f3049e0731c0c9934ad28301745f0",
+        "size": 6379188,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5ed108cbd90a88c8e4adc72f70d790193242b83f02efbbefbbe5ddb25e77896e",
+        "size": 9970116,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5806964d7210a2ba88d807a4e87133e569d0506b46de9dfc6e3e6754196faf50",
+        "size": 9490822,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7ee690ad739b1d76969501095544a4e9c84f15fae6bcd1cacb8a2687359864b5",
+        "size": 11914604,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "38eb84f3152490f4f4022135de695a77d4008f74db83ae848336190d5bdf7718",
+        "size": 15058217,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7222155fb88fc61efc46e3fd1de17501c4adf5637d7f55099e970981ace3fc83",
+        "size": 10375657,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2946857fbe01712d05198aee620576a93142e78f08227a39e150145326f8fab5",
+        "size": 10058644,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "94c80dff92ea905a710f957a9b2b502acf0ca7dd4abb2029a5ac2989d785fe0f",
+        "size": 10161146,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "884a8c10e47eac4dd0b63245c408786d8a30fcab00cb4de062c036cb714df01d",
+        "size": 18695357,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7e63bb78fe072f1543338948396a1e57c159a9cf374e25a12edd5041f6b5de12",
+        "size": 21014083,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f43d2402857deb2973f4b81a9df13964336a38c1a26dcd41fde1274e47989139",
+        "size": 18463348,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bb941d3a46dab896f69bee1f9bad6c531607a640422268c8eb7d79d039af7713",
+        "size": 15339527,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "70e5a8846c339b338fcf8bb7c09d6b336dcca1692764cd198e8286e5daa850e4",
+        "size": 10349465,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "372ca78111fa90bee4fa6f3c255f210322c0cbfccb942f4c676c647c0732760c",
+        "size": 8925780,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6f834dda687e3546f23ab5e2c561ca087cf75ae2956022eb0420a077a21861e8",
+        "size": 8440015,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "67fc6c79ef79abf9375b839ecfb83566afb59fd27430740e8931c4713d399188",
+        "size": 5504841,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ffbfa670015cc839fe735f5d6fbcde7027cd5651d721f2f17a0d664f308bca43",
+        "size": 4922723,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "091b7b9269868a124ffa88e548f9351ff5da2427729ce7838a9f387cb266eaa8",
+        "size": 5140164,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bn_spot.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "93230eedb68dbbef7f9e150ca468d74d711de8739b437ab1e2fdfe2aa7d8118d",
+        "size": 6005688,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a602c40bc0873360ebe2335aef30fd95eec628fc3fc2a0e88694c2edc366d24d",
+        "size": 7048793,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b3e4a10e87569cd90b6d2f11c21c80678587d9488ba6248e07475382c61af73e",
+        "size": 12892360,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2fd3722470fc1c6565c15c73bfadd33e8baf3ca696994851e524c0983ecb46ce",
+        "size": 29355779,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bf24e049c7974ec7be109d096924cd7ca8daeacc567ec3c30fe4a205eff30f65",
+        "size": 13950649,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a9229e85b0e4c94f9805b74eb250375df87b71cec60fe418aade805d18502f14",
+        "size": 11392691,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a4e97985c795516795ba6f1b3262881d5bce78c712c2b2482714dbe4db407dd9",
+        "size": 9772730,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f9de8555ba747f819ebe7c525adc7a23f52754a46f08f49dc48fb61e8a9cd0c1",
+        "size": 23129061,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e23c2cc9d63573ff1ab452ddb857ccb7f868995f31fcef00794999390dc3e0ce",
+        "size": 27246486,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "122f2245963e62e97b0f1563b10812fa0da445c485ac70a92e0de2dbebcd21b4",
+        "size": 50848168,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "828ab701e3d1ca9bbc077919473152ede5d7564fd9a4322a01bf4bd0d567cce1",
+        "size": 26927347,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3808de969ec3d9a646bbfd874a873b43c4ef2a3f040a7be7f358a037021a7e24",
+        "size": 15516326,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c5523016ad911a648c3630cbda6532aad93329396d453bc693e56332628ecbf7",
+        "size": 12845741,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5f550bdccb38b7af60fdb31d0c69ead0cb3d0c2d302069942f57772081394fef",
+        "size": 14239825,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fa24537c54f79ed8816475f72f353af161b7b212f38b0601e032f631db72ea33",
+        "size": 27937617,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "85cb482acd4bf3de3fad88d19a99e54e6faf74f723dec5dbddafbc721ee5dca0",
+        "size": 21770130,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1d3e76767041473f7e8e6e5b2e08044440b9093b588c5b87e83c89d6eb726081",
+        "size": 16918204,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4a4b4782d97b32a25cd74dab56bf59dc7850884c4cd5bdfd946ad15485cce2f0",
+        "size": 13416982,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "30436234d138b85918f0662c10b89a6d406731d846353ce328b617b9b4938003",
+        "size": 13633216,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6faba24503ebaf1e9aab6c467754e179cd26ccd9855cc7fe1169598683418b23",
+        "size": 8893967,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9b18a515c2cb7bc175a4e16100e871aa6bc41a3e83b12e96111fb71703df1dc3",
+        "size": 8643750,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ba0699efc1d34348111a2b0b8ceeb10936014c009d40d7c55c55475b9cd79475",
+        "size": 6524346,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ec0b2afda0d7733c4baa522fd3d96e854c5e75bddf43b474583ae77dd8a2b510",
+        "size": 6363527,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "59ce2ecbde22f8977bc2f656f42511b74d159a187c8c5c979ee8efcddcc4671e",
+        "size": 6577965,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bn_spot.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "195092f12460ec925273a705f0aa60bb40661352a5bf38c3212ccdaabba49fbb",
+        "size": 6375553,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "bn_spot.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "47656b94e980cb608a7db3c2b24a77ad08b1612e772221c97666406e19db121c",
+        "size": 8028038,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a153eeee5e97c3a2f09faf574be8925b4feba05926a383e60926898405dd1c62",
+        "size": 731695,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9f3641ead68db2e8a2659288fbf2ae170ec59841ef562532744b27ba4132783b",
+        "size": 601523,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7a15c9b2cb4545d4f601f7b17a85f68e386cf9fd21919dc96e4eff5344d6aabb",
+        "size": 1083565,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a50d0a6f562aab9dbe820d62d8d4c7ddbf6a11368492cc2db7fbdf78a880ddca",
+        "size": 1211385,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1e4ea87a0cfc3c16852dbfefbd58cf3dd103a56129fd57076c013d16670d7ec7",
+        "size": 675362,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d69f1cf3e606f6de7a4cbd8da80ae2d6673bb39d656d185b4efc38f6cde8c850",
+        "size": 1350877,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bbb9e1bed6a56108c3ebfe65f1a67f1f7e3d62257cd511ce628d71ae0abe92dc",
+        "size": 609317,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0b7015604f09e31e8a68da9aa734fde0d904fab1d2c0fb1e8c7f0aa5b3e26871",
+        "size": 44686,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "50110f4b9f5706650f850e5706263b37d0c696167e8843bc215000b3007fd3b9",
+        "size": 200904,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "70522341e4f81c20a1fea0ef6b68955b9429ede98413ab11f11b67964ab02eda",
+        "size": 668872,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "581f3c478af175f98bafedd53df54fe8481b37a92ac411fe71c639eb59fc75b4",
+        "size": 589691,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "52b8e28ab49e45ee13b5c5879d90f51785d4d73af058867f8356fd0dfbea947a",
+        "size": 825770,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "abb505039bc36ac325074b1765afa1696d6b53474eefae289af1e062178d9e6b",
+        "size": 594372,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b0540bf04b6505daa4b9ebd21dcaacc90ae36eba80e26ff19f5d9be14603ba84",
+        "size": 595181,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c218b5cf3b5b8fc00e4fa701ce02758ed4cb59e49caede2eb2382beb5765fb59",
+        "size": 371185,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b72386102aa979b2f13e8402ab3ba38c89dd0a62d2d86f3dfe8bfa2e6ade551b",
+        "size": 584400,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a98f63edbdfd7255ee99a4fac9047111e22457abc119653ac01e5a5d490c5527",
+        "size": 882940,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "958901a2830f2c7e05b4f1f2b5388f4a9cce1d562fbdf2fdaa9bb45e7d179397",
+        "size": 1235317,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5ec8aed7d29b881669ee090563a6db146253e3a86849d241bb8f697983a36eff",
+        "size": 2853028,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "bybit_spot.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7aa5832c7d8e5cacaedd13e8ccd6e14e634a09a43c373377a000bba1201c9c9e",
+        "size": 1816415,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "513144a2e6b37e339b6b1995d3679c85b93c30b4b12b5ad78f3a39db1467891a",
+        "size": 2134602,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f55179cace170923fdeaefb717a90900c74e5261a37c63b47e5b3ecee0d7078",
+        "size": 2091686,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c8e0ec13bcfdad3c859a36f2b825e6d74c2359ecb0250e7e3636aac8210e695c",
+        "size": 1500479,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f5538c9c17069241973165ce07f47e083d5fcc90049f399d371b785aca3a85b5",
+        "size": 1135532,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a14f906dd48b42f874e8d612c55b18da9670689e6b5c68b654660f68c1562c7c",
+        "size": 2301279,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3a1866387caf7dfcd5c4249269564592ef72ac88822a3fb655dd4831e6f7527b",
+        "size": 1476661,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "632e5cef3c26f693aca2593e31c38690d83d6c01da22440557a901c04ab65182",
+        "size": 1736430,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d58d43cfab9af18e38db136217a06ce75bcdedfa639270ae90d9b8eb8e3d0d2e",
+        "size": 2691867,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "44182361243cac68d6168ac0650390795288e28c1a5ca748c0c8646cf7d387a9",
+        "size": 1748704,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "35410f9e309aca6a0f573c781aa7c405919181c8af0cabec633ed3cfbbaf0465",
+        "size": 1304752,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0e7f730585d84dc5d10d39f3f31ee17768d96f1416a77bf401a00c9abfea4bd4",
+        "size": 1165757,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6a236973726cd5944863520f0a3360991807c748661181c3074ab43407de60f2",
+        "size": 1271942,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9d42b4d45b4facb2e05d820989f174deaeea091b69a29a6af69e63bd87fa059e",
+        "size": 1259123,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "acb7b9f10aaf281717fa128a3aa142a266ab71582ce7961e533db2b317e2fe5f",
+        "size": 2746271,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6f70704efd17b84f98f455d255e3c3dac60ac6fbeeaf5c3c3d03848e1c8c9d8d",
+        "size": 3755883,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4c9af6cce59bcca30963e1313eb2dda3dabd88b66a57ec75f39580c7ea402d0e",
+        "size": 2480585,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c99157ec0c5be478c7e3e29b43a9ef2c2eca25a15329b08a17bb380dfb5ee529",
+        "size": 2205988,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2968e7ecff5c8bf820b8c1368cf121b39a0d520c3d6d4f51565c30be841d2cb5",
+        "size": 1711718,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c1e3d1e8070ead90dd46cc8199f9e0f0baa815aa5e970ca02b66ad44455a4dd1",
+        "size": 1054849,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "11482fdc33e875f31862dda33fa7b083fd625253c2b1914ce35682d919597b1e",
+        "size": 1127477,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ead9e381707f62471aac83de990d535c98a22199712c78fe657a5a76b50afc95",
+        "size": 906441,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "994b8bcc40e8f7ce8844c5260330f4cef09accd129e394537ba83d8ae92511f2",
+        "size": 497499,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "69799ca2e9e03660f888cab1fef869740e168b152d43f7efd456707a8075473b",
+        "size": 776475,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "bybit_spot.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "17f39156114f27aff549145e40179d44ccad4b3bc8e0c411f034e0bec473b912",
+        "size": 913346,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "774767754e4457431072f0e990174da449eb7be04a028a995d0748cd46c5c506",
+        "size": 1201883,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ed1dcb46e7a12e608726980b75976131a09cfb290bee2fbe1b628a70fcef50f1",
+        "size": 1794061,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3e28909b337e47d892fc4417770ee5e4d8bd3910f6d4362c93dce099e545d28e",
+        "size": 1309348,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "38a742a8f0380d84ca0a06fbe240ecd0f64bde98ed9630568d41483e6d3cb8c1",
+        "size": 1140499,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e6a272e6077bbeed73e4231090e0994e17a66a1de0a2b77fffacae0b6c0f702f",
+        "size": 672127,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aa46468e0a18257482275a6be60b7284f677fad44c35358d9215765a5424dce4",
+        "size": 757804,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8dedfd11bc76e208911d722dd842147d630341e8c27fe6c5da7454869e2972d7",
+        "size": 1119443,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "723d6c827f1772461a7edc863e537705a22923fe97c0c8392a3732942a11d7c4",
+        "size": 1140809,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a59908b5a84728519aebedb7302a55a6966bd6a77bce9b2217fedcaf99aeacf5",
+        "size": 1501526,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "13f22e4f88832795ef8dcafac214a1efb2cbe96bdd5a6d2be1dd4514ce203991",
+        "size": 1907186,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7da67c3b247789c958839b84b866fa02e156148dce68b19ef7bb25d8d7e7e4e4",
+        "size": 1163088,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a5a2329af37b75a8c0908b419e75d41576c16f8189918d22cc3b11aa00f587c1",
+        "size": 1187658,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6d13085b6b06dd4a28e7235edd8d7b016ccd7444d21e11ac71bdc7e41a2dfd46",
+        "size": 1296988,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b9e4749c3d0a931987652c24c60881ef714b09c419715688bf6877a6b793bda1",
+        "size": 2538935,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "666ecfc421913e51d11998895f23a8ee889763e449663a89aa2315491da23cf9",
+        "size": 2762734,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9333d7129184ef39de4adbd82d3780470c9dd66d67c864144689bb8081b62f60",
+        "size": 2533423,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1ba978304001fef3d2340203e593af28ae0f719d4064f9229d76bc90e04ca0e7",
+        "size": 2271245,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8fe48c82cef05de3237225fab5a66034aa226fcb3383967998725fb69476017a",
+        "size": 1393662,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f812317f91c3582f3996ecd714aadb0b035b38bea0c558a48289ffb778512ec",
+        "size": 1173668,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bc11c0584616129556748e2ea1db7920eb2980389ed884ba21381e8e35fe2262",
+        "size": 1198137,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cb85410eeb6d068bf6d80503b5a61e67479018a755ad11189ce883651a06a6aa",
+        "size": 780235,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8749cb4fc962226d39dd72a910b82dbb090cd3fd4fc34e4cf5e5c40d10307670",
+        "size": 565978,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "601adc1f39f81216407636647cbe3610a82c6d731df63691e1d3453bd0a1844b",
+        "size": 571214,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "bybit_spot.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e4f30cd29cc3dc82f32e96c8a5fc3bd05e2fc8f6c359ff4a487b975b68caffe1",
+        "size": 674322,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6fa24b1df8ae5bc46995869b35a6abbe0e34329590f9d4f3717523091d2c9d8c",
+        "size": 801078,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2eab9fdba76c89e6b14d7862124802c01088e2d4284f66b49986e6e730783f25",
+        "size": 1878916,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e78750b764e3902f62f89cf1db3d0aa496fab48e042e2c001aa3d24fa98a6ec4",
+        "size": 4728832,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9930eba98b619184df18a75713f5b5db14a8d936378377db087cc87491e4ea02",
+        "size": 1505501,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6e2fe93dce1690906df70363ea5d3298380572b35bb59da0e4920ff81804d5a7",
+        "size": 1311542,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "341bef48fa31119d6347faa1c5c70fbbad53bc63a2d3c97a64a84dbbd6a629f6",
+        "size": 1141639,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3dae67e9cec0d3d642412c8052214196fe5b950a2d818b365791d933e9be83cb",
+        "size": 1070452,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e9c8696d60256641b8fb4dbe0b057edad37be8029258335923920ca13cb3e30f",
+        "size": 1573322,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "92ac4075a71af500f9885acb2f3d3f35876af8ba27db298b26acd986cda9fe3f",
+        "size": 2303250,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4c3a0c1c218e1b1ca275588b0ce9befa901312328484a1209276b19d06edc999",
+        "size": 1894074,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "47c66e2096f8b307b26eb0c823324d2eaba7fe56b4d8ee79c803a01e47f8e8be",
+        "size": 2371376,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "177639626ee45960353a12d95a72b349ca518e62c6d18d6c94f57b7e10447ebf",
+        "size": 2205831,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6fe9b8a254773dc4d57e89cfb01284a232eda0c492c14ec172c912e03f95358b",
+        "size": 2362448,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "823934661bcbfe4a937ffe2c8f57fb8dbeeb5b7228fe3025fc3cc46340867a78",
+        "size": 4434556,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "984b9b9b41b8a643351778329454a6e2acd83b3e4b989f4bc96ac592c1cd5511",
+        "size": 3375146,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a69994e555241557f6403e5d8206eb98c735564abdd8060be8ac76658af9a2af",
+        "size": 2739804,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b79a972d0714bd50334211bc9b53a7b036160208b166916438afd93eb65a02f3",
+        "size": 2120363,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "53a8d4bc842f30a56c9e0e3af0de2f3eec15981a6a0b938f88a085ec14b15631",
+        "size": 2287675,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3548e982f7a9c43e320c537486c575bd11a60fac509e4f339aec4768adc0e860",
+        "size": 1591213,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7b470b6a7d0c61bedb143e1b8358d13e18b8e7276169ac07ee931b863f59dc81",
+        "size": 1470404,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4232ef0c993ee3a01789a931888f6127c0d1d34468ae1653edb484c9f03ac694",
+        "size": 986265,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f5dee0153885748bc7484f2f6779ae255df01f09352d91cadc0e97d6d4a8f47",
+        "size": 642128,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "366732c1ee04c7889fa584c458b33a313190d85e211afc49a5fee406e3f63336",
+        "size": 1142713,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "bybit_spot.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "57bffa4c218bd109bcbd657dd082c97f29a0c5b0353836840382154f755342ee",
+        "size": 892823,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "bybit_spot.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ef4487ea3689a2df5a69d95ac092cdfebfe10c8f72730fc1b81c37bfdf268c97",
+        "size": 1321817,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ed125859a03f9b8b020541dfbec490e9b03b5149a8c5fd4f204d40c9d0958b31",
+        "size": 1289202,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0b0834166824984b0ce65629636b2748936eeda103953d88083208a5847601b2",
+        "size": 961013,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6222980a466a61fd543cd106a039b9bcd719e51e4f099641e1b6b79ba53eed92",
+        "size": 1024081,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "999473ce8945e6320b4dd580ba18539afca792f35b95ca60fcc7ebb7153d4433",
+        "size": 943536,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "135d53add7f2f8a62671debd33b786e2c253f803fc13353d9375a7aa77edcd98",
+        "size": 782466,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5d2c11e8321f101abac3580d389159972a17692007d8fcb73be9f51ebcf1fe06",
+        "size": 778644,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aee554826d77673cf69378f31f335b25faf1ce63f0366cf06a34fb63b22e87b6",
+        "size": 1043893,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "93933caa9c20ae84daefe04c4a3ebc51081910540d13425ea13897ffba4aaaaa",
+        "size": 111998,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3a2168c0e7945a803189eddf778b45f5c40ac124fe45204b9da5ac1a913641b8",
+        "size": 448327,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "64c4e63da1b89c61a38de2948437f1db99e78cdd6ad755395655255388dcc80a",
+        "size": 1172526,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "271a38cab6af7504577c0cf5cae5beae98a6f2df7b1577e90c61641e831c6093",
+        "size": 1152694,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a7c1977abca31e6c9be490e8fc63d75b4e268f105388d2263e66aae355177d03",
+        "size": 1419518,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fc8e2e8f9d3a76ef2f696fb118bfa65c48d60729951245e680f89362eb731971",
+        "size": 1282338,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6aaa7fe5d0d7b78132701335482c1bbd04b45fb0066cd6247fb2202536fd5cc1",
+        "size": 1191690,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5b2923c1f22e61809f69bf57bc991124cee42e3f95f69776434fd999f9a02b43",
+        "size": 899653,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a9801e38aeff763df93c6559c2935c41d40554cbad65f4daa393988f2e6a5251",
+        "size": 1336776,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c57ef2dfb579ad5c4126d57001cf4625988179349f2b90513e85e0da209773a0",
+        "size": 1642426,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2c06a2e76f372ba9894e138c49e218aeb05571befc652f39414bcf204cde2662",
+        "size": 2146154,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bce98d36b5555ef3f832b2641a704708d22c5fe93d4dc0f6529702e107fe38bf",
+        "size": 3110533,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "coinbase.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0b85346d290ac7e54ae66353c3be5369118a1d59993a61deecdd0a54e0faa1b7",
+        "size": 2481771,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "520e1f396348d34505cdf80a525b66178406d86727f35ad79c90c80172c6c4b7",
+        "size": 2370989,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c20c919c5ff29a0109f0792b914d71c10caa10d835ba3f8c43fd39af2ea6978c",
+        "size": 2554354,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "55ea4809749f9119369c82151dd512b1c3d3bb9b8f604bac9f4066c4305ee444",
+        "size": 2212173,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f010169a88c1429b3af0dfa38c309e357c10b607cfa97aee3ee9b02914eb219",
+        "size": 2153744,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d516b7c54cdc3a612e1354f1fcf998fc3f65f950b62a2c0bab9c0d9c17f90371",
+        "size": 2505519,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e51f609a6eba990cc1efde76f649f671c9cddf8c22afba48ebc0d4c4b58898a6",
+        "size": 2054033,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f83a5d4067184f6e60c4c9f1651e1386c26ca8178173d42539a4c7df8751810e",
+        "size": 1982028,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "26e70850e0cb26f37b56de77b87558083b7a71ece1164c966205ba9db9b81268",
+        "size": 2152709,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d594aea4e488061516f941167e282fac36424463f6013696c4c26ae9d6e21f1e",
+        "size": 1761663,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2f8ee9eb91bb295a1fc88cba6f8eaeb50b5d223ba83bc564edee9715db786f8e",
+        "size": 1669199,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f661280304d7849b01e7c694ccbea73efb2186e29af115830233a2b04ff3bdcf",
+        "size": 2420805,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "79c013ef7d1b400dca784ad98f6aaf266ce25b5f2a3c5064fda0738d7e50e70b",
+        "size": 2317943,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f369e3e3f35b3ede5b45687752b12e5a155f37ac1c2f08ef58ba57fd4219288",
+        "size": 1728485,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f6dc87f5948209c140e39a6de965b9a0824062235ddb04e8f28bf36ca95a10d6",
+        "size": 3070909,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ed05b57d9199bad6d000484dc96e1da321f659f74eca95ab3deae65c332de78",
+        "size": 4271311,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "89252eee0622995cb23b230e4a771e008f8122cc28518a8417ed4b72f0164aaf",
+        "size": 3027454,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "43a2331fc53b54084e5a2e97039ef0d5b55c4c7fd5239d2ea1ac44484a713c99",
+        "size": 2586729,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c1ec5cedb06155bb2eaa25eccde41dd8d4f5efb25941db1507816df81b708171",
+        "size": 2303912,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "019f067491e805d2acdc27d420cb255e9b6ed11cc4011b9886ec221266f3a6d7",
+        "size": 2160639,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7465d04feaf23b6f8eae30cf33f20a993c96c2abf0dcf40e972418e11f65c67d",
+        "size": 2304637,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2fd3e26d6e1fbf663e958a169a8e2bf319f1fc300f881eda11b48f4c49e26e94",
+        "size": 1801956,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ddf83053bfd80e07f2dc66e8d3563611e3a93d000d8bbf7d85d2662099d20a1a",
+        "size": 882577,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b3bc98e6fd4ea2dd15a598fedf35df2f31b7e83c0cef20c5967cef69e4314dc0",
+        "size": 1600896,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "coinbase.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "65960abc2c89cb1facee718e3ceb59b1e1b88129e6ad07f722f9398c55779f86",
+        "size": 1643733,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0c0f6901022122802e73a6906c98d3f6836e19b8274f5422bc51a9cce6948827",
+        "size": 1525614,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ec5b75f2fc8dd66ea56bc59dfff0308ab21382e81adbfef516b566f04d8c7203",
+        "size": 1861146,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ef2161c0fa90618bcf0b64071c8c786e60953b02dcdb862b58daf6cf664bf4d",
+        "size": 1614606,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9f8bdfd2d4eb2e835693ec661f25a59f4d44329ee6acc6fc48226c94e8adcdd3",
+        "size": 1467047,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7f17ed38b4b295c3d409afcbd6572e124321700e43e132cf953c177e9ece6fa1",
+        "size": 1078440,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1060679404e2325d16edbfe8de9aefe7bdabb9bc9f291f97ee48ab1692cb38ba",
+        "size": 1157080,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f191919c4b618210092fba098e16dcf30bf380baffab8bbda6e089188d77397",
+        "size": 1335320,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c285b488a1b9832629219f093f21caa2ce28f55c74f3548f6f8cedaa7c8d0361",
+        "size": 1154564,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "547cd1aa83db68b9595c077cb2280f3b48afaceb636f5cc45b66e047a60b50c1",
+        "size": 2080984,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ea6b291f223b30c811ed844ed9baaee6a3e71b072e43f0c8591d4420fbb42ab0",
+        "size": 1840914,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4c576d22a9b14c14c77e6843a311c85847be2d8611188d39086c214adf0080ed",
+        "size": 1983315,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6df55e8036c8a05e59b64aa2a667f23df7e8835a30a85d880f3fc56deab2dc91",
+        "size": 1861374,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f5fb1a59119529df44058aa4e2eb6d83137ee99d8ecf9fa2b0302071b55a4db2",
+        "size": 1843674,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3dcf91aa9b00210a2f5760ded7b76564ed20989378a65954aa466b0068f50b0a",
+        "size": 2750850,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c5a5c18249fe41f793113c08bb548256f1d4b2633497240cfc557ca8605a534d",
+        "size": 3808000,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6fa4314bbd45462f1ea8c9303a4e841c3ff21eaeb3b1d7672bc6d4da498af753",
+        "size": 3408361,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "39ee59b1f929360420edcb0641077a2cd2a3d71dabeedcceffdaadab39c47199",
+        "size": 2770931,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8dea448330fdfce5bfe13a69328eefc7a006935c52475cf8aea4244cea900e15",
+        "size": 2109124,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6aad4ba6c93f5f0c336b5b70edabb23c5865b637e419bfb1c8fcbe0453aa5c43",
+        "size": 1975123,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f2d941d35818b81809bf04210f8030ff225cec20801cfc15ecb88617223104b4",
+        "size": 1987448,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7cf06de062a0756a68d8a78faad51b0bfa37d9af00a1419a8457f2a42b454228",
+        "size": 1722550,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ba0fd6d947e7c4b10757abbe2526ce26022b930e2dcb21795bfa5109ca43739c",
+        "size": 1542902,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3a6e0c99be010a7c30cc7bef340591998f243925edb09c6c975a021a576c6041",
+        "size": 1415837,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "coinbase.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aae88f93e3480b70e3f9f3c072ec6f97284575c3c953c5f594165b081132fc73",
+        "size": 1469958,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "60decb808027cc363681b572d76a6ad578e5622d863b742080c4db87f929518b",
+        "size": 1416887,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fc680812b03b0e93f1a040a2ba072ea0b4ff3fe21ef493b535cdcd9d43777e7e",
+        "size": 2467715,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "21e6ede19e7093b71d75eb414a58e78e1fa1ba5da77ed3df0e083719365fe9d2",
+        "size": 3908341,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f70e6af8b19cecc646adf1264e299621cb079549c3c7a0028ff894946307587",
+        "size": 1837686,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f735be456b74db70e5302fd1b188093d56f6ba8cae025635972de98471202ba",
+        "size": 1555807,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f5d653f0cb2c1e5d48501c0fddac1d24ab904c23f3cfc0188508d9658c522d37",
+        "size": 1304361,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4609b29234a11855357fd0773fe19ce16e91e98e2f8c5460d193bcf6437db014",
+        "size": 1162908,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0e903646b2e02f7b1be71cd482f516f2f3deeb1d1c8596dd8839cde13107422f",
+        "size": 972524,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "15b6de7053ee4f62cee56885e10f8bf2a67577cf75be3b0335dbc4849559dbb3",
+        "size": 1280211,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "700abbaf7d539167a7b7d906705d354f5f006e26339a5f180e75f3f8be08fc45",
+        "size": 1437393,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2660c3183c9ea87df1421b89af4508978ed0dc74b35968e41720b620e236a53d",
+        "size": 1736641,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b3aba2d158410940069303e1d068e999836484466f2f38cae40375b986a532a3",
+        "size": 1654998,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5c00b5a548d50378a16b91c947c8dd3d693433f3468e6bcbfa1713921aa46b56",
+        "size": 2289184,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e30a3454aa514a55524f1480bd018bc6ad5e53280f9adf863cc565b2678ee3cd",
+        "size": 5347050,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "518bf4c92aea4ac5d8ad4cbc6c7c3a05f8e6a724ec100f04bb9a4c31e66cd8ed",
+        "size": 3007029,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "835c41aac3e3d9b1e703e89d941645439a8298c9faad738cde35223c78186e3e",
+        "size": 2974048,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c805fa5d89958387197f4ac93f4fa5291f12cce1bb52350b8f1ea6a68a101acc",
+        "size": 2607414,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "838238e92633a4ea6605908125db8593cf145a15e2d66fb07c7dd8e5ab9efa24",
+        "size": 3205419,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0006871c2da85d697d50f57014bcb0b4f786b0244c152d03a368a0998a4e799c",
+        "size": 1572812,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ed36c96135563c030fa92371f2d0559eaee95a446db394946cccbfa621789def",
+        "size": 1802186,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2a74ba70002de69f00555beb010ef47e85680bc77f26f1d5c468d3bc7e979d80",
+        "size": 1621105,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "129617baa35fc53fcd865584cccf983515353fa510fe96a4f5e688218b1e14aa",
+        "size": 991829,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9627aa3fca637ef85e0418ea880e8d6079f9d24eb174bb07696008a1496f8131",
+        "size": 1332813,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "coinbase.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6b8ac5b1fa23a2d15c071cf00f5d4de7afaac0c897028f6553943dcb5123b921",
+        "size": 1202049,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "coinbase.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e7763158685cd8655526bded7b3be1b0d09ab98d76d764c81edd805fe42b8272",
+        "size": 1311383,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "42243808c2007d0b5a5479f52d313d6edb2933efa3ae5432cca4af1438575417",
+        "size": 243090,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "87b70fd4709d27bef7548c94076426aa01ca698047a1b37a38e206b71a93bbe9",
+        "size": 510291,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9e824ed8e8f8e7c828bf0d80ed3746b467c73df5fcd14f547ec555bcbacbffd8",
+        "size": 613911,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "820f85574e5fab939965b5f107c67a0ded332fcc94beff315329a61de8dbeaa3",
+        "size": 522833,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aa03e4e658bc2ddbddb2978a78b486705475405a27bccbabcc76c953a28e2d45",
+        "size": 506595,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c4edef8aa25fb33d1addd67b05643f131335b911852caf0490e8a416ba58ca4d",
+        "size": 244729,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "26e2785d6bab69d60f7df3b8a1655639111cba7d0c98ffad185b136cb5e0345f",
+        "size": 548760,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cfd55c47b52ac7d94037c85208f0c9025438fababe17a48f466fcb3433b1099b",
+        "size": 771852,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bd2605d0d28ded24227cd1f0a27b5c521f80578ac479bbba6f403dd4ac33c54c",
+        "size": 1118393,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1d9a62943920bd7f40685fc88b1225611264fc0b861e8de152524b7727f834ae",
+        "size": 2499552,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "deribit.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "73fc39659dc320fecae2ccae170cb3730beebf2a3c5fbd4d9aa74913a7d2e515",
+        "size": 1734880,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "876b10457a51dda99bc396de757f65962c5d1b244cc06ef798f43d6916bb219f",
+        "size": 3064659,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5815d4867286c12e5a0381445821e2540cde851ebfbc16d28c27dc93d7390973",
+        "size": 1967496,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c3ffbfd968c95e0db2f95b73b21f91922a828637658a6aaed62da832ea1ef91d",
+        "size": 3086722,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a18e2397fc809f0ec0ecb73563f06ee1e8525484242a241490c4f76b085b2cd6",
+        "size": 2636020,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f74775b3bf75477cc65fc7ba804bb952729e8a76e5554c52fbbe0ac3b6f2b5e",
+        "size": 3080070,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fecc9d5f3ed9e838eedcb6e5c2ba6a7804ce45f30cfd853f3f4c74efd0832023",
+        "size": 3785336,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "958fb0d5a70fd5c9d9b460ca60c58afefb6490bf8a79ea2fb29958fdb96c7dfd",
+        "size": 2053028,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aa07d6b9044dee67aa460a47e2de181ffa1e09f3e3327fb9d38a646c7a704d6f",
+        "size": 3177565,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bd521bb648c59c7b758305a3f3b2b0d2b7175fdc457c90dbb56b0d31fa348c02",
+        "size": 2520799,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ce9bfbaeb044a5a4bc9d3b2366c40f2a1406d3ec7325b9ba280b59ec1099279",
+        "size": 1668636,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "429940031907342b11d1d88bb8297e6dddc5357bf81d71b3c06bb0ab2d9f70a0",
+        "size": 2935754,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f01116e8aacb0987690582ad7ff0d438e8ebe85b18cb3a66a17f4fc8007b915f",
+        "size": 1101926,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9242fd5401b6bf3c6360a7e876918dcd86074833536d6037a96d90827b3cccf0",
+        "size": 2718471,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "06f89b25a6cd46d05b70e10e911e6af2da8e442c32463643e3fa7f73252b40a4",
+        "size": 3369429,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ba71738f2f612b3b7519c32a50ac00889cb23fad43399e0fa655adb356f82349",
+        "size": 3625096,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7c648662de871bba3b93678032f6adcf029649c4eac16220e1a00a5af35fc31a",
+        "size": 4166615,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6eb8c2dadffa0801409e2ed830b7037224ecf3e7a74676a8bdabe77dd9ea9d7d",
+        "size": 1867047,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b5816982c27248f06a4fe0719cc004519aaadb4afed0b9b4d78e3a05c5f89e7e",
+        "size": 2448099,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0044d5cb98302c6f7c37f492fb099791f6777d710b92b3f65900c026865a0666",
+        "size": 1877722,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "452f8892502a50eadb30833259cb30aaab2cf2db21a4ff584c6b8def1cfe88e6",
+        "size": 1004849,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f6779f54114a8e7ad4b41009643e64c2677095b6f7be38bfbf7c1270177a15d8",
+        "size": 646607,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "45ca6aafb9103fb24b6a0325265788bdc95f4d272190b926f9b1cb592fbae72d",
+        "size": 284992,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8804f4cb5f4fcc2642ce5e90f7313ea1cf5efb0c75c4b3d7da839c2d6f5ee5a0",
+        "size": 710335,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "deribit.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "30c59490f57166768ba40d1eaee9bbfc2092ab64e63c0d0faaf91bf43f619ece",
+        "size": 956821,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fb3a72165685b812b7b0e8a9f2a3a3288b23661a2dd65fb67117cd8ac6c20cf8",
+        "size": 950975,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "01d703c306cbcfb96997996379fbd572c846f61c7001ea869c9d912f6634ebc9",
+        "size": 1516275,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3609a3a1671779c23d1f9ee51953b480d132f616ae5897e01505d330c1668a0a",
+        "size": 1146637,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9f3a708d24b7be94ced60b749dddaf4447e372e758a413b8bfb9801a5a0ecc63",
+        "size": 1017717,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9deb82b139c8c28801b0880b25ad1af96477b542108fdaa6a7bf5f24bc74a608",
+        "size": 664761,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "59ba37332873dddfdf3dd36f243070edff839790e101edd0635442def1d26cd1",
+        "size": 747080,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8fd099d4d3070b4c5a715db1f7fba28ed155618c8e0c43ba40123e844a230a2a",
+        "size": 1327001,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1205fc220f64fe2681a646fccabd68843728e58b318a1ca9b42ea376539a0621",
+        "size": 967185,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5ed570b1306e6526d8b4bc66cb5f24980f9126a66e57083edddb25bbd9fc2d9e",
+        "size": 1387584,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "29ca7c6e9a0638d032b8c664d2c157244f9ac680b856c8f07ba417956093e189",
+        "size": 1512349,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "29a25aca787f601eb4ead741e796f0d5f4e628650902fdabc8e8f18c25e1808e",
+        "size": 1187845,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "91940eeb8f809ea6612433e8493d624c4687c3df513a40d661259a5a67933fa4",
+        "size": 1227407,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8332f50dfc9b5e8f7c4fd68b938d3ef2a9a04744c90bd37c9e65a64a7c8f244a",
+        "size": 1210057,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0171265425ade82e2dfbf75ae0f5e30d361833e9dfb28ffb2c463cff003b4a4f",
+        "size": 2284528,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0e8d64753aad04123e9561a335bcee3ffeb2ab6a75d34c8cf9de0220cc35776e",
+        "size": 2560137,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "40f46e66e63724e5f2113efed2369cee6e655d17593f47a9e4d0d162d574d61b",
+        "size": 2389450,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ea7b97b79a9b44d8c327fe7145f2492835d2bae49c1d56bf1f39b9232190eb99",
+        "size": 1915937,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f45c90b61c702dc23c04f1e29a0e3c28f78eeb5dae1d5965e349d1b620ad739",
+        "size": 1060805,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fd067a7596700fedde43ced3941f48426d4fe485f2878b3e63dc096685718f49",
+        "size": 996927,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2164354f63578c7e717c6f29717557162946fd988aa56fadd328702364b1e413",
+        "size": 1096572,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a283e8596e50941b6d25ff776c8e8dab5b65d36496091d2ceb57af25faf57bf4",
+        "size": 672957,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "38e7d3501664f01bdb4ca3d26f0e01611ab3847ae3f33a987fd770fde6d1b984",
+        "size": 531675,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4ef47921fd14943e39eb7650e9831257181387f6785f3d34439a9b9ef2db6fe3",
+        "size": 550595,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "deribit.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fe9b44aa40d18e7582cfe1b053f0dcd8fd36666c8bfe85d0311420320ff1f408",
+        "size": 719190,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f44e5d3c9fad2419a0269c8c15db76d9ffd6ed1931872c1137666ae470023f0d",
+        "size": 728823,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2d6a99d52ba8d7810f65068e083d74a2b5bca67a6efc4504eaa1a6307259d6e6",
+        "size": 1740429,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fa0e0f68e7ce92db7b370cbc5328ba529ba598fd2401217de307846e7413cd2a",
+        "size": 4207804,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e344091025965215f156c48e550ad6b685a585f14f50e25aa12e02253d63203e",
+        "size": 1308067,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9bf696db8bf53b1d85930f2c48ea944ef6120f40def0f958cac6430a727d3da7",
+        "size": 1164911,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ff9baf5e9df21039ddaa9caaba6384c0cc08708783496724dafb057558c0dfa3",
+        "size": 959689,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "029fa05182230dbdc5e22f8ca7ad61fdf559510c633ffa6f27fbe8d2e3426105",
+        "size": 933414,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4f838dbe4487c85c2cb9e28011f6e91fe9ca974626429ad94279d546ddf16379",
+        "size": 990882,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "036ad5ff945dcbf014b17ca8cecb580ab41a553ab49d9773bdc4eb9b14620198",
+        "size": 1567662,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b46ff13978b212310f3818a71e8551418bfdc2b67fade18b1d2387bdc9beb84d",
+        "size": 1776968,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "06b7b2ef281587ef0da2e518557f0dce8fc94d490db03b35a746c90dedb01242",
+        "size": 2077214,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0f0ef6781914c7ac6f5089160a2f32d8257a6b0b7665fff84f6e5f67fe716f61",
+        "size": 1896626,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e6bf86fce957a52daa0be57d15e3fafded48dbaa0ebba85d6580d9db9c80af39",
+        "size": 2154472,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5312ba0cb3752afa75b5076c9cd3e6d6a518a9bb2daf3cd15510998831382ddd",
+        "size": 3496973,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "40a0633d2c50ae06936b9f590c113eadd06d0e394065054f1ae59a4fa7ff26d0",
+        "size": 2731726,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "364792168eb1b1067dc7f392d48aaa814f19afef91a057b9b43fab1c0bdb3b53",
+        "size": 2373335,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a7059e646b8c4d53f7d1838f50dc58cdb61d42fd828b0493b08f1e16b0b10730",
+        "size": 1814617,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "18eda4cf0fae8c1495d2fbc3265078befb2677a38d76c760a273bb8f61feb129",
+        "size": 2021018,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b992adda1da5c552c5803880dab4e6e7cb8831357d700476e70fc66f9269ad65",
+        "size": 1362914,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5bfa8ca3779215aedb0302a1ca66a874d3face0da989dacf37cc5931d051de63",
+        "size": 1314941,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e05f205593033859140750ac5f4eaec6f12177f9af7e8861125349a3c87717bd",
+        "size": 972476,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "145b0224adaf3946bf76ba7788b17ff4d5a79c20a3080cc487c33f34ebaa9885",
+        "size": 663862,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b8ef63aeebbc7f152e5c3684833eaadedc5aa5c208f3063aa85cf1d2893ec833",
+        "size": 846945,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "deribit.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fd08a46d0b2534709a9de38dbac403ce404d7804b48f7a736c243d741a3f19e4",
+        "size": 795442,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "deribit.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9b2f69cce64ac7b4aff1c98d06e0ea8d11c571422f9e739f1e6ebb1dd8fac4ae",
+        "size": 1364017,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "539aed1e7a476dea591aa5dcaa560517c309f977d582668754d1c9aa10ec47f0",
+        "size": 431186,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8929d56a01476601b6dfa6091a0332267d155507c8f503a4cef0fde1dfd3d8ce",
+        "size": 1427967,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ea41df097e945f153f0f4ccec6de0f0cdba3b6220dfb332050e5a1ccdb2ea949",
+        "size": 2076153,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9deb54c9ffdf9eae7d045913d543679fdd0dbe115590d250ad365d446f019183",
+        "size": 1875677,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6ff45ef8443ac0a39142f2b4bda5b5b6fa532f7e436aaec0afc4b8819b43ec06",
+        "size": 1658261,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "222bf4be6d08dca47693ed954e67fd5aa510d50f7f3b6fb3c6e1044db7810708",
+        "size": 810597,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7c370da0815086df78d160acbeebdcf44573481b98735795e2d552650d7c6c81",
+        "size": 1732487,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "69c5870bb837bd6f4a2de5185673c8047d41743347479a83043cde9410ec8d0d",
+        "size": 2437836,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "16b78d6f3dff208efb6dc8897298a54ef450b8269f08f490fc07504f27d60469",
+        "size": 3452253,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9a4eac58ba98c686c9cc9c3c65d65b6ca0e5d8a9c738893f657d5c6b6e47045b",
+        "size": 6814660,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "kraken.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ff218c35cb777d674f5a9954e66c0ba5a090dc939e0da7c5a5c66bd44d36d9ac",
+        "size": 5303710,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "634c0818306e3faf7b63d38b6b385dbfe96d136ef4e9a808fbf2878de11e1d4b",
+        "size": 5465522,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a1c62e67edb73f274ca0ecf033247597c7483c4e9fd1f84c39823623f8e62c5b",
+        "size": 5309862,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e49d6131ac4610e8141e42315f935fed5689ad7f18621e9c0bb6e07650ef02aa",
+        "size": 4973407,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "083bc41b15febc07639d22808c88502a9fc0356a6a39e6884c1b084ae86cf97a",
+        "size": 3853199,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3743dc40ba27e9f17836f9221d003db482ad8be28329d0b975811f387af0dd59",
+        "size": 6289134,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "13ce45cfcc203914f0bdc35727898590ede571c4b5d350ef83046b6c9f11f6d5",
+        "size": 4373483,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "23a0943e17f0cc87e1f8c15261d68fe3086f1503816b6270535106f9d49de6cd",
+        "size": 4660954,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9d4836fee0ad0be3dde10ccd440319db843ce86b092cb89e93dd049fb1d1cf52",
+        "size": 4859323,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "790d332a0119b02a7ebe9edc3d3aee79bbb6824aec857d02b738e317b4b0572d",
+        "size": 5394131,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "048f7e7cc133b2b1890fde62774ae0dc6861079ff56392c50aee89c0164645e6",
+        "size": 3723602,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d7ef403b8ac729a1846d82ba3acc84478e0ec77db97057d8ceb61fc22421f4c3",
+        "size": 3556112,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "007960ad67db029f5ac7d4f52afbdce49c8e961bcd0081ceda357b745972bac2",
+        "size": 3975434,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2f1a2eaf63a1335482b641733760c38f4ea6bcc2e50e61bd4d6bfc6535dece10",
+        "size": 4635919,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ee016675a334b617dc6da18d2ad7aebb73291c7c5186f10bbdee3d70d4ebf6cc",
+        "size": 8512376,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8a2c67d682071354fa633addcd1f707f71e14ad32e18b02c0281482bce4b6859",
+        "size": 10581594,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f96ff3d04ee897ed01a3b36cb66c416d07fe43d2daf6adf46f156dd991674f8d",
+        "size": 8148031,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "eb968f53b5ec0fdea1e94124ecd889842220049afc22ec9ce5f81bcfcf14dd34",
+        "size": 6339141,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6462d8367eb2c17f09a0479fdf5c7b411210f86b882e2d2b47a63c9302fc07e2",
+        "size": 3736968,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "49571e53ce6202f546ae374aaab01becaf735d7997916e51d1b97235235d5ce7",
+        "size": 3873615,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "457ebfdaae565adb9b8013dbb214522b507285a0fd4744eff738323f0190626f",
+        "size": 4531422,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ad2ffebb6c61f644c370787422705bbadb88ff208bbf4820673f777eb10b779",
+        "size": 2892514,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ff7ff4acb81ac449eae11df7e35f69a17cbdce6105fe0a067e5138e9ea67c0ea",
+        "size": 1222812,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f9d30d95ab1a0baad95d577d876306d01b3cbe8720e7466989e0edb5ac9e7cde",
+        "size": 2676721,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "kraken.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8eb70f3cb5b757f87bbfe9421b884d648ae6bf0458e4091b1467b451ed225d84",
+        "size": 3545168,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "23bed68f372d041279dd026b6370e07429a3241ac785258db20df4cbb08b9c79",
+        "size": 3655670,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4949ddb6d177a1ad538cbfc6bf38ad4fef52532279e747c28486133ca6500779",
+        "size": 5249160,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "646947be8b2695193658fc29351a8adc6ccf30bc086bdf0d87cba7cb4649bb00",
+        "size": 4128483,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "70cd680ab4e5ba99942c568a1f320562d254242812c188001652f8b78a218fde",
+        "size": 3587836,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e77bd3b33f1908b66fb3d5679a31fb24cd8d1afa6fe4cf7fc998ed9a5f750769",
+        "size": 2330735,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e6aed4ab87c20d3112a19ab89ce7b435d3d818eb264ae361696f101094cb9907",
+        "size": 2784354,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8d79d02470906c4084206ce727e56aa07d814d8953629cd2d10d3b1f3caf092c",
+        "size": 3990527,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1922894e6a070aa843fd1bc0277fbc30c669f5fe539e8326cd7a3cca0160bced",
+        "size": 3135408,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c76e3d1cbbd00b1d58cc9bc5ffb71db46f88cc8c975a483bd9268914e3934fd0",
+        "size": 5276017,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f83a3f1aaf05560a28882947c64b87d13eb0115452ff6a33e74f2f6859a3f56c",
+        "size": 5433780,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a2e47e4cfe7ffa7f0414c4d2f6c7b1807e2710f1cc7460036d013be280d5cbf6",
+        "size": 3815163,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ef6bcf5ceb233cfc1245c7853afcc57bde88e14759469bab28ac945bd9a1b25d",
+        "size": 3762047,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "86ac9eb5754bcae3b68e1c697543570c1fd51bb33585e66ca8257261bbd8aa17",
+        "size": 4028839,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4a2960f2e055140c72d8b429d7a8676fc4f7d7fe51d5e10ef27debf8a71186ba",
+        "size": 6430357,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b244cd383dcedaaed102c63f4ad5b44540c1a924ae0a86096532f2f1879c238a",
+        "size": 7823506,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "daf91bd08a52294227cbd329949023b2aef4dffe4098aecc1abbb54cd1266bd9",
+        "size": 6444275,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "599db193670aa23c5abce7fd53b494cda602dd5bca529b0ff25f305e0323d942",
+        "size": 5244264,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8a88d88b1fae7fa684aebe0ca18fd7cba5fe9b1c18a3d9999e3d0423e9385657",
+        "size": 3318589,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e84a29b83b42c91300251ceb57b01d73121b97ce9e7db021b92449d6aefa33c7",
+        "size": 2952089,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d543777266e62e9575f43f96a31b64dea66d6cffeba603360225b389e9d77fed",
+        "size": 3079365,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ecf988f21a7123585c3dfb1a2350e9928fb00a02c87ccc28de8faf0ab1d09d28",
+        "size": 1969443,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "712d1b3cfedd47c70a611d7ff77a2e86c2808da333a33bec11c904b06bd6b8cc",
+        "size": 1548363,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aa05cf734b783f9678ab8bd1314216b23e00e3af85c2a278a3fb4772881ac564",
+        "size": 1936278,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "kraken.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f7d00344f07a09071636dc50ad889a026b0ba7e40bcf188b3d92e1ad1580736e",
+        "size": 2156915,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f759b795bc82b2f8f36f0b8672041612c0fb4c3356597cbf4b7688604d89aa8e",
+        "size": 2248607,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "be551b93a27fcad767671155e844634f69e56eebd3ce868b7bf26605aab1273c",
+        "size": 4142716,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aec65226070375f978aa6fe5350710bd19ad3d8038da357fad291c752798787e",
+        "size": 8500812,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "57f5e820a4894e8599d7e02266882118502afe751650b72dce6a1fc015eb1b36",
+        "size": 3816746,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a0523f3a6349a83cabfb167be6d95c187bfece5e4660b93e9f5a4fbd9d8fdc37",
+        "size": 3274554,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1b0f3c9854455b9d9d624e8db6819928d2bc53305808b914d34ab90bb5c85890",
+        "size": 2496049,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0752db290c76e4d26dde553c043f5276483cc0a0b8b81688af705c8e2eeb50a5",
+        "size": 2409445,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "da586ac06536ac2259eac1a7884b80c37a0b7fda0a88b769568acd9ba1954e54",
+        "size": 2878288,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "91314babfd13469e1d88d692e7c05700942d922dbc3a3f9b9894dd5338225e8d",
+        "size": 3830139,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7ab415468f72b5da8cb39502957849b7969ed7aeb3fafdb41ccf506ad2a1a6e2",
+        "size": 3889738,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d012f912912463e34179405919aa55340e63c0a6d9f5400aa0812fe9f1880640",
+        "size": 5296320,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8dfe780826dfde7a438cfe182886eabcd92808c5720c6b2cb3813d46247fa4d4",
+        "size": 4900117,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9f707a5a23e1d8293fd6de65aef37e9b7f9da1bda680f9ec5d459b93ed01fd45",
+        "size": 5602221,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "38d40ebd96c6d04a3f24ffb368ea6796a4de4e06303cf6619e6d17d2f09bc33d",
+        "size": 10249890,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "55b8d507c06c351d288951c867d651e2f307a603b95026c87f85c81c0c632bd4",
+        "size": 9030864,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "459b9b3e3701b6a39e373f599347a282477e04a8c05d54fd0e1ff1370515cbf9",
+        "size": 6981872,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "62961ea1349eb60cc5b86fe2295b164c51a39a833cba7a91316fb07ea1783154",
+        "size": 5436825,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fc040b665992b7b13d81ea0ca0e1d23ba27553f17c9e401603cd57277c9021b3",
+        "size": 5839922,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6a090bae46d7e6ef082df1b10ba585369ec0952add2df07c9782c5d93214b481",
+        "size": 3771774,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "054621e39ab0e2c3aa410d3be2569e7748d2b3065b1308cb4e81e9c7cfcce15a",
+        "size": 4093899,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ece2188387f00a7b5657857874becdcb03be645f67236ef76f74b03c60b4d36c",
+        "size": 2744223,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "de691c197f994cc0fa15a23ca392391d05f5e7043a4f305077d54bbfd1aa354d",
+        "size": 1896564,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "25cd1af25a96139d949e50388c0c7b7b72b54616db53bbd08fb7151983b44559",
+        "size": 2513789,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "kraken.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c2cb4e06cedef3abd8b0b9fbd7f18210bb9f3caa0175c472ab89d3b3a1fed480",
+        "size": 2389580,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "kraken.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "20b572057442e296ff75f91e71bf006c005e67954740a1b3675a46e29a7daf9d",
+        "size": 3362836,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9c5c08b50d977bd42a23c8f6ead1f8d9b5c8a46b9b7adfbb402bfbcb50d57ceb",
+        "size": 2823780,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bf9ce3b29084288882b5405e518cef0d8fde62f909b94998526b8a56361f3a18",
+        "size": 2233101,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6eaf77655c373368b245af53c1be500ec419241f0344e66885853b1ee66eb6f2",
+        "size": 2393680,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e7014e5f7b002209bf7ca73529240d5af28c792ce3a094c1c67c235a0c651a52",
+        "size": 1934746,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "06c2be593bc1b078ea1dbe156667dc4238dc0449a1d7f7f1ce2ae21dae1f667d",
+        "size": 1809404,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d02c510d99b0a81dba0caaa6dee6cdd5d94ba6cf6a075315780955a46c125f68",
+        "size": 2413208,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "aa1f05184b90c1ed8a857ac9c70a2ef61b5029a2556195d39195b54065f4d0fc",
+        "size": 3244521,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c0e0e77ae77ed5ee4a81cd02b6b4a8da0eb5758b37e804ec7fa72c8416e6d4e8",
+        "size": 331231,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9170b9c28eb2ba2633923b2302a9264b88f92d6750031f0e0d6487be58527d72",
+        "size": 1461420,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cf7e0aab34821caae45651b6de731f197f015a47b4669a5d44071d678ea58655",
+        "size": 3537231,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "41fd2a14c4890a45ea099a4512757045d6cbf3530add42592ab72d58fc5e183c",
+        "size": 2813884,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "85c01c5e3dac757eb3502bec72f29271d9fb44134476e285f2ef0d48ab579ed0",
+        "size": 3665316,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "08927511f8a78b7223a14791d16954ab459f096628e97351032077f85a0b2650",
+        "size": 3099640,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "06265798dbf02a6ff2805a0e402fb06c6c76548426e84ed521af8c3b43f9291c",
+        "size": 2870011,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d70c198aedfda700265fdeae0f4d04a629109f5b86338a74821d85150f57cf0e",
+        "size": 1534820,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "60d2e65318aac5c0ed32bea9854285d466a92923886739707d8a55ef545615c0",
+        "size": 2803534,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b05626cdae0956e48ce41401755ee43c4b63ec9b99882cc0929d3206d72b4dd9",
+        "size": 4214686,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "059bcb873baab34a79863d1f7a9dc6cc7176b2f4a4de3f00f74f0173b536fe77",
+        "size": 4688417,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "95676b38e78abfca347fbc962add40d0f0f862effcaab145bd78fc1cc2d8f352",
+        "size": 8564903,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "okx.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9f746a8dedbc39de0e47d57c2b2c4d9d2348ceabebb013ef5ded3b3f504b409a",
+        "size": 6524264,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "447b0cb1c6f4cb104376b59b94816fe0d284374b1c9cd3078ee66e5771828e03",
+        "size": 6215840,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "455defe081791c5bf8a91d906d1701f7ab262540d31985b1ee02d53251d21d09",
+        "size": 6938901,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ff124041d3b37175930ab64ff1cb018c79b17bbe8f58f8ac0a49c9a87ba81bd",
+        "size": 6018297,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8bc0ad30989add8e3c2f4953bd6c648562ba30269b5f08d5c0128bfb1f21704e",
+        "size": 6006859,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0a163ca9643ba0dd0340ba3c4ee17229c972891e4463695b9f080e260fece2d7",
+        "size": 8082162,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "272f2167c4692871812401d861955dfaffbc4b1b96bb777810105a54db7634c3",
+        "size": 5257702,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ab18541d88ff6ac1b4bb08b4a1d609e2e595c77068f3d50e4fb08e4ad1cb304b",
+        "size": 6060694,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "adf0b45941ab859630a1047a9623ea6bb29ee1765852236670986d1d50349827",
+        "size": 6330020,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3a6532ca29c1bfe657fd89c25121fcbc54c0df614d14b26850fd94487f554afb",
+        "size": 5626410,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d13758cd010b35aeee07b048e7e8b787b56b8c316781b789b1a461f4945c664e",
+        "size": 4997179,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ee24334b4b550798ead0a16a0cddffd99962594b996d182583b29d6cd037ea2f",
+        "size": 4434153,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bd76b169a0ef9f82dae35c7c225f4a29e662586f9c065be2648f661e25363178",
+        "size": 4715524,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c36f1cbee8ec0996f952f72be852b398273d2ebae76fe59318953c68e209e66d",
+        "size": 4758873,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9b109f738cc132419735b6d3f10259530788e49388c425a65cb6b02b2ebf20d6",
+        "size": 8959511,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "da52878f759f97681132f4877917dcaccbf46510730e42e3b2f991717c6237cb",
+        "size": 12809378,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0368133a05e14fb99b1d2c17ee11f85992e91186cea6e25d8c1413aaed57ec0a",
+        "size": 8532460,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "14e98b258893da36863bac64614586362d979a0648938571a16fa13d6cf3e436",
+        "size": 7086063,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8f1335264cfc12a5d1e81a84e9c32ce1a6a61938bc2aab059051b4c68a3dd2be",
+        "size": 5178867,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f7f15372c7cadc571147ef80964ae4a1ef91b7f0284349996e88c1628d1e9ffb",
+        "size": 4666996,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5839a2c3be1f0c910412fb6f148eb2d97765732276aadb07cc829b8ede42ddc8",
+        "size": 4622693,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "478b6224cf5475e4d5cac8fd30d7d845192c485def8a629117223c164fef6164",
+        "size": 3721256,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8abb8c80e52394559aa2aa7e4f12bdf2ae34f7a23f8024f0c6d57954acedd439",
+        "size": 1414719,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4e8570dff065929bd8ef9960e8f67097b8a8e59709b923bee46232242efec879",
+        "size": 2833999,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "okx.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4c064123fd19d207919e3e734c4d8a09177190e31101b08fff7ab72f99fd110f",
+        "size": 3567964,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "41db81f1eb5009f50e40989749af5fa5b5006e76ff67bbac3f5a378c91eca579",
+        "size": 3526032,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e8b536b27fef3981f461a76b42bc930d3b000fa5fb9885037163a71c93f2ffa4",
+        "size": 5196208,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ddc549f23280be6b125cd15de70a83fe0fb456ce1c5181eab88ce1f41f5e7f6",
+        "size": 4434032,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "26241febb60042c92c2adf603f02636ff2f87eba1ac3437e9eb130b5e6d2152c",
+        "size": 4315176,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "70d7a3d699a2b66a29214a749780894449f2954538c760641100183743eda431",
+        "size": 3632126,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "936c65d7470656d74b3494ee34c248657c353be3edc718ebd4da5f24d2a320c9",
+        "size": 3806957,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9dfde4bdc3a0b54e7d61d6fddc7e313ee03a72bb34d27ac1a30d53361a2071d0",
+        "size": 5133162,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9e35cd7c88767b6de10e0b0f3eebe334c626605908e431c090a878e6569358bb",
+        "size": 4558831,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d30fc0ef371874643c5bc3cd6d9ee82a6b6adab979827e2a50810b776f3d68f3",
+        "size": 5688871,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1cc11d0ac3c6a26ef647dacd1f23ec0310c8adc03e7c2bfa5a33f755b6f18f3d",
+        "size": 6433000,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "39545e67afa3c4ce911008b0161a075514a5605642dc2eb19b464602d188b386",
+        "size": 4561179,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f0c43bef15a2e525ea65052785572996d2e18bc25d87e98a80b92ae8cea563dd",
+        "size": 4701421,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8a428add85fdcdd0320020609cbda2d57f1c24e512724e4af9c475d5aefe08f7",
+        "size": 4620229,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0b497e466aff5f0251108bf15f0d267968abc296e2e05241f684dc58ac64f3fb",
+        "size": 7639514,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "370dd4e687e01b64ece6f5178b75850d945769e80365e27cf870f825811249bb",
+        "size": 8715657,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8a6b96877832e7abcd84c9e41fd1e6bf1b65bacfa8b3d04f8a0e2c1fe817f236",
+        "size": 8750045,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c74324b0573e2c22abe0e7ea1af78b6483292b7f2f8c66493e6c84906173cc0a",
+        "size": 6676050,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "628da309c4053e069c62260e55af833d17ffca2610cd10361b44ae008e8d9f42",
+        "size": 4998802,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b29626dbe0288f44e67732a06e99bc446bf310673cfba62bab858bdb7d1ac11c",
+        "size": 3828034,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e014c204e9859791b353f52d6cd60382477941643a712495d1feafc4c10dc996",
+        "size": 4307911,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b1c79b7a91c2e5a9af65ddd5fc861c6d2ed41ce4516e404b4696c35d00391632",
+        "size": 2808482,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fd04bd30368cde0e4bbf92040c8a006e2b7d47c2fd5f6a89a344efafb8a7af1b",
+        "size": 2426514,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e6b95d14ad1a9d117c82236fb54dd672fafe495f8203a9f06a89bef10bea44cb",
+        "size": 2728882,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "okx.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1ed6dedd6e85a2a1953e9aac3f2ec72f7e9414f93dd9d1b0b7bff2899f436f3d",
+        "size": 2922405,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "5420d0a44f5d42591da473a1913e5ac2b5aef56c6d917574cf5ff9fdc062a0f0",
+        "size": 2918951,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c62ca0b07e90d09fff6859744aeb8a8d0c2aa9e3ec66871eed32ae024810e240",
+        "size": 6170571,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ffc6b37567ab251aca1d3aecc6101e9baa378b36430a7ec7a39485f71aea2c31",
+        "size": 14072987,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "44dbf96850b8585a5ac0a9e1effc0ea028d564511b31c0c0b0aee7997f0b0ff0",
+        "size": 5589627,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "19a04ba2e172e0d3e134549272a8c8ed01f3f2ceafadfd455ccf04806e39f5e0",
+        "size": 4822561,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2e2e1340906737180a486fa83008ef8211513247211ac3e244b7a55e623e14b4",
+        "size": 4767658,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d92ec096da94dca76e706978933ed9d3067012fd8e594dc3b8c0a83e92e654e3",
+        "size": 4793161,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c21abd1c24b2c56af7c132e91443e2eb2eb9abb08e42a0b6e8f5c0c4829f1ed0",
+        "size": 5059346,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6445354ca33ef83839dbeb81aa581ca5b5c9fe6f3b08d82d722b78cfef406fb0",
+        "size": 5895117,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2cfd8de9605471ebe0acd285b5d5f51a6459d6c97006c594c9467d658f79c0b7",
+        "size": 6829298,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "600fed673dcdf1d0e08231b6780e2e4bcafd56716715397c330c3707cd44a95a",
+        "size": 6832001,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "43a0648996f3383e1121bb94aed301e23a2fed84e264b96f00802b4196892b8c",
+        "size": 5539334,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e13d70820152d90772916ecd70f4879025d4c43454e2baeaac2736f41c723ffb",
+        "size": 6358186,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e7f53835a0422fd463b75226e01fa8cd3fac73b2e86ce493ebfd2fc1e7078c27",
+        "size": 12651177,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7e6e45fc0fe91a45109215e46f6fb9546509e4031fe53f6e9b1bab755409276f",
+        "size": 8719965,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7cca39bb913ef51315f6c3c13640db12c0802e2be54f57056218e60aad6e224f",
+        "size": 7755129,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "74303a149da7412a8890c843a0f8d60f1252ce98bf511d82dd3b1867174838f4",
+        "size": 6259466,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "dc658d60c18b379a4adf720bf48f57cc12196363435e2d60d1f585f1d7de2536",
+        "size": 6007286,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "35483f46282bcc483ed71f83d60a1be550f8f01a088a9452941e632c8d6f7344",
+        "size": 4265720,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "96e402782aeb96de559095d7434dbedac9b49b8e2b80e74116ab74db35b04388",
+        "size": 3719598,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f848de4780dd4e409395da747337111891b6bdea15677a3305b6e799dc3917c7",
+        "size": 3151638,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2ee04ca33d6188389a02163257adf2cafff88ac48f09ba27865d19023060be5e",
+        "size": 2671450,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7c4331a7e720f059e66cb60e64cefe62e6771513c6844db5472044386fc51ec9",
+        "size": 2892220,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "okx.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9f2ae4fa68bb01d10b6fd46f5f405161e4236a3140922c15bf0ba19832502a27",
+        "size": 2858290,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "okx.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "07f8514f5fe27640a1a5d0175b18c613739c2fdc30b8097448f7d5141f1abbf5",
+        "size": 3760940,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "80db4045119489f34a777be0f56c8800efc1fa5def3ef90f5a6c85221ba04c14",
+        "size": 92437,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8e88a274c426dccb3e72972536f80065962af676b0c4702afd54f8bab8e854fa",
+        "size": 267138,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9ab5bdc0660d814e529d2060a83a766a238452a05990cf56112119eee0cfe264",
+        "size": 269596,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fd6cb939027614762ebbed4f2fdfe6eb70a2a1c6be27143cb6e1e7cd0e79be41",
+        "size": 268808,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f639ff1743ba80725963568a8f79c792c5feee3ca867d10a48ed4b50197af505",
+        "size": 262814,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cbdba921894e423a59fb10f896f3b34d529733f229bbecaf90a97f20d8e8e3e3",
+        "size": 201942,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2421a4d21acc7f6971709876aa508563026b87d2c055389982351086b0857b52",
+        "size": 261481,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b1aa949dc34d77a4c27406ac0155c64ed5ab0108035b2a1c2c08066f4f583c5c",
+        "size": 270059,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b7b56bab6a1e9d3d1d327010cff224a29015a0af4893fa097beb73525e16cf77",
+        "size": 274941,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "736d83c50d9273ec9bb771db210926d3f59ffa4d5c9f7013171354156cf2cece",
+        "size": 276495,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261004",
+        "file": "rtds_cl.20261004T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c430f95cc5e332a4705e518438dbab578446d7013d185ee15defac003719172f",
+        "size": 277639,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3ea3dcbba96176f9b29973971b1b48717946b5aa00b6907e9a48682762c23e28",
+        "size": 276003,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cb58d94a94ee7c423dda1e3070cd35cb14bf059fe16e595d3ef422c5e0481ae4",
+        "size": 276814,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "32c8ca32dd3dfbfe09f6085ca773b3a0828826df2e647b8edd471564da07f530",
+        "size": 274387,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e65ae915880896b245013caf29f483eb061be982717af0e9d5df3152689c9285",
+        "size": 276003,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "39b830841520feb8d172ba527d39f007876959efc0c4e1486f21d2aff85307f8",
+        "size": 275889,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "833ff9a6ab5aaf6b8b95807d22a926aa1d42b64417df26289fd123bc94374c82",
+        "size": 271048,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "52021367ac569fda2a05da5436765dd2b9f369b3b9396e6b35bf7d08392bcf79",
+        "size": 276182,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "68e32a4aef223a6980d6594d17540ee93f7c227ad72896d8257a3173e35b01f3",
+        "size": 277151,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "90cf416a9ca5c8a9626d533e77bd426f836572cffa674df07833b7baa3471673",
+        "size": 276110,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "04c4c34ddb86be21f4f25226fa1a892947427c6678ebed0d199c2a54fc65d11a",
+        "size": 274378,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6c85a34ed3763699c0b091f5d2e5ff2fc21c77e8e506dbdbe080194831894419",
+        "size": 272903,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "380e7e57c2a3cf26f8d62dc96c876dcf47b5f905f8d4d11dd4e3d49b9fc20dbf",
+        "size": 274454,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9aee3b635811c8b812b8a1b8e81e3132ac67d7948a9fd38293af599f2257cfe4",
+        "size": 272421,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f14db34d76b6e8c1cbe3b359065d7419497b893f5fdb6066a2ff4412fc445236",
+        "size": 277240,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "84c0e52c2269d8bf7cbdd571eb59e1ce28bb1c70af0623a380dd9e58eb11bb0b",
+        "size": 280327,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "00644a88b2901d8b3659139fd4ec70f8fd3fc51e983b7a05dd4e7d58482a15a1",
+        "size": 278730,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b5ffc0dd74a08e90c871893675545ce1a9b9dcc9527e629e77f68b98fd50588d",
+        "size": 274324,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "25dd88da3f30810686e0e2a8c138687cdcffdc970fb6e2d6f331df492b8b6800",
+        "size": 272749,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f7a8a42306d9ace1f39eaa5e3f11f190362b6690711edf8529253903fb1d1d5d",
+        "size": 271230,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ca8e0bcf472bf100abcd3cf59d8cbeba680c5729644c460aebc3f3560f96d7ee",
+        "size": 274943,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "947cf69e86c3a67b67bf390625a8d2ca3d4ec8c201536eebec586aed86bd17b7",
+        "size": 266816,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "973c04c431b9ec82cdae5461b1556578241bdbea9857a08eac99fbe6959c9337",
+        "size": 134292,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8a9ea3f68a03d4884bb7b131eaf01864e348fe853b3d96ec74bae44749ecf2a3",
+        "size": 235807,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261005",
+        "file": "rtds_cl.20261005T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "30e750cfb98eaf7e1a66835a452fb66843306ec235af4c3d046de89ebb101852",
+        "size": 269582,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "37eec36f1223c275a7fe008c2de55ca62bac23de2fc1876dab260ded80d39adf",
+        "size": 269931,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "fb1771f930cadf0e61abc5b1e09ecdbc45fee83e78abdc9f80c6e6d73a905441",
+        "size": 270630,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e16308202bf8bd5e3ee4d6da89bb377287aa210fc5df5fcccae293401c8d6d43",
+        "size": 273006,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "4841d32e9104705d37c824f8643222a0ff9e67e5edad01b7b0febe99d1fb2b93",
+        "size": 269027,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "14c1e962dfe6ea875da4de9994d96e3f1c6ce6f94359306890975c5477da222a",
+        "size": 266720,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "c106e2b44de2935a975c8d2806e56634c629c3481215b58b7509ccf37ff2fd86",
+        "size": 267060,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "57a114219da6dcedc53ed53e31d6357006283f7b03cc70f77b9d5a2aa6cc0963",
+        "size": 270676,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a495d413efd497c36f76b05798d67de57bb7c1b710f320f65627a84de8bc1369",
+        "size": 268504,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "827c1643c112b0fb611b7d2a352c5761406a2f6c2aa73c6ac740e04ab806a4fe",
+        "size": 272324,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d27ccbc9befcec0b1aeb5c8a4da3b7ac3a5e54a5795d1bb0a479488ec11d8130",
+        "size": 271317,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b126c834bbcc9519cd8a4478ec85a3e396cf3aeb0dfc586fd13fa78bc5cc8284",
+        "size": 269718,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e0464d678987ef475d94be22818892a86975b53974bf9ee12c6d7cf2256cf474",
+        "size": 267963,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "77c536ce711e8c6a14e853b83a994106e2e5358ba9a68cc04b800b1a592af24e",
+        "size": 270916,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3f383a6eb23b417c442551c7202abd50decb594894f91ae75975cebedaa88ec6",
+        "size": 274369,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "a9c02eeae98bb793daf8572cf3cea63c111717c498cddd78366fd9af59111693",
+        "size": 275335,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "696d8c19c17fcfcd4ee6a15e9943788e85e512bc6ea479dbd937fc7cd155ab55",
+        "size": 272586,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "dfe70892ec9ae32431770a58955c8f49fc5d1fb53c94e50f49236358e7c39e74",
+        "size": 274502,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "8b212260cc4e032a305935c8110a6adf8dbca88fb093002e4956c0d8c0420175",
+        "size": 270155,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "cf58abbbff7b6afa301aee6caf59dcb1ee59c16081028be15de990c9451b3744",
+        "size": 264524,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "de3190af538139241814831b3b4c7ed0d6ed24639a8ae2710bae6b5c5908e0d5",
+        "size": 267066,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "094bd5ad208d2704480564e557afcc6419105cec2afda242244b49a435e4757a",
+        "size": 266515,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0a446f335362134d38ba97ccbcfd09ef708ed256cefcdfe8d17c2db98a8cd1a0",
+        "size": 266173,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "bd08199f443f71922a25c603fd0873f3ed0f6cd128b84ba3b27b1db2d3e6e19c",
+        "size": 263204,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261006",
+        "file": "rtds_cl.20261006T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "674753a6c78aa0dbe6dc51ea5b6b97e047604497f18f990051b1f89d77273ea5",
+        "size": 267305,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2f2a5580a238fad340f21ba66603a0774fc06487b2f3fe0d149dfd505766b24e",
+        "size": 266135,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T01.txt.gz",
+        "gzip_ok": true,
+        "sha256": "433673c90fdb06c80a7b201f35f81e7432fde490ad66e2dc017114e82feb1490",
+        "size": 269007,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T02.txt.gz",
+        "gzip_ok": true,
+        "sha256": "354f71a53a06b394facd4e6e50d157f8cbc25e3eecb9e12b95ee768d6bf98ab3",
+        "size": 275002,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T03.txt.gz",
+        "gzip_ok": true,
+        "sha256": "6e53b82e00bb6c933215392032a9ffcd62e7a174d3805b74952048ec756aa61e",
+        "size": 271015,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T04.txt.gz",
+        "gzip_ok": true,
+        "sha256": "0a43e29f2f51736af46a51833f8c628c7dd65582cbd46a4fb3c2522ab873dd04",
+        "size": 268340,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T05.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3e5c6a0712ef658329000e8c91dd366a34ffca2683ac557e28c04c6fca9e5cdb",
+        "size": 263704,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T06.txt.gz",
+        "gzip_ok": true,
+        "sha256": "714d0d3052611c226cc89f1e55dc950238330b705d7f334bdec34acd111ea43e",
+        "size": 262989,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T07.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e155afa8ee6e217fed5c521179f290e39e2162fd3e8107f0b0ecd37b2473f563",
+        "size": 270732,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T08.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2da35bc4c24c4a81d4488bb37936fbb3c806887d0def8e8da33016dcc192ceef",
+        "size": 270488,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T09.txt.gz",
+        "gzip_ok": true,
+        "sha256": "f389edf919376d4087e7f7152028054d1de21947e3dc10aef2567a156b7fe920",
+        "size": 270663,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T10.txt.gz",
+        "gzip_ok": true,
+        "sha256": "d4515b8b51e344394e0598b55ec21379cb6befd10785069623b6c258719b901e",
+        "size": 271509,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T11.txt.gz",
+        "gzip_ok": true,
+        "sha256": "2be99de3421dfbc0a2c5a16787cfca248491d5b4984070a18ebad2128b194be3",
+        "size": 269647,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T12.txt.gz",
+        "gzip_ok": true,
+        "sha256": "9d72e8dafc9f6db4ba52afebd5c268a755f112e0f3eed1c9adde881d97553b63",
+        "size": 272008,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T13.txt.gz",
+        "gzip_ok": true,
+        "sha256": "e355cb8daaba061b581dbbd10a201d6bdab21063d176bc2dc14d99d137be4865",
+        "size": 275789,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T14.txt.gz",
+        "gzip_ok": true,
+        "sha256": "1eab52c6a4c5671a04785f8a67ef9b6380df0d7c672efc9b4e44c64daa32506e",
+        "size": 274417,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T15.txt.gz",
+        "gzip_ok": true,
+        "sha256": "66ec404ea37b08a96dca9f81d99a056e610ce4b7fa90a6ba8f542e144f2ef98c",
+        "size": 270936,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T16.txt.gz",
+        "gzip_ok": true,
+        "sha256": "7bc51051b566d9482ca48dd013da614f91d49c25c7e23a186d1653604af33f0f",
+        "size": 272987,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T17.txt.gz",
+        "gzip_ok": true,
+        "sha256": "43f3cd4d5c1ff1792f447818354482089b518938f2a580ffa080a0f626007271",
+        "size": 274109,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T18.txt.gz",
+        "gzip_ok": true,
+        "sha256": "3131d677c1bc68d48435bfde1c5e72fcc300a1b82a46c889244c275026022743",
+        "size": 270924,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T19.txt.gz",
+        "gzip_ok": true,
+        "sha256": "06ff2790fd5e6a2969040c3a9f34c9c9ff3f3aa642b68c9536cff264256921df",
+        "size": 272246,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T20.txt.gz",
+        "gzip_ok": true,
+        "sha256": "ccb39f2345062b286ba9e76d486ee2d905291c4baf042a347cbcef50f09087ed",
+        "size": 270225,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T21.txt.gz",
+        "gzip_ok": true,
+        "sha256": "49bb62119f1b822da28312dff94281a3f03388836e61f393fb8941040f1555f9",
+        "size": 266970,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T22.txt.gz",
+        "gzip_ok": true,
+        "sha256": "075a6fe69d09470b9df78e866957accd72d88974167cabd0358f4af8a6673394",
+        "size": 270629,
+        "uploaded_ok": true
+      },
+      {
+        "day": "20261007",
+        "file": "rtds_cl.20261007T23.txt.gz",
+        "gzip_ok": true,
+        "sha256": "672f1f2054d6b7978c5e1b3d9fcd551b249678ce3795040d3118b818a2802e2f",
+        "size": 268111,
+        "uploaded_ok": true
+      },
+      {
+        "boundary_coverage_only": true,
+        "day": "20261008",
+        "file": "rtds_cl.20261008T00.txt.gz",
+        "gzip_ok": true,
+        "sha256": "b198513390fdb5080f9f5d831dc85ed2a6e9fb923dda00ba675d2e2d6742654a",
+        "size": 271678,
+        "uploaded_ok": true
+      }
+    ],
+    "schema": "settlement-proxy-calibration-input-v2"
+  },
+  "input_manifest_sha256": "b620aa0d6aa0e9c3e64700e71e6c2890f90b36374caf5421ac2c9319112fe4ab",
+  "schema": "settlement-proxy-calibration-provenance-v2",
+  "strategy_fingerprint": "2d064f057ae5f169dfab66e355baa2789797e7c75ae552fdce290c81e14400ee"
+}

@@ -1,0 +1,122 @@
+name: Polymarket recorder offline checks
+on:
+  push:
+    branches: [codex/recorder-reliability-20261017, claude/polymarket-options-strategy-1lc7i4]
+    paths:
+      - .github/workflows/polymarket-forward.yml
+      - .github/workflows/polymarket-recorder-check.yml
+      - .github/actions/publish-research-archive/**
+      - research/polymarket-5m/*recorder*.py
+      - research/polymarket-5m/*capture*.py
+      - research/polymarket-5m/*artifact_parts*.py
+      - research/polymarket-5m/*publish_archive*.py
+      - research/polymarket-5m/*published*.py
+  pull_request:
+    paths:
+      - .github/workflows/polymarket-forward.yml
+      - research/polymarket-5m/buffered_recorder.py
+      - research/polymarket-5m/record_live_buffered.py
+      - research/polymarket-5m/capture_checkpoint.py
+      - research/polymarket-5m/test_capture_*.py
+      - .github/actions/publish-research-archive/**
+      - research/polymarket-5m/*artifact_parts*.py
+      - research/polymarket-5m/*publish_archive*.py
+      - research/polymarket-5m/*published*.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt PyYAML
+      - name: Writer, checkpoint, supervision and workflow tests
+        run: python -m unittest test_capture_reliability test_capture_workflow test_artifact_parts test_publish_archive test_published_restore -v
+      - name: Existing paper recorder contract with new writer
+        run: |
+          python - <<'PY'
+          import pytest, paper_trader as paper
+          from buffered_recorder import BufferedRecorder
+          from record_live_buffered import SupervisedTrader
+          paper.Recorder, paper.LiveTrader = BufferedRecorder, SupervisedTrader
+          raise SystemExit(pytest.main(['-q', 'test_paper_trader.py', '-p', 'no:cacheprovider']))
+          PY
+  transport_publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      manifest_sha256: ${{ steps.publish.outputs.manifest-sha256 }}
+      source_sha256: ${{ steps.publish.outputs.source-sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create synthetic closed raw checkpoint (no market connection)
+        working-directory: research/polymarket-5m
+        run: |
+          python - <<'PY'
+          import gzip, json, os, pathlib
+          from capture_checkpoint import pack
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'synthetic-paper'
+          raw=root/'raw/20000101';raw.mkdir(parents=True)
+          with gzip.open(raw/'markets.jsonl.gz','wt') as f:
+              f.write(json.dumps({'synthetic':True,'not_market_data':True,'payload':os.urandom(2*1024**2).hex()})+'\n')
+          pack(root,pathlib.Path(os.environ['RUNNER_TEMP'])/'synthetic-capture.tar',os.environ['GITHUB_SHA'],'synthetic_ci')
+          PY
+      - name: Publish independent small synthetic parts through real Actions service
+        id: publish
+        uses: ./.github/actions/publish-research-archive
+        with:
+          archive: ${{ runner.temp }}/synthetic-capture.tar
+          prefix: synthetic-transport-${{ github.run_id }}
+          parts-dir: ${{ runner.temp }}/synthetic-parts
+          retention-days: 1
+          part-mib: 1
+  transport_restore:
+    needs: transport_publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: synthetic-transport-${{ github.run_id }}-index
+          path: ${{ runner.temp }}/transport-index
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: synthetic-transport-${{ github.run_id }}-part-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/transport-parts
+      - name: Reassemble, verify source hash, and restore raw checkpoint
+        working-directory: research/polymarket-5m
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.transport_publish.outputs.manifest_sha256 }}
+          EXPECTED_SOURCE_SHA256: ${{ needs.transport_publish.outputs.source_sha256 }}
+          EXPECTED_PREFIX: synthetic-transport-${{ github.run_id }}
+        run: |
+          python restore_published_archive.py \
+            --index-dir "$RUNNER_TEMP/transport-index" --parts-dir "$RUNNER_TEMP/transport-parts" \
+            --out "$RUNNER_TEMP/reconstructed.tar" --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --expected-prefix "$EXPECTED_PREFIX" --expected-run-id "$GITHUB_RUN_ID"
+          python - <<'PY'
+          import hashlib,json,os,pathlib
+          from capture_checkpoint import restore
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'reconstructed.tar'
+          assert hashlib.file_digest(path.open('rb'),'sha256').hexdigest()==os.environ['EXPECTED_SOURCE_SHA256']
+          result=restore(path,pathlib.Path(os.environ['RUNNER_TEMP'])/'restored-synthetic-paper')
+          assert result['capture_outcome']=='synthetic_ci'
+          print(json.dumps({'transport_end_to_end':'passed','synthetic_only':True,'economic_replays':0}))
+          PY
+

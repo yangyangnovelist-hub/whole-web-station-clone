@@ -1,0 +1,112 @@
+{
+  "strategy_id": "settlement-proxy-v3",
+  "supersedes": "settlement-proxy-v1-v2-rejected-infeasible-calibration-availability",
+  "protocol_frozen_at": "2026-10-09T11:18:03Z",
+  "calibration_end": "2026-10-08T00:00:00Z",
+  "holdout_start": "2026-10-10T00:00:00Z",
+  "calibration_embargo_hours": 48,
+  "signal": {
+    "opening": "exact received Chainlink mean at payload offsets -62s through -2s",
+    "closing": "mean of per-second median from at least four of six spot venues; geometric mean with Deribit only when its full window is available",
+    "direction": "sign of projected closing minus opening",
+    "minimum_margin": "frozen 99th-percentile absolute calibration residual times 1.25",
+    "agreement_required_when_deribit_complete": true,
+    "decision_lead_ms": 1000.0,
+    "one_signal_per_market": true
+  },
+  "sources": {
+    "spot": [
+      "coinbase",
+      "kraken",
+      "bitstamp",
+      "bn_spot",
+      "okx",
+      "bybit_spot"
+    ],
+    "optional_index": "deribit_index",
+    "settlement_truth": "received Chainlink BTC/USD"
+  },
+  "proxy_config": {
+    "decision_lead_ms": 1000.0,
+    "timing_placebo_delay_ms": 250.0,
+    "max_quote_age_ms": 2000.0,
+    "lag_grid_ms": [
+      -2500.0,
+      -2400.0,
+      -2300.0,
+      -2200.0,
+      -2100.0,
+      -2000.0,
+      -1900.0,
+      -1800.0,
+      -1700.0,
+      -1600.0,
+      -1500.0,
+      -1400.0,
+      -1300.0,
+      -1200.0,
+      -1100.0,
+      -1000.0,
+      -900.0,
+      -800.0,
+      -700.0,
+      -600.0,
+      -500.0,
+      -400.0,
+      -300.0,
+      -200.0,
+      -100.0,
+      0.0,
+      100.0,
+      200.0,
+      300.0,
+      400.0,
+      500.0,
+      600.0,
+      700.0,
+      800.0,
+      900.0,
+      1000.0
+    ],
+    "calibration_fit_fraction": 0.4,
+    "minimum_spot_sources": 4,
+    "min_fit_points": 300,
+    "min_validation_windows": 100,
+    "residual_quantile": 0.99,
+    "residual_safety_multiplier": 1.25,
+    "downsample_ms": 100.0
+  },
+  "execution": {
+    "book_clock": "local receipt time",
+    "evaluation_ms": [
+      300.0,
+      500.0
+    ],
+    "fixed_limit": 0.97,
+    "minimum_full_fill_shares": 5.0,
+    "venue_hold_ms": 150.0,
+    "local_path_ms": 0.86,
+    "taker_fee_rate": 0.07,
+    "disconnects": "fail closed"
+  },
+  "controls": {
+    "baseline": "delayed Chainlink only",
+    "source_ablations": "omit each source independently",
+    "timing_placebo": "delay the already-known base decision by 250ms; both 300ms and 500ms checkpoints remain strictly before close",
+    "evaluation_horizon": "all controls stop at the base strategy's first-crossing chronological prefix"
+  },
+  "statistics": {
+    "first_crossing_full_fills": 1000,
+    "minimum_utc_days": 7,
+    "one_sided_day_cluster_alpha": 0.01,
+    "exact_fair_price_alpha": 0.01,
+    "family_tests": 100,
+    "unresolved_outcomes_allowed": 0
+  },
+  "promotion": {
+    "paper_depth_is_upper_bound": true,
+    "paper_pass_requires_positive_300ms_and_500ms_ev": true,
+    "overall_pass_requires_separately_authorized_live_fak_calibration": true,
+    "production_activation": false
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "hours": 4.0,
+  "until": "2026-10-27",
+  "note": "Changing this file starts a recording run (.github/workflows/polymarket-forward.yml); each run dispatches the next until `until`. Set enabled to false to stop. `coins` are recorded and tested; paper orders are BTC only.",
+  "coins": [
+    "btc",
+    "eth",
+    "sol",
+    "xrp",
+    "doge"
+  ],
+  "kick": "2026-10-12 04:40 restart: run 38174212079 hit the 6-hour job limit inside an always() audit step, so the bundle upload and 'Start the next run' never ran"
+}

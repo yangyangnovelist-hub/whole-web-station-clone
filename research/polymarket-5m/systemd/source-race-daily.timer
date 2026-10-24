@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the formal Polymarket source-race replay after daily archival
+
+[Timer]
+OnCalendar=*-*-* 01:15:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+Unit=source-race-daily.service
+
+[Install]
+WantedBy=timers.target

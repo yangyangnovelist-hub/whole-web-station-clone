@@ -1,0 +1,114 @@
+name: polymarket-forward-backfill
+
+# One-off: pool the forward/ results of the four recordings whose result commits were lost to the
+# stale-source_commit rebase conflict (fixed in d43bbc8/4028f5d). Paper data only: it reads the
+# converted archives those runs published (30 days) and the ledgers polymarket-forward-salvage
+# copied out of their 1-day raw captures, runs ci/forward_backfill.sh per run, oldest first, and
+# writes only the nine pooled result files; freezes, strategy code and the strict and Family
+# 31-36 steps are untouched. A run that does not reproduce is skipped and reported, not forced.
+# Start it by pushing research/polymarket-5m/ci/forward_backfill.request.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/forward_backfill.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    # the analyze jobs' queue: pooled-state writers stay serialized; without `queue: max` a new
+    # pending member of the group would cancel a pending analyze job
+    concurrency:
+      group: polymarket-forward-analysis
+      cancel-in-progress: false
+      queue: max
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # id:collector revision:converted-archive manifest sha256, from each run's own analyze log
+      RUNS: >-
+        38991449708:33bd09e21d4137037244d1d382cc6df315503bc2:c15da2ec7fc611a4528f896af5c7d86acc6fd9c7bcc9fd16f76420c488eac80f
+        39021801232:b01b3adf94b0ed4d2814080f83cc0c3dc74414ec:1dfb503e763ded8aa1d7890332979d63a27b15bc735b83c26cafd2616cba4ccd
+        39054705548:05e137916c5fad5086c9ce80d398ec554b27059f:42ef50b715091ebb3191080166b87811490db95a6cec7040139eaaea9f35ce54
+        39087435473:e72913c79890c82daa18952414210394c103f81d:972c85ad45b5d831088dbac0747b1083e148d5bb050f52e8241ff323559fa94d
+      SALVAGE_RUN: "39109246809"
+      FIX_COMMIT: d43bbc8d0737f00a842f452ab3f212143cda3402
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Refuse while a forward run without the fix can still push
+        # such a run analyzes from a stale forward/; pooling ahead of it would make it the fifth loss
+        run: |
+          for sha in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/polymarket-forward.yml/runs?per_page=30" \
+                         --jq '.workflow_runs[] | select(.status != "completed") | .head_sha'); do
+            git merge-base --is-ancestor "$FIX_COMMIT" "$sha" \
+              || { echo "::error::forward run at $sha predates $FIX_COMMIT and has not finished"; exit 1; }
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the package versions the lost analyses ran with
+        run: |
+          printf '%s\n' numpy==2.5.4 pandas==3.0.6 scipy==1.18.1 pyarrow==26.0.0 scikit-learn==1.9.1 \
+            > "$RUNNER_TEMP/constraints.txt"
+          pip install -r requirements.txt -c "$RUNNER_TEMP/constraints.txt"
+      - name: Pool each lost run, oldest first
+        run: |
+          set +e -uo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          T="$RUNNER_TEMP/bf"; L="$RUNNER_TEMP/ledgers"; mkdir -p "$T" "$L"
+          gh run download "$SALVAGE_RUN" -n forward-backfill-ledgers -D "$L" || echo "::warning::no salvaged ledgers"
+          find "$L" -type f | sort
+          pooled=() skipped=()
+          for spec in $RUNS; do
+            IFS=: read -r id commit conv <<< "$spec"
+            if [ "$(git log --format=%s | grep -c "recording run $id" || true)" != 0 ]; then
+              echo "$id: already pooled"; continue
+            fi
+            d="$T/conv-$id"; rm -rf "$d"; mkdir -p "$d/index" "$d/parts"
+            ( set -e
+              gh run download "$id" -n "recording-$id-index" -D "$d/index"
+              for name in $(jq -r '.parts[].artifact_name' "$d/index/publish-index.json"); do
+                gh run download "$id" -n "$name" -D "$d/parts"
+              done
+              bash ci/forward_backfill.sh "$id" "$commit" "$conv" "$L" "$T" ); rc=$?
+            rm -rf "$d"
+            if [ "$rc" = 0 ]; then
+              git add -- forward
+              git commit -q -m "research: forward-test results from recording run $id (backfill)"
+              pooled+=("$id")
+            else
+              echo "::warning::$id: not pooled (see the log above)"; skipped+=("$id")
+              git checkout -q HEAD -- forward; git clean -fdq -- forward
+            fi
+          done
+          # 38991449708's raw capture had expired before the salvage: add its rebuilt ledger only if
+          # the rebuild reproduced every salvaged ledger exactly
+          first="${RUNS%% *}"; first="${first%%:*}"
+          salvaged=$(find "$L" -name ledger.csv | wc -l)
+          validated=$(cat "$T/rebuild-validated" 2>/dev/null | wc -l)
+          if [ -s "$T/rebuilt-$first.csv" ] && [ ! -f "$L/$first/ledger.csv" ] && [ "$salvaged" -gt 0 ] \
+             && [ "$validated" = "$salvaged" ] && [[ " ${pooled[*]} " == *" $first "* ]]; then
+            python forward.py add-ledger "$T/rebuilt-$first.csv" && python forward.py report > /dev/null \
+              && git add -- forward/paper_ledger.csv forward/paper_report.md \
+              && { git diff --cached --quiet || git commit -q -m "research: paper ledger of recording run $first rebuilt from its decisions (backfill)"; }
+          else
+            echo "::warning::$first: rebuilt ledger not used (validated $validated of $salvaged salvaged ledgers)"
+          fi
+          echo "pooled: ${pooled[*]:-none}; skipped: ${skipped[*]:-none}"
+          [ "${#pooled[@]}" -gt 0 ] || exit "${#skipped[@]}"
+          for i in 1 2 3 4 5; do
+            git pull -q --rebase && git push -q && exit 0
+            git rebase --abort 2>/dev/null || true; sleep $((2 ** i))
+          done
+          exit 1

@@ -1,0 +1,108 @@
+{
+  "schema": "source-confirmation-forward-freeze-v1",
+  "created_at": "2026-10-11T19:42:18Z",
+  "cutoff": "2026-10-11T20:30:00Z",
+  "cutoff_ms": 1791750600000,
+  "strategy_id": "FAMILY36-SOURCE-CONFIRMATION-V1",
+  "family": 36,
+  "paper_only": true,
+  "collector_region": "eu-west-1",
+  "arms": [
+    "baseline",
+    "confirmation_veto",
+    "receipt_time_shifted_placebo"
+  ],
+  "execution": {
+    "evaluation_ms": [
+      400.0,
+      500.0
+    ],
+    "target_shares": 5.0,
+    "confirmation_window_ms": 120.0,
+    "placebo_shift_ms": 5000.0,
+    "primary_order_origins": [
+      "futures_book_ticker",
+      "spot_trade"
+    ],
+    "secondary_confirmation_only": [
+      "deribit_quote",
+      "futures_trade"
+    ],
+    "added_confirmation_wait_ms": 0.0,
+    "evaluation_clock": "local_receipt_timestamp",
+    "matching_book": "direct_dual_token_l2_at_evaluation",
+    "limit": "decision_frozen_fee_aware_limit",
+    "fee": "exact_replayed_taker_fee",
+    "order_type": "FAK",
+    "max_order_usd": 5.0,
+    "max_orders_per_min": 1
+  },
+  "artifact": {
+    "first_complete_utc_day": "20261012",
+    "source": "immutable_eu_west_raw_archives_and_shared_strict_artifact",
+    "collector_region": "eu-west-1",
+    "receipt_race_ready": true,
+    "minimum_capture": "one_complete_UTC_day",
+    "admission": "persistent_private_input_snapshot_then_chronological_atomic_ledger_after_immutable_S3_evidence_upload"
+  },
+  "statistics": {
+    "family_tests": 874,
+    "multiple_testing": "Bonferroni",
+    "minimum_full_fills_per_cell": 1000,
+    "minimum_utc_days": 7,
+    "one_sided_alpha": 0.01,
+    "partial_fills": "included_in_EV_and_PnL_but_excluded_from_maturity_and_exact_test",
+    "intention_to_trade": "vetoed_unsent_and_unfilled_opportunities_are_zero"
+  },
+  "stopping": {
+    "clock": "latest_observable_execution_or_resolution_timestamp",
+    "rule": "earliest_common_timestamp_where_all_three_arms_at_both_latencies_reach_1000_resolved_full_target_fills_and_7_UTC_days",
+    "ties": "include_all_observations_available_at_the_stopping_timestamp",
+    "post_stop_rows": "excluded_from_every_promotion_metric"
+  },
+  "promotion_gates": {
+    "both_latencies": true,
+    "positive_net_ev_per_share": true,
+    "positive_intention_to_trade_ev_per_opportunity": true,
+    "positive_one_sided_99_percent_day_cluster_lower_per_share": true,
+    "positive_one_sided_99_percent_day_cluster_lower_per_opportunity": true,
+    "bonferroni_exact_p_below_0_01": true,
+    "loss_rate_below_baseline": true,
+    "paired_common_opportunity_pnl_above_baseline": true,
+    "paired_common_opportunity_pnl_above_shifted_placebo": true
+  },
+  "dependencies_sha256": {
+    "archive_day.py": "009217f3a4ebb9953147e1e605c1b05ffcb76ff24a7560b9aa413b11db71669b",
+    "complement_queue_lag.py": "5183063ca76b69a0a3a4830be6ba3456b32be8f68d6340fa44206d31e09c66f4",
+    "complement_queue_lag_daily.py": "c4fe7b5114b1b2b1a9af09f1a887e41b4df21102bfa0c611cba6acf7e8fb6a46",
+    "complement_queue_lag_forward.py": "8c41fb172cc1a5426c34fdd0629d1370e0297debcdb5dfbc42eceb39254c2a7b",
+    "eu_strict.py": "95b6e3fc744dd6231e9ef431206ca8633505f2810434c8aa76039c02bcd99435",
+    "forward/complement-queue-lag-freeze.json": "46b4372cbcad15c8c353de192761a4fbd15c2370a400c2b7af0c55c2328a6a78",
+    "forward/current-h-freeze.json": "fdad7b7d919a9018c4a75df9561d27fe8c13cfe23d42aec7d79fdb450eb0df8d",
+    "h_forward.py": "308a76d935978051bd4c4c58a285445b856142f3cfd683faf9f9547bc90b48ba",
+    "h_replay.py": "38bf2d05604f4e514805d8753e1b4a76b4181b101b8111575a339cfce51fc393",
+    "h_replay_archive.py": "a977dc5d7dc7d96fdd931eaed57e1523e5031f5d6e5dc826ab91f4d8314f497e",
+    "h_replay_run.py": "1d15596f4b63b78b2e843b112040e4842b961a41e158efcdbd2ebea1d891f2c4",
+    "h_source_race.py": "66aa6077c0242e0ac7a468837d35dc3e014896c698e971073f2a662e7fd9d306",
+    "mix-runtime-requirements.txt": "e2005b0162723b93601c3a0fc3f5ab2538e186a8afc676d39e26bf66fa6f946e",
+    "mix_runtime.py": "e607ecfc56e3954b71cbec04b3e2377b9f3c3efebb0a2a225dd62c0b9bc00207",
+    "pm_outcomes.py": "7da4c35c717d66e7b27b8879c97ae6fe1ecfc907a164f4b365b7466c2ec08407",
+    "poly_clob_rec.py": "528c465db7a09a75fab81ab89ef990ba86fae31289a0bb62f1cdbbf26b3e9de6",
+    "raw_rec.py": "93aea9620247b302abb0b19fcf7553f505ce65331b845d40ee6a12e14a6b4ce4",
+    "requirements.txt": "d7ce01981383daa3d4586dfd189fa3f7ed26bfdbf0d8ac268ad4dca9863b8764",
+    "source_confirmation.py": "71bf4021cce1dcaf7a30b654037b1d91b91643fc4f8012020a1fc3873be09a66",
+    "source_confirmation_daily.py": "ee40439f04c69ce859a2c4bca4ad001cd3fc3c687ff8b968964aa47a350d0443",
+    "source_confirmation_forward.py": "6a5b9c22b0697fdf70379c732756025873bbd4ebe554d40739e01afceaf3a997",
+    "source_race_daily.py": "6f8028e14daba523d4d4af8dd128df823b6d5faa4254aa6bfe0e8e884d9b8cac",
+    "source_race_forward.py": "11fe2bf5ccb730ede77accbe6885f271ed286c8e92a3b118f06c8b8cbe1d7aac",
+    "strict_prebuild.py": "4bf41cd1179cc16792974c79ae485cfb26d36ea9a379a9a807ef66bb9d6ebbdb",
+    "systemd/complement-queue-lag-daily.service": "d3d275a28d44ebc4364e37dc20b0d1d62a1b2a1afc9afaacbb44eafe1aeb0ed8",
+    "systemd/complement-queue-lag-daily.timer": "c4013f727546388e072737dd1a9b707e0fd39626518ff4831ae0b7994a11927b",
+    "systemd/recorder-day-boundary.service": "8e65f4d4a73e9cedd7c2fc1645f15cc553d862c3a661f1c7d038e12c833c83a6",
+    "systemd/recorder-day-boundary.timer": "e0f7b7f88abebf1a58dd043f2a1f015ad1e61951cfd5152a5148c4bad1835aca",
+    "systemd/source-confirmation-daily.service": "e3e1c9f999985c723ce0dfa88f496fcadfa454609d3be6681b697842b023c607",
+    "systemd/source-confirmation-daily.timer": "8e78e08511e54c97f2ce170aea0e91622447da5bd80c59531e3a3ec2ac827b8c",
+    "systemd/strict-artifact-daily.service": "e95b41e45a171287f1004fabcbc56b921632faa68f05ed7f385cfa262eaa1cc4",
+    "systemd/strict-artifact-daily.timer": "453abc98f24a32a88620e2b21a942f3f3df08d9a8aefd3a0838f2be124fca2cb"
+  }
+}

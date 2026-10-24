@@ -1,0 +1,4 @@
+# Changing this file runs .github/workflows/polymarket-cross3.yml: "cmd:" is a standalone
+# market-data-only script and its arguments; --workdir is added by the workflow.
+requested: 2026-10-11 Family31 frozen 30-complete-day zero-fee dust public-row diagnostic
+cmd: reward_dust.py --start 2026-09-11 --days 30 --out real/reward-dust.md --csv-out real/reward-dust.csv.gz --workers 2 --rate 2

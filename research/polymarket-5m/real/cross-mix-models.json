@@ -1,0 +1,80 @@
+{
+ "format": "polymarket-mix-models-v2",
+ "made": "2026-10-05T05:52:00.366155+00:00",
+ "model_file": "cross-mix-models.joblib",
+ "model_sha256": "4f9b8f67b9ee874871c26dc021481b2309b85eaee8bc45132afd76e0be82fea8",
+ "frozen_file": "cross-mix-frozen.json",
+ "frozen_sha256": "f18e19dd518159886681e1e360f24ee5ca9a59bc60defed9b2a1fa086f5dc17e",
+ "a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "frozen_a_fingerprint": "817d26462fd239947c031ce2167b14f4df60dc49dcd506aefd1e808f6dec787a",
+ "frozen_a_fingerprint_version": "mix-a-v1-rounded-all-rows",
+ "canonical_a_fingerprint": "b8d735ecc4c9d630b6bcda355af9bd4a9ce3c005a3da08b039f5693c882a7be2",
+ "canonical_a_fingerprint_version": "mix-a-v2-exact-model-rows",
+ "a_identity_match": "legacy_v1_rounded",
+ "features": [
+  "jump_bp",
+  "jump_abs_bp",
+  "jump_z",
+  "dir",
+  "is_jump",
+  "h_edge",
+  "dmid2",
+  "dmid10",
+  "imb",
+  "spread",
+  "ask",
+  "ask_fee",
+  "tau",
+  "trend_agree",
+  "trend_side",
+  "vr60",
+  "f_ridge5",
+  "f_hgb5",
+  "f_ridge15",
+  "f_hgb15",
+  "dvol_rv"
+ ],
+ "rules": [
+  {
+   "id": "R1",
+   "policy": "settle",
+   "model": "ridge",
+   "q": 0.02,
+   "cut": 0.052917894565120874
+  },
+  {
+   "id": "R2",
+   "policy": "tk60",
+   "model": "hgb",
+   "q": 0.02,
+   "cut": 0.023840683160259633
+  },
+  {
+   "id": "R3",
+   "policy": "tk30",
+   "model": "hgb",
+   "q": 0.02,
+   "cut": 0.013299968861125225
+  }
+ ],
+ "training_rows": 162591,
+ "training_matrix_sha256": "06d0abf5844cdd66504903db0882a7dd78531a436d9d58384f88034fbe474598",
+ "migration_provenance_sha256": "31fdf9940f10b6f1f9bd866c09f402c9c64cb9e9277fe38f09ecc390367a4dcc",
+ "a_prediction_sha256": {
+  "R1": "07e9afb41118ebde489c59008fdbd529803e05dbc252b05fae3f4237f45d2c61",
+  "R2": "613c57c1ecd14c20807ba1a7dfa582f20e52f3da30a13b80854d9c588a9adce8",
+  "R3": "fad57205cf7e3af555405fff1b7f6b965d428c65cef388fd574b98071a83e5a2"
+ },
+ "selected_row_keys_sha256": {
+  "R1": "74a9a1e49fa05f49b7b94c959952b020ac12d6d0465187d89a2c90ee321293e6",
+  "R2": "1854684292a2c0aacf863e44412a3e394c97ad5607890c1c5754191bd7307e0d",
+  "R3": "aca1167bd3b9ef46ac40e2cfc4e69ff9dac2ba6ff9a35a65f4eb752c25dd8fd0"
+ },
+ "versions": {
+  "python": "3.12.14",
+  "numpy": "2.5.3",
+  "sklearn": "1.9.1",
+  "joblib": "1.6.0"
+ }
+}

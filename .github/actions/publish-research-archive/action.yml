@@ -1,0 +1,264 @@
+name: Publish bounded research archive
+description: Publish one separate Actions artifact per 400 MiB transport part, then a verified small index
+inputs:
+  archive:
+    description: Sealed archive file (not a directory or symlink)
+    required: true
+  prefix:
+    description: Unique artifact prefix for this run and archive type
+    required: true
+  parts-dir:
+    description: New staging directory; must not already exist
+    required: true
+  retention-days:
+    description: Retention for all parts and the completion index
+    required: false
+    default: '30'
+  part-mib:
+    description: Payload MiB per part (1 through 400; small values for CI fixtures)
+    required: false
+    default: '400'
+outputs:
+  manifest-sha256:
+    description: Trusted manifest hash from the producer job
+    value: ${{ steps.prepare.outputs.manifest-sha256 }}
+  source-sha256:
+    description: Original sealed archive SHA256
+    value: ${{ steps.prepare.outputs.source-sha256 }}
+  part-count:
+    description: Number of separately uploaded parts
+    value: ${{ steps.prepare.outputs.part-count }}
+  artifact-id:
+    description: Small completion index artifact ID; absent on incomplete publishing
+    value: ${{ steps.index.outputs.artifact-id }}
+runs:
+  using: composite
+  steps:
+    - name: Split sealed archive within connector limits
+      id: prepare
+      shell: bash
+      env:
+        TRANSPORT_HELPER: ${{ github.action_path }}/../../../research/polymarket-5m/publish_archive.py
+        ARCHIVE_PATH: ${{ inputs.archive }}
+        ARTIFACT_PREFIX: ${{ inputs.prefix }}
+        PARTS_DIR: ${{ inputs.parts-dir }}
+        RETENTION_DAYS: ${{ inputs.retention-days }}
+        PART_MIB: ${{ inputs.part-mib }}
+      run: python "$TRANSPORT_HELPER" prepare
+
+    - name: Upload independent part 00000
+      id: part_00
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 0 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00000
+        path: ${{ inputs.parts-dir }}/part-00000.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00001
+      id: part_01
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 1 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00001
+        path: ${{ inputs.parts-dir }}/part-00001.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00002
+      id: part_02
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 2 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00002
+        path: ${{ inputs.parts-dir }}/part-00002.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00003
+      id: part_03
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 3 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00003
+        path: ${{ inputs.parts-dir }}/part-00003.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00004
+      id: part_04
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 4 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00004
+        path: ${{ inputs.parts-dir }}/part-00004.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00005
+      id: part_05
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 5 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00005
+        path: ${{ inputs.parts-dir }}/part-00005.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00006
+      id: part_06
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 6 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00006
+        path: ${{ inputs.parts-dir }}/part-00006.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00007
+      id: part_07
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 7 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00007
+        path: ${{ inputs.parts-dir }}/part-00007.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00008
+      id: part_08
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 8 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00008
+        path: ${{ inputs.parts-dir }}/part-00008.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00009
+      id: part_09
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 9 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00009
+        path: ${{ inputs.parts-dir }}/part-00009.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00010
+      id: part_10
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 10 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00010
+        path: ${{ inputs.parts-dir }}/part-00010.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00011
+      id: part_11
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 11 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00011
+        path: ${{ inputs.parts-dir }}/part-00011.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00012
+      id: part_12
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 12 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00012
+        path: ${{ inputs.parts-dir }}/part-00012.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00013
+      id: part_13
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 13 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00013
+        path: ${{ inputs.parts-dir }}/part-00013.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00014
+      id: part_14
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 14 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00014
+        path: ${{ inputs.parts-dir }}/part-00014.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Upload independent part 00015
+      id: part_15
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' && fromJSON(steps.prepare.outputs.part-count) > 15 }}
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-part-00015
+        path: ${{ inputs.parts-dir }}/part-00015.zip
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}
+
+    - name: Require all expected part uploads before publishing index
+      id: complete
+      if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+      shell: bash
+      env:
+        TRANSPORT_HELPER: ${{ github.action_path }}/../../../research/polymarket-5m/publish_archive.py
+        PARTS_DIR: ${{ inputs.parts-dir }}
+        ARTIFACT_PREFIX: ${{ inputs.prefix }}
+        EXPECTED_MANIFEST_SHA256: ${{ steps.prepare.outputs.manifest-sha256 }}
+        UPLOAD_STEP_RESULTS: ${{ toJSON(steps) }}
+      run: python "$TRANSPORT_HELPER" complete
+
+    - name: Publish small completion index
+      id: index
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.prefix }}-index
+        path: |
+          ${{ inputs.parts-dir }}/manifest.json
+          ${{ inputs.parts-dir }}/manifest.sha256
+          ${{ inputs.parts-dir }}/publish-index.json
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: ${{ steps.prepare.outputs.retention-days }}

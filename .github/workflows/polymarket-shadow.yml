@@ -1,0 +1,128 @@
+name: polymarket-shadow
+
+# After every forward recording run (polymarket-forward dispatches this): tests C and D on every
+# recording so far, their reports committed to real/, and a status message to the WeChat Work
+# group robot whose webhook is the repository secret WECOM_WEBHOOK (skipped while it is not
+# set). Changing research/polymarket-5m/ci/shadow.request runs it by hand. Nothing here trades or
+# uses a trading key.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/shadow.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: polymarket-shadow
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    # every recording so far is downloaded and re-tested, so the run grows with the pool:
+    # 57 min on 10-07, past 60 min from 10-08, 171 min on 10-18, 108-190 min on 10-19/20 (about two
+    # thirds of it forward_variants.py, before it read each recording once); GitHub's limit is 360.
+    # Change this and EXPLORE_UNTIL below together
+    timeout-minutes: 350
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Tests C and D on every recording so far
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          # the exploratory step stops by then: the 350-minute job, about 5 min of setup before this
+          # line, 20 min kept for the commit, the report and the runner's cleanup
+          echo "EXPLORE_UNTIL=$(( $(date +%s) + (350 - 5 - 20) * 60 ))" >> "$GITHUB_ENV"
+          rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"
+          # every forward run, finished or not: the run that dispatched this one is still in its
+          # last step, but its artifact is already uploaded. All pages: there are more than 100
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/polymarket-forward.yml/runs?per_page=100" \
+                --jq '.workflow_runs[].id')
+          # from run 38956287813 (1030ea3) on, raw.tgz is published as recording-RUN-index plus
+          # recording-RUN-part-* artifacts; rebuild it and check every hash. The expected manifest
+          # digest is the one in the index uploaded by that same run of this repo, fetched by run id
+          fetch_parts() {
+            local id=$1 d="$rec/$1"
+            gh run download "$id" -n "recording-$id-index" -D "$d/index" 2>/dev/null || return 1
+            for name in $(jq -r '.parts[].artifact_name' "$d/index/publish-index.json"); do
+              gh run download "$id" -n "$name" -D "$d/parts" || return 1
+            done
+            python restore_published_archive.py --index-dir "$d/index" --parts-dir "$d/parts" \
+              --out "$d/raw.tgz" --expected-manifest-sha256 "$(jq -r .manifest_sha256 "$d/index/publish-index.json")" \
+              --expected-prefix "recording-$id" --expected-run-id "$id" || return 1
+            rm -rf "$d/parts" "$d/index"
+          }
+          for id in $ids; do
+            gh run download "$id" -n "recording-$id" -D "$rec/$id" 2>/dev/null || fetch_parts "$id" || continue
+            mkdir -p "$rec/$id/x"
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'bundle-*/latency' 2>/dev/null || continue
+            # the CLOB disconnect log (latency.load_closes); recordings without one are just not checked
+            tar xzf "$rec/$id/raw.tgz" -C "$rec/$id/x" --wildcards 'raw/*/errors.jsonl*' 2>/dev/null || true
+            rm -f "$rec/$id/raw.tgz"
+          done
+          ls -d "$rec"/*/x/bundle-btc/latency 2>/dev/null | wc -l
+          python latency.py "$rec" --pooled --out real/latency-test-c.md || true
+          python latency.py "$rec" --test-d --out real/latency-test-d.md || true
+          python latency.py "$rec" --test-f --out real/latency-test-f.md || true
+          python latency.py "$rec" --test-g --out real/latency-test-g.md || true
+          python latency.py "$rec" --test-i --out real/latency-test-i.md || true
+          python latency.py "$rec" --test-j --out real/latency-test-j.md || true
+
+      # exploratory only: stopped by EXPLORE_UNTIL so that a slow pass can never take the tests'
+      # reports past the job limit with it. Each script runs under timeout(1), which stops it and
+      # its children; the runner's own step timeout (a backstop here) kills only this shell and
+      # would leave the script writing into real/ while the commit runs
+      - name: Exploratory reports on the same recordings
+        timeout-minutes: 330
+        continue-on-error: true
+        run: |
+          rec="$RUNNER_TEMP/rec"
+          capped() {
+            local s=$(( EXPLORE_UNTIL - $(date +%s) ))
+            if [ "$s" -le 60 ]; then echo "::warning::no time left for $2"; return 0; fi
+            timeout -k 30 "$s" "$@" || echo "::warning::$2 stopped or failed (exit $?)"
+          }
+          capped python forward_variants.py "$rec" --out real/forward-variants.md --trades real/forward-trades.csv.gz \
+            --curve 0.2 0.25 0.3 0.35 0.4 0.45 0.5 --curve-out real/forward-latency-curve.md
+          capped python recorder_check.py "$rec" --github --since "2026-10-01 02:30" --out real/recorder-check.md
+          capped python fill_rate.py "$rec" --out real/fill-rate.md
+          capped python latency.py "$rec" --diagnose-d --out real/latency-test-d-diagnose.md
+          capped python latency.py "$rec" --diagnose-f --out real/latency-test-f-diagnose.md
+
+      - name: Commit the reports
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # one missing file must not keep the others out (git add fails on a missing pathspec)
+          for f in real/latency-test-* real/forward-variants.md real/forward-trades.csv.gz real/forward-latency-curve.md real/recorder-check.md real/fill-rate.md; do
+            if [ -e "$f" ]; then git add "$f"; fi
+          done
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: tests C and D after run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M" || exit 0
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
+
+      - name: Report to WeChat Work
+        if: always()
+        env:
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+        run: python notify.py

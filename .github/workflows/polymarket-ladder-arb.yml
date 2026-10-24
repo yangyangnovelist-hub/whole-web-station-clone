@@ -1,0 +1,190 @@
+name: polymarket-ladder-arb
+
+# Structural arbitrage (monotone, nested, neg-risk and box baskets bought as a taker) and the
+# liquidity-reward economics (an estimate) on every polymarket-ladder recording so far
+# (ladder_arb.py; paper research on market data only: never places orders, uses no key).
+# Changing research/polymarket-5m/ci/ladder_arb.request runs it and commits
+# research/polymarket-5m/real/ladder-arb.md. The ladder workflow is not on the default branch, so its
+# runs are listed through actions/runs?branch=... and filtered by name, not workflows/<file>/runs.
+# Artifacts read: ladder-<run id> (built tables) of every run, and ladder-raw-<run id> (raw CLOB
+# messages, for the full-depth reward samples) of the newest RAW_RUNS runs, or of any run whose own
+# build failed (rebuilt here with ladder.py build).
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/ladder_arb.request]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: polymarket-ladder-arb
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RAW_RUNS: "4"
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      # Gamma / CLOB responses and the reward-pool snapshots: a market that has ended keeps the
+      # daily rate seen while it ran
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ladder-arb-cache
+          key: ladder-arb-cache-${{ github.run_id }}
+          restore-keys: ladder-arb-cache-
+
+      - name: Download every ladder recording so far
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          rec="$RUNNER_TEMP/rec"; mkdir -p "$rec"
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${GITHUB_REF_NAME}&per_page=100" \
+                --jq '.workflow_runs[] | select(.name == "polymarket-ladder") | .id')
+          kept=0
+          for id in $ids; do   # newest first
+            gh run download "$id" -n "ladder-$id" -D "$rec/$id" 2>/dev/null || continue
+            tar xzf "$rec/$id/ladder.tgz" -C "$rec/$id" 2>/dev/null || true
+            rm -f "$rec/$id/ladder.tgz"
+            want=0; [ "$kept" -lt "$RAW_RUNS" ] && want=1
+            if [ "$want" = 1 ] || [ ! -s "$rec/$id/built/counts.json" ]; then
+              gh run download "$id" -n "ladder-raw-$id" -D "$rec/$id" 2>/dev/null \
+                && tar xzf "$rec/$id/ladder-raw.tgz" -C "$rec/$id" 2>/dev/null || true
+              rm -f "$rec/$id/ladder-raw.tgz"
+            fi
+            if [ ! -s "$rec/$id/built/counts.json" ]; then
+              # the run's own build failed (it writes counts.json last): rebuild from its raw CLOB messages
+              python ladder.py build --src "$rec/$id" --out "$rec/$id/built" || true
+            fi
+            if [ "$want" = 1 ] && ls "$rec/$id"/raw/*/clob-*.jsonl* >/dev/null 2>&1; then
+              kept=$((kept + 1))
+            else
+              rm -f "$rec/$id"/raw/*/clob-*.jsonl*
+            fi
+          done
+          echo "built: $(ls -d "$rec"/*/built 2>/dev/null | wc -l), with raw CLOB messages: $kept"
+          du -sh "$rec" 2>/dev/null || true
+          # no finished recording yet (e.g. the request was pushed before the first ladder-<id> artifact
+          # was uploaded): fail instead of committing an empty report over the existing one
+          if [ "$(ls "$rec"/*/built/books.csv.gz 2>/dev/null | wc -l)" -eq 0 ]; then
+            echo "::error::no ladder recording with built books yet; push ci/ladder_arb.request again after a polymarket-ladder run has uploaded ladder-<run id>"
+            exit 1
+          fi
+
+      - name: Structural arbitrage and liquidity rewards (market data only, no orders)
+        run: |
+          python ladder_arb.py "$RUNNER_TEMP/rec" --cache "$RUNNER_TEMP/ladder-arb-cache" --out real/ladder-arb.md
+
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add real/ladder-arb.md
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: ladder structural arbitrage and rewards, run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
+
+      # NEARCERT.md test 2 (forward): the 95-99% near-certain side on the same unpacked recordings
+      # (markets ending after 2026-10-05 00:00 UTC; judged once on the first 300 markets with an
+      # entry over >= 7 UTC days, pinned in real/nearcert-forward.verdict.md and never recomputed).
+      # Each recording's checkpoint rows are committed in real/nearcert-forward.ledger/ (the artifacts
+      # expire after 30 days); the list of ladder-<id> artifacts still downloadable (--expect) lets it
+      # refuse to judge while one of them was not read. Its Gamma results and Binance 1m kline files are
+      # cached beside ladder_arb.py's, under the same actions/cache path. continue-on-error: a failure
+      # here must not fail the job, which would skip the actions/cache save of ladder_arb.py's
+      # reward-pool snapshots (saved only on success).
+      - name: Near-certain side, forward check (nearcert_fwd.py; market data only, no orders)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail   # a failed listing must not pass as an empty one
+          expect=()
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+               --jq '.artifacts[] | select(.expired | not) | "\(.name) \(.workflow_run.head_branch)"' \
+             | awk -v b="$GITHUB_REF_NAME" '$2 == b && $1 ~ /^ladder-[0-9]+$/ { sub(/^ladder-/, "", $1); print $1 }' \
+             > "$RUNNER_TEMP/nearcert-expect.txt"; then
+            echo "downloadable ladder recordings: $(wc -l < "$RUNNER_TEMP/nearcert-expect.txt")"
+            expect=(--expect "$RUNNER_TEMP/nearcert-expect.txt")
+          else
+            echo "::warning::could not list the ladder artifacts; nearcert_fwd.py will not judge in this run"
+          fi
+          python nearcert_fwd.py "$RUNNER_TEMP/rec" --cache "$RUNNER_TEMP/ladder-arb-cache/nearcert" \
+            --out real/nearcert-forward.md "${expect[@]}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in real/nearcert-forward.md real/nearcert-forward.verdict.md real/nearcert-forward.trades.csv \
+                   real/nearcert-forward.ledger; do
+            if [ -e "$f" ]; then git add "$f"; fi
+          done
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: near-certain side forward check, run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1
+
+      # CALIB.md "前向检验规则": the calibration cell that passed the independent half year (above markets,
+      # 60 and 30 minutes before the end, the side the model puts at 85-95%, bought at the ask; one buy per
+      # market and side) on the same unpacked recordings (markets ending after 2026-10-05 00:00 UTC; judged
+      # once on the first 40 markets with a buy, pinned in real/calib-forward.verdict.md and never
+      # recomputed). The resting-bid version is described only. Each recording's checkpoint rows are
+      # committed in real/calib-forward.ledger/; the same --expect list of downloadable ladder-<id>
+      # artifacts as above. Its Gamma results are cached under the same actions/cache path.
+      # continue-on-error, as above.
+      - name: Calibration cell, forward check (calib_fwd.py; market data only, no orders)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail   # a failed listing must not pass as an empty one
+          expect=()
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+               --jq '.artifacts[] | select(.expired | not) | "\(.name) \(.workflow_run.head_branch)"' \
+             | awk -v b="$GITHUB_REF_NAME" '$2 == b && $1 ~ /^ladder-[0-9]+$/ { sub(/^ladder-/, "", $1); print $1 }' \
+             > "$RUNNER_TEMP/calib-expect.txt"; then
+            echo "downloadable ladder recordings: $(wc -l < "$RUNNER_TEMP/calib-expect.txt")"
+            expect=(--expect "$RUNNER_TEMP/calib-expect.txt")
+          else
+            echo "::warning::could not list the ladder artifacts; calib_fwd.py will not judge in this run"
+          fi
+          python calib_fwd.py "$RUNNER_TEMP/rec" --cache "$RUNNER_TEMP/ladder-arb-cache/calib" \
+            --out real/calib-forward.md "${expect[@]}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in real/calib-forward.md real/calib-forward.verdict.md real/calib-forward.trades.csv \
+                   real/calib-forward.ledger; do
+            if [ -e "$f" ]; then git add "$f"; fi
+          done
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: calibration cell forward check, run $(date -u +%m-%d\ %H:%M) UTC" \
+            -m "Workflow run ${{ github.run_id }}." \
+            -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" \
+            -m "Claude-Session: https://claude.ai/code/session_01PoRFRP2cwNX83uNbBzTS2M"
+          for i in 1 2 3 4 5; do git pull -q --rebase && git push -q && exit 0; sleep $((2 ** i)); done
+          exit 1

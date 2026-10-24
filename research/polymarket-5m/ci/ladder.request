@@ -1,0 +1,32 @@
+2026-10-04T15:01:00Z run=37192254446
+2026-10-04T20:31:35Z restart: no run after 37192254446 (external monitor did not start one; 5.5 h gap)
+2026-10-05T02:16:06Z restart: no run after 37232438077 (external monitor again did not start one)
+2026-10-05T02:31:38Z restart after the discovery timeout in 37254730065 (day_extremes paged 1m candles back to 2025-11 for the before-2027 hit market; now 1d candles for whole days)
+2026-10-05T08:11:25Z restart: no run after 37255755566 (external monitor did not start one)
+2026-10-05T13:46:50Z restart: no run after 37282109060 (must cover 15:00-16:00 UTC, the 10-05 daily markets' checkpoints)
+2026-10-05T19:23:10Z restart: no run after 37319460929
+2026-10-06T00:58:28Z restart: no run after 37363029652
+2026-10-06T06:32:30Z restart: no run after 37396781912
+2026-10-11T04:05:48Z restart: no run after 38060967597
+2026-10-11T09:47:11Z restart: no run after 38110498323
+2026-10-11T15:28:29Z restart: no run after 38129612399
+2026-10-11T21:10:06Z restart: no run after 38151417544
+2026-10-12T02:51:45Z restart: no run after 38175237962
+2026-10-12T08:33:40Z restart: no run after 38197463014
+2026-10-12T16:12:12Z restart: no run after 38224313004
+2026-10-12T21:53:09Z restart: no run after 38275746474
+2026-10-13T03:34:32Z restart: no run after 38313400712
+2026-10-13T09:16:10Z restart: no run after 38342361859
+2026-10-18T05:37:40Z restart: no run after 38375100157 (chain idle since 10-13 14:54)
+2026-10-18T11:23:34Z restart: no run after 39101198273
+2026-10-18T17:05:17Z restart: no run after 39123052041
+2026-10-18T22:47:29Z restart: no run after 39147962147
+2026-10-19T04:29:25Z restart: no run after 39173761681
+2026-10-19T10:12:35Z restart: no run after 39199725504
+2026-10-19T15:55:51Z restart: no run after 39235799124
+2026-10-19T23:32:00Z restart: no run after 39281625136
+2026-10-20T05:13:16Z restart: no run after 39342158021
+2026-10-20T10:54:42Z restart: no run after 39373730070
+2026-10-20T16:34:59Z restart: no run after 39411258998
+2026-10-20T22:16:36Z restart: no run after 39458726419
+2026-10-21T03:58:33Z restart: no run after 39506913563

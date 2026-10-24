@@ -1,0 +1,18 @@
+[Unit]
+Description=Record isolated Binance aggregate trades for Polymarket MIX research
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rec/h-race
+Environment=PYTHONPATH=/home/ubuntu/rec/h-race
+ExecStart=/home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/mix_agg_rec.py /home/ubuntu/rec/data_mix 87600
+Restart=always
+RestartSec=2
+TimeoutStopSec=20s
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

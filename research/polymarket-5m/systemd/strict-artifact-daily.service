@@ -1,0 +1,21 @@
+[Unit]
+Description=Build one shared strict Polymarket replay artifact for the closed UTC day
+After=network-online.target time-sync.target archive-rec.service recorder-day-boundary.service
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/rec/h-race
+Environment=PYTHONPATH=/home/ubuntu/rec/h-race
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=STRICT_BUILD_WORKERS=2
+ExecStart=/usr/bin/timeout 600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/strict_prebuild.py --phase source
+ExecStart=/usr/bin/timeout 600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/strict_prebuild.py --phase clob
+ExecStart=/usr/bin/timeout 600 /home/ubuntu/rec/venv/bin/python /home/ubuntu/rec/h-race/strict_prebuild.py --phase finalize
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=4G
+TimeoutStartSec=1810s
+

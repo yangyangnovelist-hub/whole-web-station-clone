@@ -1,0 +1,398 @@
+name: polymarket-forward
+
+# Forward test on live data: records Polymarket BTC 5m books and Chainlink
+# prices for a few hours on a GitHub runner (paper_trader.py live, which never
+# places orders and uses no key), tests the preregistered candidates on what it
+# recorded, pools the result into research/polymarket-5m/forward/ and
+# dispatches the next capture independently of conversion/research. It stops by itself after `until` in ci/forward.json;
+# set "enabled": false there to stop it sooner.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/forward.json]
+  workflow_dispatch:
+    inputs:
+      capture_failures:
+        description: Consecutive capture/checkpoint failures (bounded chain retry)
+        type: number
+        default: 0
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  record:
+    # Lock only acquisition/checkpointing, NEVER conversion or research.
+    # Same key as the legacy workflow avoids interrupting its current run.
+    concurrency:
+      group: polymarket-forward
+      cancel-in-progress: false
+    outputs:
+      enabled: ${{ steps.cfg.outputs.enabled }}
+      coins: ${{ steps.cfg.outputs.coins }}
+      source_commit: ${{ steps.version.outputs.commit }}
+      capture_outcome: ${{ steps.rec.outcome }}
+      checkpoint_uploaded: ${{ steps.raw_upload.outcome }}
+      checkpoint_manifest_sha256: ${{ steps.raw_upload.outputs.manifest-sha256 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Pin the actual checked-out collector revision
+        id: version
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Read ci/forward.json
+        id: cfg
+        run: |
+          python - >> "$GITHUB_OUTPUT" <<'PY'
+          import datetime, json
+          c = json.load(open("ci/forward.json"))
+          on = c.get("enabled", True) and datetime.date.today().isoformat() <= c.get("until", "2000-01-01")
+          print(f"enabled={'true' if on else 'false'}")
+          print(f"hours={float(c.get('hours', 5.4))}")
+          coins = c.get("coins", ["btc"])
+          print(f"coins={' '.join(coins)}")
+          print(f"coins_csv={','.join(coins)}")
+          PY
+
+      - name: Record and paper-trade (no orders)
+        id: rec
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          python record_live_buffered.py live --out "$RUNNER_TEMP/paper" --hours ${{ steps.cfg.outputs.hours }} \
+            --coins "${{ steps.cfg.outputs.coins_csv }}"
+          ls -la "$RUNNER_TEMP"/paper/raw/*/ && du -sh "$RUNNER_TEMP/paper/raw" && df -h "$RUNNER_TEMP" | tail -1
+          zcat "$RUNNER_TEMP"/paper/raw/*/errors.jsonl.gz 2>/dev/null | tail -n 5 || true
+
+      - name: Checkpoint raw capture before any conversion
+        id: checkpoint
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        timeout-minutes: 15
+        run: |
+          python capture_checkpoint.py pack --root "$RUNNER_TEMP/paper" \
+            --out "$RUNNER_TEMP/capture.tar" \
+            --source-commit "${{ steps.version.outputs.commit }}" \
+            --capture-outcome "${{ steps.rec.outcome }}"
+
+      - name: Save raw handoff independently of analysis
+        id: raw_upload
+        if: always() && steps.cfg.outputs.enabled == 'true' && steps.checkpoint.outcome == 'success'
+        timeout-minutes: 15
+        uses: ./.github/actions/publish-research-archive
+        with:
+          prefix: source-recording-${{ github.run_id }}
+          archive: ${{ runner.temp }}/capture.tar
+          parts-dir: ${{ runner.temp }}/capture-parts
+          # Short-lived transport checkpoint; converted archives still retain 30 days.
+          # This is not a substitute for a permanent raw-data object store.
+          retention-days: 1
+
+      - name: Start the next capture without waiting for research
+        if: ${{ !cancelled() && steps.cfg.outputs.enabled == 'true' && steps.rec.outcome != 'skipped' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURE_STREAK: ${{ inputs.capture_failures || 0 }}
+          CAPTURE_OUTCOME: ${{ steps.rec.outcome }}
+          CHECKPOINT_OUTCOME: ${{ steps.raw_upload.outcome }}
+        run: |
+          failures="$FAILURE_STREAK"
+          [[ "$failures" =~ ^[0-3]$ ]] || { echo "::error::invalid retry counter"; exit 1; }
+          if [ "$CAPTURE_OUTCOME" = success ] && [ "$CHECKPOINT_OUTCOME" = success ]; then
+            failures=0
+          else
+            failures=$((failures + 1))
+            [ "$failures" -lt 3 ] || { echo "::error::three capture/checkpoint failures; inspect before restarting"; exit 1; }
+            sleep 60
+          fi
+          for delay in 2 4 8; do
+            gh workflow run polymarket-forward.yml --ref "${{ github.ref_name }}" \
+              -f capture_failures="$failures" && exit 0
+            sleep "$delay"
+          done
+          echo "::error::next capture dispatch failed"
+          exit 1
+
+  analyze:
+    needs: record
+    if: ${{ always() && needs.record.outputs.enabled == 'true' && needs.record.outputs.capture_outcome == 'success' && needs.record.outputs.checkpoint_uploaded == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    # Serialize pooled state, but never share the acquisition lock.
+    concurrency:
+      group: polymarket-forward-analysis
+      cancel-in-progress: false
+      queue: max
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.record.outputs.source_commit }}
+          fetch-depth: 0
+      - name: Keep the collector revision while permitting append-only result commits
+        run: |
+          git switch -C "${{ github.ref_name }}" "${{ needs.record.outputs.source_commit }}"
+          git branch --set-upstream-to="origin/${{ github.ref_name }}"
+      - name: Start from the pooled results already on the branch
+        # source_commit is pinned when the recording starts, while the previous run's analysis is
+        # still running, so its forward/ lacks that run's results and the result commit cannot
+        # rebase (every other run's results were lost from 38991449708 on). Analysis jobs are
+        # serialized, so the branch tip holds every earlier run's results: take the pooled files
+        # from it, keep freezes and anchors at the collector revision, and commit them locally as
+        # POOLED_BASE; the persist step replays only the result commit on top of the tip. Only
+        # bot result commits may have moved those files, otherwise nothing is taken (the old
+        # behaviour), so a person's edit is never overwritten. A failure here also falls back.
+        continue-on-error: true
+        env:
+          B: ${{ github.ref_name }}
+        run: |
+          echo "POOLED_BASE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          for i in 1 2 3 4; do git fetch -q origin "$B" && break; sleep $((2 ** i)); done
+          list="$RUNNER_TEMP/pooled-files"
+          git diff -z --name-only --relative --diff-filter=AM HEAD "origin/$B" -- forward \
+            | { grep -zv -E 'freeze|calibration|anchor|\.sha256$' || true; } > "$list"
+          [ -s "$list" ] || exit 0
+          tr '\0' '\n' < "$list"
+          if xargs -0 git log --format=%an "HEAD..origin/$B" -- < "$list" | grep -vqx 'github-actions\[bot\]'; then
+            echo "::warning::pooled files changed outside the result commits since the collector revision; not taking them"
+            exit 0
+          fi
+          xargs -0 git checkout "origin/$B" -- < "$list"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "pooled results from origin/$B"
+          echo "POOLED_BASE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: research/polymarket-5m/requirements.txt
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-recording-${{ github.run_id }}-index
+          path: ${{ runner.temp }}/capture-index
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: source-recording-${{ github.run_id }}-part-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/capture-parts
+      - name: Verify and restore immutable raw capture
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.record.outputs.checkpoint_manifest_sha256 }}
+          EXPECTED_PREFIX: source-recording-${{ github.run_id }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+        run: |
+          python restore_published_archive.py \
+            --index-dir "$RUNNER_TEMP/capture-index" --parts-dir "$RUNNER_TEMP/capture-parts" \
+            --out "$RUNNER_TEMP/capture.tar" \
+            --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --expected-prefix "$EXPECTED_PREFIX" --expected-run-id "$EXPECTED_RUN_ID"
+          python capture_checkpoint.py restore \
+            --archive "$RUNNER_TEMP/capture.tar" --out "$RUNNER_TEMP/paper"
+
+      - name: Diagnose the recording
+        if: needs.record.outputs.enabled == 'true'
+        continue-on-error: true
+        run: for c in ${{ needs.record.outputs.coins }}; do python recording.py "$RUNNER_TEMP/paper" --diagnose --coin "$c"; done
+
+      - name: Resolve, convert and test
+        if: needs.record.outputs.enabled == 'true'
+        run: |
+          # The recorder can stop just after a new five-minute market opens.  Wait through that
+          # market's close, then retry Gamma briefly instead of packaging signal rows without outcomes.
+          sleep 360
+          unresolved=1
+          for i in 1 2 3 4 5; do
+            unresolved="$(python -c "import recording as r, sys; print(r.fetch_outcomes(sys.argv[1]))" "$RUNNER_TEMP/paper")"
+            echo "unresolved: $unresolved"
+            [ "$unresolved" = 0 ] && break
+            sleep 30
+          done
+          if [ "$unresolved" != 0 ]; then
+            echo "::warning::$unresolved markets are still unresolved; preserve them as pending and backfill outcomes during replay"
+          fi
+          for c in ${{ needs.record.outputs.coins }}; do
+            b="$RUNNER_TEMP/paper/bundle-$c"
+            echo "== $c"
+            python recording.py "$RUNNER_TEMP/paper" --coin "$c" --out "$b"
+            if python strategy_zoo.py "$b" --confirm --extra 101 103 104 105 106 107 108 109 --reps 2000 \
+              --out "$RUNNER_TEMP/run-$c.md" --trades-out "$RUNNER_TEMP/new-$c.csv"; then
+              python forward.py add "$RUNNER_TEMP/new-$c.csv" --markets "$b" || true
+            else
+              echo "$b: strategy_zoo failed; independent frozen tests still run"
+            fi
+            if [ "$c" = btc ] && [ -d "$b/latency" ]; then
+              python theta30.py --latency-dir "$b/latency" \
+                --out "$RUNNER_TEMP/theta30-new.csv" \
+                --manifest forward/theta30-freeze.json \
+                --append forward/theta30.csv \
+                --report forward/theta30.md || true
+            fi
+          done
+          python forward.py add-ledger "$RUNNER_TEMP/paper/ledger.csv"
+          python forward.py report
+
+      - name: Frozen five-second momentum paper test
+        if: needs.record.outputs.enabled == 'true'
+        run: |
+          d="$RUNNER_TEMP/paper/bundle-btc/latency"
+          [ -d "$d" ] || { echo "BTC latency bundle missing"; exit 1; }
+          seed=()
+          [ -s real/momentum5s-backfill.csv ] && seed=(--seed real/momentum5s-backfill.csv)
+          python momentum5s.py --latency-dir "$d" "${seed[@]}" \
+            --manifest forward/momentum5s-freeze.json \
+            --append forward/momentum5s.csv \
+            --verdict-out forward/momentum5s-verdict.json \
+            --out forward/momentum5s.md
+
+      - name: Require strict BTC replay artifact
+        if: needs.record.outputs.enabled == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from h_replay_archive import validate_standard_artifact
+          d = Path("${{ runner.temp }}/paper/bundle-btc/strict")
+          print((d / "manifest.json").read_text(encoding="utf-8"))
+          checked = validate_standard_artifact(d)
+          print(json.dumps(checked["manifest"], sort_keys=True))
+          PY
+          python h_replay_run.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --rows-out "$RUNNER_TEMP/current-h-rows.jsonl" \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json"
+          python h_source_race.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-source-race.json"
+          configured=" ${{ needs.record.outputs.coins }} "
+          cross_asset_ready=true
+          for c in btc eth sol xrp doge; do
+            if [[ "$configured" != *" $c "* ]]; then
+              cross_asset_ready=false
+            elif [ ! -s "$RUNNER_TEMP/paper/bundle-$c/latency/binance_prices.jsonl.gz" ]; then
+              echo "required $c strict price sidecar is missing"
+              exit 1
+            fi
+          done
+          if [ "$cross_asset_ready" = true ]; then
+            python cross_asset_breadth.py \
+              --archive "$RUNNER_TEMP/paper/bundle-btc/strict" \
+              --btc-prices "$RUNNER_TEMP/paper/bundle-btc/latency/binance_prices.jsonl.gz" \
+              --eth-prices "$RUNNER_TEMP/paper/bundle-eth/latency/binance_prices.jsonl.gz" \
+              --sol-prices "$RUNNER_TEMP/paper/bundle-sol/latency/binance_prices.jsonl.gz" \
+              --xrp-prices "$RUNNER_TEMP/paper/bundle-xrp/latency/binance_prices.jsonl.gz" \
+              --doge-prices "$RUNNER_TEMP/paper/bundle-doge/latency/binance_prices.jsonl.gz" \
+              > "$RUNNER_TEMP/paper/bundle-btc/strict/cross-asset-breadth.json"
+          else
+            echo "Cross-asset breadth not scheduled: this recording did not configure all five assets."
+          fi
+          if python - "$RUNNER_TEMP/paper/bundle-btc/strict/current-h-audit.json" <<'PY'
+          import json, sys
+          raise SystemExit(0 if json.load(open(sys.argv[1]))["dataset"]["paper_gate_eligible"] else 1)
+          PY
+          then
+            python h_forward.py "$RUNNER_TEMP/current-h-rows.jsonl"
+          else
+            echo "Strict artifact validated, but its collector region is not production-equivalent; audit only."
+          fi
+          EXPECTED_PROTOCOL_SHA256=c979e02a2155b5af81050a79cc088008ecfc102256ddcfed26123af4b4a45326 \
+          python mix_forward.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --freeze forward/mix-control-freeze.json \
+            --rows-out "$RUNNER_TEMP/mix-control-rows.jsonl" \
+            --append forward/mix-control-observations.jsonl \
+            --verdict-out forward/mix-control-verdict.json \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/mix-control-audit.json"
+          test "$(du -sm "$RUNNER_TEMP/paper/bundle-btc/strict" | awk '{print $1}')" -lt 1500
+
+      - name: Persist pooled stopping state before nonessential artifact work
+        # Preserve completed stopping-table observations even when a later strict replay gate fails.
+        # A cancelled job still must not write partial state.
+        if: ${{ !cancelled() && needs.record.outputs.enabled == 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A forward 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "research: forward-test results from recording run ${{ github.run_id }}" || exit 0
+          # replay only the result commit, never the local pooled base, and undo a failed rebase so
+          # the next attempt can still run
+          base="${POOLED_BASE:-${{ needs.record.outputs.source_commit }}}"
+          for i in 1 2 3 4 5; do
+            if git fetch -q origin "${{ github.ref_name }}" && tip=$(git rev-parse "origin/${{ github.ref_name }}") \
+               && git rebase -q --onto "$tip" "$base"; then
+              base="$tip"
+              git push -q origin "HEAD:${{ github.ref_name }}" && exit 0
+            else
+              git rebase --abort 2>/dev/null || true
+            fi
+            sleep $((2 ** i))
+          done
+          exit 1
+
+      - name: Family 34 complementary queue-lag development audit
+        if: ${{ !cancelled() && needs.record.outputs.enabled == 'true' }}
+        continue-on-error: true
+        run: |
+          python complement_queue_lag.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --rows-out "$RUNNER_TEMP/paper/bundle-btc/strict/complement-queue-lag-rows.jsonl" \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/complement-queue-lag.json"
+
+      - name: Family 35 adverse-reclaim development audit
+        if: ${{ !cancelled() && needs.record.outputs.enabled == 'true' }}
+        continue-on-error: true
+        run: |
+          python adverse_reclaim.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --rows-out "$RUNNER_TEMP/paper/bundle-btc/strict/adverse-reclaim-rows.jsonl" \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/adverse-reclaim.json"
+
+      - name: Family 36 zero-wait source-confirmation development audit
+        if: ${{ !cancelled() && needs.record.outputs.enabled == 'true' }}
+        continue-on-error: true
+        run: |
+          python source_confirmation.py --archive "$RUNNER_TEMP/paper/bundle-btc" \
+            --rows-out "$RUNNER_TEMP/paper/bundle-btc/strict/source-confirmation-rows.jsonl" \
+            > "$RUNNER_TEMP/paper/bundle-btc/strict/source-confirmation.json"
+
+      - name: Keep the converted bundles (the raw messages run to gigabytes)
+        id: converted_pack
+        if: always() && needs.record.outputs.enabled == 'true'
+        run: |
+          cd "$RUNNER_TEMP/paper"
+          shopt -s nullglob
+          files=(bundle-* raw/*/markets.jsonl* raw/*/decisions.jsonl* raw/*/errors.jsonl* raw/*/capture-health.jsonl* capture-*.json)
+          test "${#files[@]}" -gt 0
+          total_mb="$(du -sm -- "${files[@]}" | awk '{sum += $1} END {print sum + 0}')"
+          test "$total_mb" -lt 6000
+          tar czf "$RUNNER_TEMP/raw.tgz" -- "${files[@]}"
+          tar tzf "$RUNNER_TEMP/raw.tgz" >/dev/null
+          test -s "$RUNNER_TEMP/raw.tgz"
+      - name: Publish converted archive as individually downloadable parts
+        id: converted_upload
+        uses: ./.github/actions/publish-research-archive
+        if: always() && needs.record.outputs.enabled == 'true' && steps.converted_pack.outcome == 'success'
+        with:
+          prefix: recording-${{ github.run_id }}
+          archive: ${{ runner.temp }}/raw.tgz
+          parts-dir: ${{ runner.temp }}/converted-parts
+          retention-days: 30
+
+      - name: Tests C and D and a WeChat Work report (polymarket-shadow)
+        if: always() && needs.record.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run polymarket-shadow.yml --ref "${{ github.ref_name }}"
+

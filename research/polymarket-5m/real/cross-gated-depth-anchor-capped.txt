@@ -1,0 +1,29 @@
+Depth taking with a share cap per trade, from real/cross-gated-depth.csv.gz (local).
+
+The report's own depth table sums every qualifying ask uncapped, and a few resting walls of tens
+of thousands of shares behind the best ask decide those totals. Here each trade takes the best ask
+first (up to the cap) and then the deeper asks that still pay at least theta_d, at their average
+profit per share (deeper asks cost more, so the cheapest of them is somewhat better than that
+average: conservative). No haircut for other takers at the same prices.
+
+    python depth_capped.py [csv] > real/cross-gated-depth-capped.txt 
+
+rule      period  cap  trades/day  L1 shares  L1 c/share  L1 $/day  d12 shares  d12 c/share  d12 $/day  d8 shares  d8 c/share  d8 $/day  d4 shares  d4 c/share  d4 $/day
+   F A 5/25-7/15   40         184         31        3.82       217          35         3.39        216         40        3.30       239         40        3.24       237
+   F A 5/25-7/15  100         184         61        3.93       443          77         3.05        430         96        2.87       507         98        2.74       494
+   F A 5/25-7/15  200         184         96        3.99       699         134         2.57        632        183        2.43       812        188        2.31       793
+   F B 7/16-8/16   40          75         32        8.55       204          36         8.18        219         40        8.20       244         40        8.26       247
+   F B 7/16-8/16  100          75         66        8.97       443          81         8.16        493         97        7.70       560         98        7.67       565
+   F B 7/16-8/16  200          75        106        9.39       747         142         8.03        857        186        7.34      1026        190        7.26      1034
+   F C 8/17-8/29   40         128         31        5.85       235          36         5.62        257         40        5.36       272         40        5.22       267
+   F C 8/17-8/29  100         128         62        5.00       395          80         5.02        516         97        4.69       583         98        4.69       591
+   F C 8/17-8/29  200         128         91        4.76       552         143         4.62        843        187        4.12       986        190        4.02       979
+   G A 5/25-7/15   40         152         31        4.03       191          35         3.66        196         40        3.41       206         40        3.33       203
+   G A 5/25-7/15  100         152         62        4.31       409          79         3.38        404         97        3.04       447         98        2.88       430
+   G A 5/25-7/15  200         152         98        4.40       656         138         2.95        620        183        2.64       737        188        2.50       714
+   G B 7/16-8/16   40          64         32        9.54       195          36         9.22        210         40        9.69       244         40        9.70       247
+   G B 7/16-8/16  100          64         67        9.68       415          82         9.09        473         97        9.20       569         99        9.11       571
+   G B 7/16-8/16  200          64        110        9.97       698         146         9.01        835        187        8.78      1044        190        8.71      1055
+   G C 8/17-8/29   40         105         31        5.53       183          36         5.04        191         40        4.85       202         40        4.75       199
+   G C 8/17-8/29  100         105         63        4.85       319          83         4.76        413         98        4.25       435         99        4.20       434
+   G C 8/17-8/29  200         105         92        4.84       470         149         4.52        707        188        3.72       734        191        3.54       708

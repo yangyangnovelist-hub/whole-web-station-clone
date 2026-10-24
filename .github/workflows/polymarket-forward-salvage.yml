@@ -1,0 +1,82 @@
+name: polymarket-forward-salvage
+
+# One-off, read-only: copy ledger.csv (and the capture manifests) out of the 1-day raw captures of
+# the recordings whose pooled forward/ results were lost to the stale-source_commit rebase conflict,
+# before those captures expire (39021801232 at 2026-10-18 13:38 UTC). ledger.csv is only in the raw
+# capture (capture_checkpoint.ROOT_FILES), not in the 30-day converted archive. Nothing is pushed;
+# polymarket-forward-backfill pools the runs later. Paper data only: no orders, no keys.
+# Start it by pushing research/polymarket-5m/ci/forward_salvage.request.
+on:
+  push:
+    branches: [claude/polymarket-options-strategy-1lc7i4]
+    paths: [research/polymarket-5m/ci/forward_salvage.request]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  salvage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: research/polymarket-5m
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Copy ledger.csv out of each unexpired raw capture (hash-checked)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # id:collector revision:raw-capture manifest sha256, each from that run's own analyze log
+          # (the producer job's output); 38991449708's raw capture has already expired
+          RUNS: >-
+            39021801232:b01b3adf94b0ed4d2814080f83cc0c3dc74414ec:efdd4ff17b02b2e666d1f250b7065d5323843cbd73d71aa59266a4ee7ed15e4b
+            39054705548:05e137916c5fad5086c9ce80d398ec554b27059f:13d5c0b50d9f981eee81b09e5aa3ef96d67fe37a189c4577835128d88f763f6e
+            39087435473:e72913c79890c82daa18952414210394c103f81d:4f8e46cf794742df7dbc248130f02159126e24a294c8788317a56a89ab894d82
+        run: |
+          set +e -uo pipefail
+          out="$RUNNER_TEMP/ledgers"; mkdir -p "$out"
+          # one run failing (expired, missing part, hash mismatch) must not cost the others
+          salvage() {
+            set -e
+            local id=$1 commit=$2 raw=$3 d="$RUNNER_TEMP/src-$1"
+            rm -rf "$d"; mkdir -p "$d/index" "$d/parts" "$out/$id"
+            gh run download "$id" -n "source-recording-$id-index" -D "$d/index"
+            for name in $(jq -r '.parts[].artifact_name' "$d/index/publish-index.json"); do
+              gh run download "$id" -n "$name" -D "$d/parts"
+            done
+            python restore_published_archive.py --index-dir "$d/index" --parts-dir "$d/parts" \
+              --out "$d/capture.tar" --expected-manifest-sha256 "$raw" \
+              --expected-prefix "source-recording-$id" --expected-run-id "$id"
+            rm -rf "$d/parts"
+            python capture_checkpoint.py restore --archive "$d/capture.tar" --out "$d/paper"
+            rm -f "$d/capture.tar"
+            jq -e --arg c "$commit" '.source_commit == $c' "$d/paper/capture-manifest.json"
+            cp "$d/paper/capture-manifest.json" "$d/paper/capture-runtime.json" "$out/$id/"
+            cp "$d/paper/ledger.csv" "$out/$id/"
+            rm -rf "$d"
+          }
+          ok=0
+          for spec in $RUNS; do
+            IFS=: read -r id commit raw <<< "$spec"
+            ( salvage "$id" "$commit" "$raw" ); rc=$?
+            if [ "$rc" = 0 ]; then
+              ok=$((ok + 1)); echo "$id: $(($(wc -l < "$out/$id/ledger.csv") - 1)) ledger rows"
+            else
+              echo "::warning::$id: raw capture not salvaged"; rm -rf "$out/$id" "$RUNNER_TEMP/src-$id"
+            fi
+          done
+          find "$out" -type f | sort
+          [ "$ok" -gt 0 ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forward-backfill-ledgers
+          path: ${{ runner.temp }}/ledgers
+          retention-days: 90
+          if-no-files-found: error
